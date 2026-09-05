@@ -280,6 +280,22 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                   autoComplete="off"
                 />
               </Field>
+              <label className="flex items-start gap-2.5 text-sm text-ink-700">
+                <input
+                  type="checkbox"
+                  name="whatsappOptIn"
+                  value="yes"
+                  defaultChecked
+                  className="mt-0.5 size-4 rounded border-ink-300 text-brand-600 focus:ring-brand-600"
+                />
+                <span>
+                  Patient agreed to WhatsApp updates
+                  <span className="mt-0.5 block text-xs text-ink-500">
+                    Untick if they said no. They still get a token and the printed
+                    QR code.
+                  </span>
+                </span>
+              </label>
               <Button type="submit" variant="primary" size="lg" className="w-full">
                 Add to queue
               </Button>

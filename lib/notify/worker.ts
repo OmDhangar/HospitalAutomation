@@ -3,6 +3,7 @@ import { getAdminDb } from '@/lib/db/admin';
 import { appointments, hospitals, notificationOutbox, patients } from '@/lib/db/schema';
 import { messageRatio, shouldSuppressNonCriticalMessages } from '@/lib/domain/pricing';
 import type { Locale } from '@/lib/i18n/patient';
+import { ProviderError } from './errors';
 import { getProvider } from './provider';
 import { isCritical, type TemplateCode } from './templates';
 
@@ -166,7 +167,14 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
       result.sent += 1;
     } catch (error) {
       const attempts = row.attempts + 1;
-      const giveUp = attempts >= MAX_ATTEMPTS;
+
+      /**
+       * A permanent failure is not retried at all. Attempting a message to
+       * someone who has no WhatsApp account five times over half an hour buries
+       * the real reason under repeated noise, and every retry is billable.
+       */
+      const permanent = error instanceof ProviderError && !error.retryable;
+      const giveUp = permanent || attempts >= MAX_ATTEMPTS;
 
       await db
         .update(notificationOutbox)

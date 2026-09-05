@@ -67,6 +67,30 @@ export async function createDoctor(args: {
   });
 }
 
+/**
+ * Connects a hospital to its WhatsApp number.
+ *
+ * `whatsappPhoneNumberId` is Meta's id for the number, not the number itself —
+ * it is what inbound webhooks carry, and the only thing that tells us which
+ * tenant a message belongs to.
+ */
+export async function updateWhatsAppSettings(args: {
+  hospitalId: string;
+  whatsappPhoneNumberId: string | null;
+  ownerPhoneE164: string | null;
+}) {
+  return withTenant(args.hospitalId, (tx) =>
+    tx
+      .update(hospitals)
+      .set({
+        whatsappPhoneNumberId: args.whatsappPhoneNumberId,
+        ownerPhoneE164: args.ownerPhoneE164,
+        updatedAt: new Date(),
+      })
+      .where(eq(hospitals.id, args.hospitalId)),
+  );
+}
+
 export async function setDoctorActive(args: {
   hospitalId: string;
   doctorId: string;

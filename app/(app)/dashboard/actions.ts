@@ -52,6 +52,7 @@ export async function addWalkInAction(formData: FormData) {
     patient: { phoneE164, name },
     actorUserId: session.userId,
     source: 'walk_in',
+    whatsappOptIn: formData.get('whatsappOptIn') === 'yes',
   });
 
   backToDoctor(doctorId);

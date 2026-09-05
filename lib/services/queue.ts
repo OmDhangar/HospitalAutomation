@@ -121,6 +121,7 @@ async function loadDayAppointments(
       createdAt: appointments.createdAt,
       patientId: appointments.patientId,
       patientName: patients.name,
+      whatsappOptInAt: patients.whatsappOptInAt,
     })
     .from(appointments)
     .innerJoin(patients, eq(patients.id, appointments.patientId))
@@ -252,6 +253,8 @@ async function enqueueMilestones(
   for (const { entry, ahead } of due) {
     const row = byId.get(entry.appointmentId);
     if (!row) continue;
+    // Same consent rule as the token link.
+    if (!row.whatsappOptInAt) continue;
 
     await tx
       .insert(notificationOutbox)
@@ -282,6 +285,15 @@ export async function createWalkIn(args: {
   patient: { phoneE164: string; name: string; locale?: 'mr' | 'hi' | 'en' };
   actorUserId?: string | null;
   source?: 'walk_in' | 'reception' | 'whatsapp';
+  /**
+   * Whether the patient agreed to WhatsApp updates.
+   *
+   * Without consent we still issue a token and the printed QR still works —
+   * they simply do not get messaged. Consent is the hospital's to collect (they
+   * are the Data Fiduciary), but the record of it has to live here, because
+   * this is where the decision to send is made.
+   */
+  whatsappOptIn?: boolean;
   now?: Date;
 }) {
   const now = args.now ?? new Date();
@@ -294,6 +306,8 @@ export async function createWalkIn(args: {
       serviceDate,
     });
 
+    const optedIn = args.whatsappOptIn ?? true;
+
     const [patient] = await tx
       .insert(patients)
       .values({
@@ -301,10 +315,26 @@ export async function createWalkIn(args: {
         phoneE164: args.patient.phoneE164,
         name: args.patient.name,
         locale: args.patient.locale,
+        whatsappOptInAt: optedIn ? now : null,
       })
       .onConflictDoUpdate({
         target: [patients.hospitalId, patients.phoneE164],
-        set: { name: args.patient.name, updatedAt: now },
+        set: {
+          name: args.patient.name,
+          updatedAt: now,
+          /**
+           * Consent is recorded once and not silently re-dated on every visit.
+           * `excluded` is the row we tried to insert, so this keeps any earlier
+           * timestamp and otherwise takes the new one — with no bound Date in a
+           * raw fragment, which postgres.js cannot type without a column to
+           * infer from.
+           */
+          ...(optedIn
+            ? {
+                whatsappOptInAt: sql`coalesce(${patients.whatsappOptInAt}, excluded.whatsapp_opt_in_at)`,
+              }
+            : {}),
+        },
       })
       .returning();
 
@@ -345,18 +375,21 @@ export async function createWalkIn(args: {
       actorUserId: args.actorUserId ?? null,
     });
 
-    await tx
-      .insert(notificationOutbox)
-      .values({
-        hospitalId: args.hospitalId,
-        appointmentId: appointment.id,
-        patientId: patient.id,
-        milestone: 'queue_link',
-        templateCode: 'queue_link',
-        locale: patient.locale ?? 'en',
-        payload: { tokenNumber, publicToken },
-      })
-      .onConflictDoNothing();
+    // No consent, no message. The token and the printed QR still work.
+    if (patient.whatsappOptInAt) {
+      await tx
+        .insert(notificationOutbox)
+        .values({
+          hospitalId: args.hospitalId,
+          appointmentId: appointment.id,
+          patientId: patient.id,
+          milestone: 'queue_link',
+          templateCode: 'queue_link',
+          locale: patient.locale ?? 'en',
+          payload: { tokenNumber, publicToken },
+        })
+        .onConflictDoNothing();
+    }
 
     return { appointment, patient, tokenNumber, publicToken };
   });

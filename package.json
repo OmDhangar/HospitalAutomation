@@ -7,8 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run lib/domain",
-    "test:watch": "vitest lib/domain",
+    "test": "vitest run lib/domain lib/notify",
+    "test:watch": "vitest lib/domain lib/notify",
     "typecheck": "tsc --noEmit",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:generate": "drizzle-kit generate",
@@ -17,7 +17,8 @@
     "test:all": "vitest run",
     "db:seed": "tsx scripts/seed-demo.ts",
     "report:monthly": "tsx scripts/monthly-report.ts",
-    "worker:tick": "tsx scripts/tick.ts"
+    "worker:tick": "tsx scripts/tick.ts",
+    "whatsapp:templates": "tsx scripts/whatsapp-templates.ts"
   },
   "dependencies": {
     "date-fns": "^4.4.0",

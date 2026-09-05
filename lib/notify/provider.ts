@@ -1,4 +1,5 @@
 import type { Locale } from '@/lib/i18n/patient';
+import { isRetryableMetaError, ProviderError } from './errors';
 import { renderTemplate, TEMPLATES, type TemplateCode } from './templates';
 
 export type TemplateMessage = {
@@ -63,13 +64,21 @@ export class MetaCloudProvider implements NotificationProvider {
     };
 
     if (!response.ok) {
-      throw new Error(
-        `WhatsApp send failed (${response.status}): ${body.error?.message ?? 'unknown error'}`,
+      const code = body.error?.code;
+      throw new ProviderError(
+        `WhatsApp send failed (${response.status}${code ? `, code ${code}` : ''}): ` +
+          `${body.error?.message ?? 'unknown error'}`,
+        isRetryableMetaError({ code, httpStatus: response.status }),
+        code,
+        response.status,
       );
     }
 
     const providerMessageId = body.messages?.[0]?.id;
-    if (!providerMessageId) throw new Error('WhatsApp send returned no message id');
+    if (!providerMessageId) {
+      // A 200 with no message id is not something a retry will fix.
+      throw new ProviderError('WhatsApp send returned no message id', false);
+    }
 
     return { providerMessageId };
   }

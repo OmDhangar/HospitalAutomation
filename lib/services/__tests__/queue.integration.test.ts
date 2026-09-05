@@ -136,6 +136,80 @@ describe.skipIf(!enabled)('queue engine', () => {
     expect(rows.filter((r) => r.milestone === 'queue_link')).toHaveLength(1);
   });
 
+  describe('consent', () => {
+    const outboxFor = (appointmentId: string) =>
+      withTenant(hospitalId, (tx) =>
+        tx
+          .select()
+          .from(notificationOutbox)
+          .where(eq(notificationOutbox.appointmentId, appointmentId)),
+      );
+
+    it('sends nothing to a patient who did not agree to WhatsApp', async () => {
+      const { appointment } = await createWalkIn({
+        hospitalId,
+        branchId,
+        doctorId,
+        timezone: TZ,
+        patient: { phoneE164: '+919900001111', name: 'No Consent' },
+        whatsappOptIn: false,
+      });
+
+      // The token still exists and the printed QR still works; we simply do
+      // not message them.
+      expect(await outboxFor(appointment.id)).toHaveLength(0);
+    });
+
+    it('skips milestones too, not just the first message', async () => {
+      const declined = await createWalkIn({
+        hospitalId,
+        branchId,
+        doctorId,
+        timezone: TZ,
+        patient: { phoneE164: '+919900002222', name: 'Also No' },
+        whatsappOptIn: false,
+      });
+      await advanceQueue({ hospitalId, doctorId, timezone: TZ });
+
+      expect(await outboxFor(declined.appointment.id)).toHaveLength(0);
+    });
+
+    it('does not re-date consent given on an earlier visit', async () => {
+      const first = await createWalkIn({
+        hospitalId,
+        branchId,
+        doctorId,
+        timezone: TZ,
+        patient: { phoneE164: '+919900003333', name: 'Repeat Patient' },
+        whatsappOptIn: true,
+      });
+
+      const [before] = await admin`
+        select whatsapp_opt_in_at from patients where phone_e164 = '+919900003333'
+      `;
+
+      await applyQueueAction({
+        hospitalId,
+        appointmentId: first.appointment.id,
+        action: 'cancel',
+        timezone: TZ,
+      });
+      await createWalkIn({
+        hospitalId,
+        branchId,
+        doctorId,
+        timezone: TZ,
+        patient: { phoneE164: '+919900003333', name: 'Repeat Patient' },
+        whatsappOptIn: true,
+      });
+
+      const [after] = await admin`
+        select whatsapp_opt_in_at from patients where phone_e164 = '+919900003333'
+      `;
+      expect(after.whatsapp_opt_in_at).toEqual(before.whatsapp_opt_in_at);
+    });
+  });
+
   it('keeps token numbers stable when someone cancels', async () => {
     const created = [];
     for (const n of [1, 2, 3]) created.push(await walkIn(n));

@@ -189,6 +189,9 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
           locale,
         },
         source: 'whatsapp',
+        // A patient who messaged this number first has given about as clear an
+        // affirmative consent to be replied to as exists.
+        whatsappOptIn: true,
       });
       break;
     }

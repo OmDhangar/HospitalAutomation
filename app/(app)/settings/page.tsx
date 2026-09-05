@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import {
   Alert,
   Button,
@@ -44,6 +45,18 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
       {params.error === 'name' ? (
         <Alert tone="error">A name is required.</Alert>
       ) : null}
+
+      <Card>
+        <CardHeader
+          title="WhatsApp"
+          hint="Booking, queue links and notifications"
+          action={
+            <Link href="/settings/whatsapp">
+              <Button size="sm">Configure</Button>
+            </Link>
+          }
+        />
+      </Card>
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Card>

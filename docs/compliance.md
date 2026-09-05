@@ -26,12 +26,33 @@ What that means in practice:
 - [ ] **Data Processing Agreement** in every hospital contract. Non-negotiable —
       it is what makes the processor relationship real rather than assumed.
 - [ ] Privacy notice published, in Marathi and Hindi as well as English
-- [ ] WhatsApp opt-in captured by the hospital on its own registration form,
-      with a record of when. Opt-in is theirs to collect, not ours to assume.
+- [ ] WhatsApp opt-in wording added to the hospital's own registration form.
+      Consent is theirs to collect; the *record* of it is ours to keep, and is
+      now enforced in code — see below.
 - [ ] Retention period agreed in writing and actually implemented
 - [ ] Confirm the current commencement status of the DPDP Rules — they were
       notified in November 2025 with staged dates, so check what is in force on
       the day you launch rather than trusting this document
+
+## Consent, as enforced
+
+Nothing is sent to a patient who has not opted in. This is a code path, not a
+policy document:
+
+- Reception ticks **"Patient agreed to WhatsApp updates"** when adding a walk-in.
+  Unticking it still issues a token and a printed QR code — the patient simply
+  is not messaged.
+- A patient who messages the hospital's WhatsApp number first has opted in by
+  doing so, and that is recorded with a timestamp.
+- `patients.whatsapp_opt_in_at` gates both the token link and every milestone.
+- Consent is dated once and not silently refreshed on later visits, so the
+  record reflects when it was actually given.
+
+The checkbox defaults to ticked. That is a deliberate trade-off: the receptionist
+is recording a consent already obtained at the desk, not obtaining it themselves,
+and an unticked default would in practice be ticked reflexively or forgotten —
+producing a worse record either way. If a hospital's counsel disagrees, changing
+the default is one line in the walk-in form.
 
 ## Cross-border transfer
 
