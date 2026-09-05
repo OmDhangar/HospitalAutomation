@@ -1,0 +1,1 @@
+ALTER TABLE "hospitals" ADD COLUMN "owner_phone_e164" text;
