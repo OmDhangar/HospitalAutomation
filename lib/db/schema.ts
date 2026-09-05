@@ -465,6 +465,19 @@ export const whatsappConversations = pgTable(
     context: jsonb('context').$type<Record<string, unknown>>().notNull().default({}),
     /** Opens Meta's 24-hour customer service window; tracked for cost analysis. */
     lastInboundAt: timestamp('last_inbound_at', { withTimezone: true }),
+    /**
+     * What we last asked this number, and when.
+     *
+     * Every tap of "Hi" is a distinct Meta message with its own id, so replay
+     * protection does not catch it — five taps used to buy five identical
+     * menus. These two columns let us recognise a prompt the patient already
+     * has on screen and stay quiet instead.
+     */
+    lastPromptStep: text('last_prompt_step'),
+    lastPromptAt: timestamp('last_prompt_at', { withTimezone: true }),
+    /** Daily prompt budget, so one sender cannot run up a bill in a loop. */
+    promptsToday: integer('prompts_today').notNull().default(0),
+    promptsDate: date('prompts_date'),
     updatedAt: updatedAt(),
     createdAt: createdAt(),
   },

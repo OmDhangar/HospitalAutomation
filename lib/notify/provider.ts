@@ -25,6 +25,21 @@ export type InteractiveListMessage = {
   rows: ListRow[];
 };
 
+/**
+ * A plain message, with no template.
+ *
+ * Only deliverable inside the 24-hour window a patient opens by messaging us
+ * first — which is exactly the situation after a WhatsApp booking. Free-form
+ * needs no approval, so the booking path does not wait on Meta's template
+ * review, and the patient gets an answer immediately rather than whenever the
+ * outbox worker next runs.
+ */
+export type TextMessage = {
+  phoneNumberId: string;
+  toPhoneE164: string;
+  body: string;
+};
+
 export type SendResult = { providerMessageId: string };
 
 /**
@@ -39,6 +54,8 @@ export interface NotificationProvider {
   readonly name: string;
   sendTemplate(message: TemplateMessage): Promise<SendResult>;
   sendInteractiveList(message: InteractiveListMessage): Promise<SendResult>;
+  /** Free-form; valid only inside an open customer service window. */
+  sendText(message: TextMessage): Promise<SendResult>;
 }
 
 /* ------------------------------------------------------------ Meta Cloud API */
@@ -119,6 +136,15 @@ export class MetaCloudProvider implements NotificationProvider {
     });
   }
 
+  async sendText(message: TextMessage): Promise<SendResult> {
+    return this.post(message.phoneNumberId, {
+      to: message.toPhoneE164,
+      type: 'text',
+      // The queue link is the point of the message; let it render a preview.
+      text: { preview_url: true, body: message.body },
+    });
+  }
+
   async sendInteractiveList(message: InteractiveListMessage): Promise<SendResult> {
     return this.post(message.phoneNumberId, {
       to: message.toPhoneE164,
@@ -159,6 +185,12 @@ export class ConsoleProvider implements NotificationProvider {
     console.log(
       `[whatsapp:${message.locale}] -> ${message.toPhoneE164} (${message.templateCode})\n${text}\n`,
     );
+    this.id += 1;
+    return { providerMessageId: `console-${Date.now()}-${this.id}` };
+  }
+
+  async sendText(message: TextMessage): Promise<SendResult> {
+    console.log(`[whatsapp:text] -> ${message.toPhoneE164}\n${message.body}\n`);
     this.id += 1;
     return { providerMessageId: `console-${Date.now()}-${this.id}` };
   }

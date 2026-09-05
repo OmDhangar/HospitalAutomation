@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DAILY_PROMPT_CAP,
   fitListTitle,
   LIST_ROW_TITLE_LIMIT,
   nextBookingStep,
+  PROMPT_COOLDOWN_SECONDS,
+  shouldSendPrompt,
   type BookingContext,
   type BookingStep,
   type ConversationState,
@@ -140,5 +143,88 @@ describe('interactive list titles', () => {
   it('keeps a label that is exactly at the limit', () => {
     const exact = 'a'.repeat(LIST_ROW_TITLE_LIMIT);
     expect(fitListTitle(exact)).toBe(exact);
+  });
+});
+
+describe('prompt suppression', () => {
+  const now = new Date('2026-09-05T10:00:00Z');
+  const secondsAgo = (n: number) => new Date(now.getTime() - n * 1000);
+
+  const decide = (over: Partial<Parameters<typeof shouldSendPrompt>[0]> = {}) =>
+    shouldSendPrompt({
+      step: 'ask_language',
+      lastPromptStep: null,
+      lastPromptAt: null,
+      promptsToday: 0,
+      now,
+      ...over,
+    });
+
+  it('sends the first prompt', () => {
+    expect(decide()).toEqual({ send: true });
+  });
+
+  /**
+   * The case that costs real money: a patient tapping "Hi" five times used to
+   * buy five identical menus, because each tap is a distinct Meta message id
+   * and so slipped past replay protection.
+   */
+  it('does not repeat a menu the patient already has', () => {
+    expect(
+      decide({ lastPromptStep: 'ask_language', lastPromptAt: secondsAgo(5) }),
+    ).toEqual({ send: false, reason: 'duplicate' });
+  });
+
+  it('sends again once the cooldown has passed', () => {
+    expect(
+      decide({
+        lastPromptStep: 'ask_language',
+        lastPromptAt: secondsAgo(PROMPT_COOLDOWN_SECONDS + 1),
+      }),
+    ).toEqual({ send: true });
+  });
+
+  it('still answers when the patient moves on to a different step', () => {
+    // Progress must never be blocked — only repetition.
+    expect(
+      decide({ step: 'ask_doctor', lastPromptStep: 'ask_language', lastPromptAt: secondsAgo(1) }),
+    ).toEqual({ send: true });
+  });
+
+  it('goes quiet once a sender passes the daily cap', () => {
+    expect(decide({ promptsToday: DAILY_PROMPT_CAP })).toEqual({
+      send: false,
+      reason: 'daily_cap',
+    });
+  });
+
+  it('never suppresses a booking confirmation', () => {
+    // A patient who completed a booking must always be told, whatever else
+    // they have been doing.
+    expect(
+      decide({
+        step: 'confirm',
+        lastPromptStep: 'confirm',
+        lastPromptAt: secondsAgo(1),
+        promptsToday: 999,
+      }),
+    ).toEqual({ send: true });
+  });
+
+  it('caps a spammer at the daily limit however many times they message', () => {
+    let sent = 0;
+    for (let i = 0; i < 500; i += 1) {
+      // Alternating steps defeats the cooldown; only the cap stops this.
+      const step = i % 2 === 0 ? 'ask_language' : 'ask_doctor';
+      const decision = shouldSendPrompt({
+        step,
+        lastPromptStep: i % 2 === 0 ? 'ask_doctor' : 'ask_language',
+        lastPromptAt: secondsAgo(1),
+        promptsToday: sent,
+        now,
+      });
+      if (decision.send) sent += 1;
+    }
+    expect(sent).toBe(DAILY_PROMPT_CAP);
   });
 });

@@ -109,6 +109,59 @@ export function nextBookingStep(args: {
 }
 
 /**
+ * How long an identical prompt is considered already answered.
+ *
+ * Re-sending a menu the patient already has adds nothing: WhatsApp keeps the
+ * previous list tappable in the thread, so an impatient second "Hi" is best
+ * answered by the message already sitting on their screen. Two minutes covers
+ * double-taps and impatience without stranding someone who genuinely returns
+ * later.
+ */
+export const PROMPT_COOLDOWN_SECONDS = 120;
+
+/**
+ * The most prompts one phone number can trigger in a day.
+ *
+ * A real booking takes three. Twelve leaves room for a confused patient to
+ * restart several times, and stops a bored or malicious sender from running up
+ * a WhatsApp bill by messaging the number in a loop. Past the cap we go quiet
+ * rather than replying "too many messages" — that reply would itself cost.
+ */
+export const DAILY_PROMPT_CAP = 12;
+
+export type PromptDecision =
+  | { send: true }
+  | { send: false; reason: 'duplicate' | 'daily_cap' };
+
+/**
+ * Whether a prompt is worth the money it costs.
+ *
+ * Confirmations are exempt from both rules: a patient who has completed a
+ * booking must always be told, and the one-active-token constraint already
+ * prevents that happening twice.
+ */
+export function shouldSendPrompt(args: {
+  step: BookingStep['kind'];
+  lastPromptStep: string | null;
+  lastPromptAt: Date | null;
+  promptsToday: number;
+  now: Date;
+}): PromptDecision {
+  if (args.step === 'confirm' || args.step === 'none') return { send: true };
+
+  if (args.promptsToday >= DAILY_PROMPT_CAP) {
+    return { send: false, reason: 'daily_cap' };
+  }
+
+  if (args.step === args.lastPromptStep && args.lastPromptAt) {
+    const elapsed = (args.now.getTime() - args.lastPromptAt.getTime()) / 1000;
+    if (elapsed < PROMPT_COOLDOWN_SECONDS) return { send: false, reason: 'duplicate' };
+  }
+
+  return { send: true };
+}
+
+/**
  * Meta caps interactive list row titles at 24 characters. Devanagari reaches
  * that far sooner than Latin, so labels are truncated here rather than being
  * rejected by the API at send time.
