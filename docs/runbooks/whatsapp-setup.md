@@ -10,7 +10,7 @@ count, and never gets a bill from anyone but us. They pay a subscription; we pay
 Meta.
 
 Why not give each hospital their own account: templates are approved per WABA,
-so twelve approvals would become twelve *per hospital*, and each hospital would
+so nine approvals would become nine *per hospital*, and each hospital would
 need its own business verification with incorporation documents and a three-week
 wait. That is where onboarding dies.
 
@@ -22,7 +22,7 @@ everyone.
 | Meta's structure | What it buys us |
 |---|---|
 | Up to 20 numbers per WABA | 20 hospitals per WABA; add another under the same verified business |
-| Templates shared across the WABA | 12 approvals total, not 12 per hospital |
+| Templates shared across the WABA | 9 approvals total, not 9 per hospital |
 | Display name is per number | Each hospital's patients see their own hospital's name |
 | Quality rating is per number | One hospital's problems stay theirs |
 
@@ -92,9 +92,32 @@ anything — generate a permanent one: **Business Settings → System Users → 
 Admin → Generate token**, with `whatsapp_business_messaging` and
 `whatsapp_business_management`.
 
-**Templates on the test WABA** can be created and are usually approved in
-minutes. Run `npm run whatsapp:templates -- --submit` with
-`WHATSAPP_BUSINESS_ACCOUNT_ID` set, and you can exercise real template sends.
+**Templates on the test WABA** can be created and are usually reviewed within
+minutes. With `WHATSAPP_BUSINESS_ACCOUNT_ID` set:
+
+```bash
+npm run whatsapp:templates -- --submit   # create all nine
+npm run whatsapp:templates -- --status   # ask Meta what it thinks
+npm run whatsapp:templates -- --fix      # re-edit anything REJECTED
+```
+
+These templates are throwaway — production runs on the verified WABA and needs
+its own approvals — so a placeholder `WHATSAPP_TEMPLATE_BASE_URL` is fine here.
+
+### What Meta's review actually enforces
+
+Learned the hard way, and now encoded in the template definitions:
+
+- **A bare URL in the body gets rejected `INCORRECT_CATEGORY`.** Links read as
+  promotional. The queue link is therefore a **URL button** with a static base
+  and a `{{1}}` suffix — Meta's own mechanism for this, and it passes. The cost
+  of getting this wrong is real: marketing messages cost several times utility.
+- **Open on the transaction.** "Your appointment is booked. Token number…" is
+  utility; leading with the benefit to the reader is not.
+- **A variable may not start or end a body**, and there must be enough text
+  around the variables for their number.
+- **A rejected template must be edited, not recreated.** `DELETE` needs a
+  permission app-dashboard tokens often lack; `--fix` edits by id instead.
 
 ### Receiving messages needs a public URL
 
@@ -123,13 +146,16 @@ point at localhost and be dead on the patient's phone.
 3. **Add the number** to the WABA and complete the SMS or voice verification.
 4. **Set the display name** to the hospital's name. Meta reviews it separately
    from the number, and it is what patients see.
-5. **Submit the 12 templates** — `npm run whatsapp:templates -- --submit`. All
+5. **Set `WHATSAPP_TEMPLATE_BASE_URL` to the final production domain first.**
+   The queue link is a button, and its base URL is frozen into the template at
+   approval time — changing domains later means re-approving everything.
+6. **Submit the 9 templates** — `npm run whatsapp:templates -- --submit`. All
    UTILITY, never MARKETING: utility is far cheaper and is the correct category
    since every message is triggered by an action, not a promotion.
-6. **Record the number** under that hospital's `/settings/whatsapp`, including the
+7. **Record the number** under that hospital's `/settings/whatsapp`, including the
    display name, then mark it registered.
-7. **Point the webhook** at the production URL and subscribe to `messages`.
-8. **Send a test** to your own phone before letting a patient near it.
+8. **Point the webhook** at the production URL and subscribe to `messages`.
+9. **Send a test** to your own phone before letting a patient near it.
 
 ## Once it is running
 

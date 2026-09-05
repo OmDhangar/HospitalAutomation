@@ -8,6 +8,11 @@ export type TemplateMessage = {
   templateCode: TemplateCode;
   locale: Locale;
   variables: string[];
+  /**
+   * Fills the {{1}} in a template's URL button. Only the suffix travels — the
+   * base URL is part of the approved template and cannot be changed per message.
+   */
+  urlButtonParam?: string;
 };
 
 export type ListRow = { id: string; title: string; description?: string };
@@ -85,6 +90,23 @@ export class MetaCloudProvider implements NotificationProvider {
 
   async sendTemplate(message: TemplateMessage): Promise<SendResult> {
     const definition = TEMPLATES[message.templateCode];
+    const components: unknown[] = [];
+
+    if (message.variables.length > 0) {
+      components.push({
+        type: 'body',
+        parameters: message.variables.map((text) => ({ type: 'text', text })),
+      });
+    }
+
+    if (definition.urlButton && message.urlButtonParam) {
+      components.push({
+        type: 'button',
+        sub_type: 'url',
+        index: '0',
+        parameters: [{ type: 'text', text: message.urlButtonParam }],
+      });
+    }
 
     return this.post(message.phoneNumberId, {
       to: message.toPhoneE164,
@@ -92,14 +114,7 @@ export class MetaCloudProvider implements NotificationProvider {
       template: {
         name: definition.name,
         language: { code: message.locale },
-        components: message.variables.length
-          ? [
-              {
-                type: 'body',
-                parameters: message.variables.map((text) => ({ type: 'text', text })),
-              },
-            ]
-          : [],
+        components,
       },
     });
   }
@@ -135,7 +150,12 @@ export class ConsoleProvider implements NotificationProvider {
   private id = 0;
 
   async sendTemplate(message: TemplateMessage): Promise<SendResult> {
-    const text = renderTemplate(message.templateCode, message.locale, message.variables);
+    const text = renderTemplate(
+      message.templateCode,
+      message.locale,
+      message.variables,
+      message.urlButtonParam,
+    );
     console.log(
       `[whatsapp:${message.locale}] -> ${message.toPhoneE164} (${message.templateCode})\n${text}\n`,
     );

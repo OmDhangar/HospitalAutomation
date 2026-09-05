@@ -26,8 +26,6 @@ export type DrainResult = {
 /** Exponential backoff, so a provider outage does not become a retry storm. */
 const backoffSeconds = (attempts: number) => Math.min(3600, 30 * 2 ** attempts);
 
-const baseUrl = () => process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000';
-
 /**
  * Sends whatever the queue engine has queued.
  *
@@ -144,14 +142,15 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
 
     const locale = (row.locale ?? row.patientLocale ?? 'en') as Locale;
     const payload = (row.payload ?? {}) as Record<string, unknown>;
-    const queueUrl = `${baseUrl()}/q/${row.publicToken}`;
 
     const variables =
       templateCode === 'queue_link'
-        ? [String(row.tokenNumber), String(payload.doctorName ?? ''), queueUrl]
-        : templateCode === 'queue_milestone'
-          ? [String(payload.patientsAhead ?? ''), String(payload.doctorName ?? '')]
-          : [String(payload.doctorName ?? ''), String(payload.slot ?? ''), queueUrl];
+        ? [String(row.tokenNumber), String(payload.doctorName ?? '')]
+        : [String(payload.patientsAhead ?? ''), String(payload.doctorName ?? '')];
+
+    // Only the token travels; the domain is fixed in the approved template.
+    const urlButtonParam =
+      templateCode === 'queue_link' ? (row.publicToken ?? undefined) : undefined;
 
     try {
       const sent = await provider.sendTemplate({
@@ -161,6 +160,7 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
         templateCode,
         locale,
         variables,
+        urlButtonParam,
       });
 
       await db

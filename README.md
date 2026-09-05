@@ -86,7 +86,7 @@ need a deploy.
 
 **One WhatsApp number per hospital, all on our account.** The hospital never
 touches Meta and never sees a message count. Templates are approved per business
-account, so twelve approvals cover every hospital rather than twelve each, while
+account, so nine approvals cover every hospital rather than nine each, while
 per-number display names mean patients still see their own hospital's name. See
 the WhatsApp runbook for why the alternatives fail.
 
@@ -103,8 +103,10 @@ the WhatsApp runbook for why the alternatives fail.
 
 ## Before production
 
-- Meta business verification and twelve template approvals (four kinds ×
-  three languages) — start two weeks ahead, it gates everything
+- Meta business verification and nine template approvals (three kinds × three
+  languages) — start two weeks ahead, it gates everything
+- Decide the production domain before submitting templates: it is baked into
+  the queue link button and cannot be changed without re-approval
 - Re-check Meta's India rate card and update `PAISE_PER_MESSAGE`
 - Point a scheduler at `POST /api/internal/tick`
 - Run one restore drill and write down how long it took
