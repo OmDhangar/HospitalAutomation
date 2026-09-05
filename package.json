@@ -18,7 +18,8 @@
     "db:seed": "tsx scripts/seed-demo.ts",
     "report:monthly": "tsx scripts/monthly-report.ts",
     "worker:tick": "tsx scripts/tick.ts",
-    "whatsapp:templates": "tsx scripts/whatsapp-templates.ts"
+    "whatsapp:templates": "tsx scripts/whatsapp-templates.ts",
+    "whatsapp:simulate": "tsx scripts/simulate-inbound.ts"
   },
   "dependencies": {
     "date-fns": "^4.4.0",

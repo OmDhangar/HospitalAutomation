@@ -6,7 +6,12 @@ import {
   MESSAGE_RATIO_BUDGET,
   type RatioStatus,
 } from '@/lib/domain/pricing';
-import { getPortfolioHealth, getRecentFailures } from '@/lib/services/platform';
+import {
+  getPortfolioHealth,
+  getRecentFailures,
+  resolvePaisePerMessage,
+} from '@/lib/services/platform';
+import { listAllNumbers } from '@/lib/services/whatsapp-numbers';
 
 export const metadata = { title: 'Platform · OPD Queue' };
 
@@ -34,9 +39,11 @@ export default async function AdminPage() {
     );
   }
 
-  const [portfolio, failures] = await Promise.all([
+  const [portfolio, failures, numbers, rate] = await Promise.all([
     getPortfolioHealth(),
     getRecentFailures(),
+    listAllNumbers(),
+    resolvePaisePerMessage(),
   ]);
 
   const totals = portfolio.reduce(
@@ -72,7 +79,11 @@ export default async function AdminPage() {
           <Stat
             label="Messaging cost"
             value={rupees(totals.messagingCost)}
-            hint="estimated, this month"
+            hint={
+              rate.source === 'invoice'
+                ? `at ₹${(rate.paise / 100).toFixed(4)}/msg, from ${rate.month} invoice`
+                : `estimated at ₹${(rate.paise / 100).toFixed(4)}/msg — record an invoice`
+            }
           />
           <Stat label="Appointments" value={totals.appointments.toLocaleString('en-IN')} />
           <Stat
@@ -158,6 +169,90 @@ export default async function AdminPage() {
             </table>
           </div>
         )}
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="Sender numbers"
+          hint="One number per hospital, all on our WhatsApp Business Account"
+        />
+        {numbers.length === 0 ? (
+          <EmptyState
+            title="No numbers yet"
+            hint="Assign one per hospital under its WhatsApp settings."
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-ink-200 text-left text-xs uppercase tracking-wide text-ink-500">
+                  <th className="px-5 py-2.5 font-medium">Hospital</th>
+                  <th className="px-5 py-2.5 font-medium">Patients see</th>
+                  <th className="px-5 py-2.5 font-medium">Number</th>
+                  <th className="px-5 py-2.5 font-medium">Status</th>
+                  <th className="px-5 py-2.5 font-medium">Quality</th>
+                  <th className="px-5 py-2.5 font-medium">Tier</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-ink-200">
+                {numbers.map((number) => (
+                  <tr key={number.id}>
+                    <td className="px-5 py-3 font-medium text-ink-900">
+                      {number.hospitalName ?? (
+                        <span className="text-ink-400">Unassigned</span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3 text-ink-700">
+                      {number.verifiedName ?? <span className="text-ink-400">—</span>}
+                    </td>
+                    <td className="numeric px-5 py-3 text-ink-600">
+                      {number.displayPhoneNumber ?? number.phoneNumberId}
+                    </td>
+                    <td className="px-5 py-3">
+                      <span
+                        className={cn(
+                          'inline-flex rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset',
+                          number.status === 'registered'
+                            ? 'bg-emerald-50 text-emerald-800 ring-emerald-200'
+                            : number.status === 'pending'
+                              ? 'bg-ink-100 text-ink-600 ring-ink-200'
+                              : 'bg-rose-50 text-rose-800 ring-rose-200',
+                        )}
+                      >
+                        {number.status}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3">
+                      <span
+                        className={cn(
+                          'text-xs font-medium',
+                          number.qualityRating === 'GREEN'
+                            ? 'text-emerald-700'
+                            : number.qualityRating === 'YELLOW'
+                              ? 'text-amber-700'
+                              : number.qualityRating === 'RED'
+                                ? 'text-rose-700'
+                                : 'text-ink-400',
+                        )}
+                      >
+                        {number.qualityRating ?? '—'}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 text-xs text-ink-500">
+                      {number.messagingTier ?? '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="border-t border-ink-200 px-5 py-3 text-xs leading-relaxed text-ink-500">
+          Quality is scored per number, but Meta&rsquo;s throughput limit applies across
+          the whole business portfolio — one hospital whose patients block messages
+          can slow sending for every other hospital. That shared fate is the reason
+          the message budget is kept low and consent is enforced.
+        </p>
       </Card>
 
       <Card>

@@ -36,6 +36,14 @@ export const notificationStatus = pgEnum('notification_status', [
 ]);
 export const jobStatus = pgEnum('job_status', ['pending', 'running', 'done', 'failed']);
 
+export const whatsappNumberStatus = pgEnum('whatsapp_number_status', [
+  'pending',
+  'registered',
+  'flagged',
+  'suspended',
+  'released',
+]);
+
 export const conversationState = pgEnum('conversation_state', [
   'idle',
   'awaiting_language',
@@ -70,11 +78,6 @@ export const hospitals = pgTable('hospitals', {
   timezone: text('timezone').notNull().default('Asia/Kolkata'),
   defaultLocale: locale('default_locale').notNull().default('mr'),
   planTierCode: text('plan_tier_code').references(() => planTiers.code),
-  /**
-   * Meta's id for this hospital's WhatsApp number. Inbound webhooks carry it,
-   * and it is the only thing that identifies which tenant a message belongs to.
-   */
-  whatsappPhoneNumberId: text('whatsapp_phone_number_id').unique(),
   /** Founding-customer discount, reverting per contract. */
   discountPercent: smallint('discount_percent').notNull().default(0),
   /**
@@ -364,6 +367,82 @@ export const doctorDayStates = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [uniqueIndex('doctor_day_states_key').on(t.doctorId, t.serviceDate)],
+);
+
+/**
+ * One WhatsApp sender number.
+ *
+ * These live on OUR WhatsApp Business Account, one per hospital, and that
+ * arrangement is the whole multi-tenant strategy:
+ *
+ *   - One Meta business verification for us, none for the hospital. A
+ *     semi-urban hospital cannot produce incorporation documents and chase Meta
+ *     for three weeks, and asking them to is where onboarding dies.
+ *   - Templates are approved per WABA, not per number, so twelve approvals
+ *     cover every hospital rather than twelve each.
+ *   - Each number carries its own display name, so the patient sees their
+ *     hospital's name and not ours. On a message about a medical appointment
+ *     that difference decides whether the link gets opened.
+ *   - Quality rating is per number, so one hospital's patients blocking
+ *     messages does not poison everyone else's sender reputation.
+ *   - One consolidated Meta bill arrives to us. The hospital never sees a
+ *     message count, which is the point.
+ *
+ * A row with no hospital is unassigned inventory: a number we hold ready for
+ * the next customer. Meta allows 20 numbers per WABA, so past twenty hospitals
+ * we add another WABA under the same verified business — `wabaId` is here so
+ * that day needs no migration.
+ */
+export const whatsappNumbers = pgTable(
+  'whatsapp_numbers',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id').references(() => hospitals.id, {
+      onDelete: 'set null',
+    }),
+    /** Which WhatsApp Business Account holds this number. */
+    wabaId: text('waba_id'),
+    /** Meta's id for the number. Inbound webhooks carry this and nothing else. */
+    phoneNumberId: text('phone_number_id').notNull().unique(),
+    /** The number itself, for humans. */
+    displayPhoneNumber: text('display_phone_number'),
+    /** The name patients see. Meta approves this separately from the number. */
+    verifiedName: text('verified_name'),
+    status: whatsappNumberStatus('status').notNull().default('pending'),
+    /** GREEN, YELLOW or RED, as reported by Meta. Watch it per hospital. */
+    qualityRating: text('quality_rating'),
+    /** Meta's throughput tier for this number, e.g. TIER_1K. */
+    messagingTier: text('messaging_tier'),
+    registeredAt: timestamp('registered_at', { withTimezone: true }),
+    updatedAt: updatedAt(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('whatsapp_numbers_hospital_idx').on(t.hospitalId)],
+);
+
+/**
+ * What Meta actually charged, per month, across every hospital.
+ *
+ * Without this, cost per hospital is an estimate multiplied by a message count,
+ * and an estimate is a fine planning tool but a poor basis for knowing whether
+ * a customer is profitable. Recording the real invoice turns the margin figures
+ * on the platform dashboard from a guess into a reconciliation.
+ *
+ * Platform-level, so no tenant ever sees it and it carries no RLS policy.
+ */
+export const providerInvoices = pgTable(
+  'provider_invoices',
+  {
+    id: id(),
+    provider: text('provider').notNull().default('meta'),
+    /** First day of the billed month. */
+    periodMonth: date('period_month').notNull(),
+    messagesBilled: integer('messages_billed').notNull(),
+    amountPaise: integer('amount_paise').notNull(),
+    notes: text('notes'),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('provider_invoices_key').on(t.provider, t.periodMonth)],
 );
 
 /**

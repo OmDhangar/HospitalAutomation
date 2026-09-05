@@ -35,6 +35,13 @@ npm run test:all
 npm run worker:tick        # drain the notification outbox once
 ```
 
+Testing WhatsApp needs no Meta account. Set `WHATSAPP_APP_SECRET` to any string,
+then post correctly signed, Meta-shaped webhooks at the local server:
+
+```bash
+npm run whatsapp:simulate -- --pn <phoneNumberId> --text "Hi"
+```
+
 ## How it is put together
 
 One Next.js app, one Postgres database, one deploy unit. No Redis, no
@@ -77,8 +84,16 @@ only ever drops milestone nudges — a patient's token link is never suppressed.
 **Prices live in the database.** `plan_tiers` is data, so repricing does not
 need a deploy.
 
+**One WhatsApp number per hospital, all on our account.** The hospital never
+touches Meta and never sees a message count. Templates are approved per business
+account, so twelve approvals cover every hospital rather than twelve each, while
+per-number display names mean patients still see their own hospital's name. See
+the WhatsApp runbook for why the alternatives fail.
+
 ## Documentation
 
+- [`docs/runbooks/whatsapp-setup.md`](docs/runbooks/whatsapp-setup.md) — the
+  multi-tenant account strategy, testing with no Meta account, and going live
 - [`docs/runbooks/onboarding.md`](docs/runbooks/onboarding.md) — putting this
   into a hospital, and the one thing that decides whether it sticks
 - [`docs/runbooks/incidents.md`](docs/runbooks/incidents.md) — restore drills,

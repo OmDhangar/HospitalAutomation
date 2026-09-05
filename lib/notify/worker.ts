@@ -1,6 +1,11 @@
 import { and, count, eq, gte, isNull, lte, sql } from 'drizzle-orm';
 import { getAdminDb } from '@/lib/db/admin';
-import { appointments, hospitals, notificationOutbox, patients } from '@/lib/db/schema';
+import {
+  appointments,
+  notificationOutbox,
+  patients,
+  whatsappNumbers,
+} from '@/lib/db/schema';
 import { messageRatio, shouldSuppressNonCriticalMessages } from '@/lib/domain/pricing';
 import type { Locale } from '@/lib/i18n/patient';
 import { ProviderError } from './errors';
@@ -105,12 +110,14 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
         patientLocale: patients.locale,
         tokenNumber: appointments.tokenNumber,
         publicToken: appointments.publicToken,
-        phoneNumberId: hospitals.whatsappPhoneNumberId,
+        phoneNumberId: whatsappNumbers.phoneNumberId,
       })
       .from(notificationOutbox)
       .innerJoin(patients, eq(patients.id, notificationOutbox.patientId))
       .innerJoin(appointments, eq(appointments.id, notificationOutbox.appointmentId))
-      .innerJoin(hospitals, eq(hospitals.id, notificationOutbox.hospitalId))
+      // Left join: a hospital without a number configured still has its
+      // messages queued, they simply cannot be sent yet.
+      .leftJoin(whatsappNumbers, eq(whatsappNumbers.hospitalId, notificationOutbox.hospitalId))
       .where(eq(notificationOutbox.id, id));
 
     if (!row) continue;

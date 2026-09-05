@@ -64,8 +64,12 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
     const branchId = uuid();
 
     await admin`
-      insert into hospitals (id, name, slug, whatsapp_phone_number_id)
-      values (${hospitalId}, 'WA Hospital', ${'wa-' + hospitalId.slice(0, 10)}, ${phoneNumberId})
+      insert into hospitals (id, name, slug)
+      values (${hospitalId}, 'WA Hospital', ${'wa-' + hospitalId.slice(0, 10)})
+    `;
+    await admin`
+      insert into whatsapp_numbers (hospital_id, phone_number_id, status, verified_name)
+      values (${hospitalId}, ${phoneNumberId}, 'registered', 'WA Hospital')
     `;
     await admin`
       insert into branches (id, hospital_id, name) values (${branchId}, ${hospitalId}, 'Main')

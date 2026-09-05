@@ -15,6 +15,7 @@ import { LOCALES, LOCALE_NAMES } from '@/lib/i18n/patient';
 import { TEMPLATES } from '@/lib/notify/templates';
 import { canConfigureHospital } from '@/lib/services/auth';
 import { getHospital } from '@/lib/services/hospital';
+import { getHospitalNumber } from '@/lib/services/whatsapp-numbers';
 import { saveWhatsAppSettings, sendTestMessage } from './actions';
 
 export const metadata = { title: 'WhatsApp · OPD Queue' };
@@ -33,12 +34,17 @@ export default async function WhatsAppSettingsPage({
     );
   }
 
-  const hospital = await getHospital(session.hospitalId);
+  const [hospital, number] = await Promise.all([
+    getHospital(session.hospitalId),
+    getHospitalNumber(session.hospitalId),
+  ]);
+
   const hasToken = Boolean(process.env.WHATSAPP_ACCESS_TOKEN);
   const hasAppSecret = Boolean(process.env.WHATSAPP_APP_SECRET);
   const hasVerifyToken = Boolean(process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN);
-  const hasNumber = Boolean(hospital?.whatsappPhoneNumberId);
-  const live = hasToken && hasNumber;
+  const hasNumber = Boolean(number?.phoneNumberId);
+  // A number that exists but is not yet registered cannot send anything.
+  const live = hasToken && number?.status === 'registered';
 
   const templateCount = Object.keys(TEMPLATES).length * LOCALES.length;
 
@@ -120,11 +126,32 @@ export default async function WhatsAppSettingsPage({
             label="Phone number id"
             ok={hasNumber}
             detail={
-              hospital?.whatsappPhoneNumberId ??
+              number?.phoneNumberId ??
               'From the Meta dashboard, under WhatsApp → API Setup'
             }
           />
+          <Check
+            label="Registered with Meta"
+            ok={number?.status === 'registered'}
+            detail={
+              number
+                ? `Status: ${number.status}` +
+                  (number.qualityRating ? ` · quality ${number.qualityRating}` : '') +
+                  (number.messagingTier ? ` · ${number.messagingTier}` : '')
+                : 'Assign a number first'
+            }
+          />
         </ul>
+
+        {number?.verifiedName ? (
+          <div className="border-t border-ink-200 bg-ink-50 px-5 py-3">
+            <p className="text-sm text-ink-600">
+              Patients see this sender as{' '}
+              <strong className="text-ink-900">{number.verifiedName}</strong>
+              {number.displayPhoneNumber ? ` (${number.displayPhoneNumber})` : ''}.
+            </p>
+          </div>
+        ) : null}
 
         <form action={saveWhatsAppSettings} className="space-y-4 border-t border-ink-200 p-5">
           <Field
@@ -133,9 +160,29 @@ export default async function WhatsAppSettingsPage({
           >
             <Input
               name="phoneNumberId"
-              defaultValue={hospital?.whatsappPhoneNumberId ?? ''}
+              defaultValue={number?.phoneNumberId ?? ''}
               placeholder="123456789012345"
             />
+          </Field>
+          <Field
+            label="Display name"
+            hint="What patients see as the sender. Meta approves this separately."
+          >
+            <Input
+              name="verifiedName"
+              defaultValue={number?.verifiedName ?? ''}
+              placeholder={session.hospitalName}
+            />
+          </Field>
+          <Field label="Sender number" hint="For your reference. Optional.">
+            <Input
+              name="displayPhone"
+              defaultValue={number?.displayPhoneNumber ?? ''}
+              placeholder="+91 90000 00000"
+            />
+          </Field>
+          <Field label="WABA id" hint="Which WhatsApp Business Account holds it. Optional.">
+            <Input name="wabaId" defaultValue={number?.wabaId ?? ''} placeholder="1234567890" />
           </Field>
           <Field
             label="Owner's mobile number"

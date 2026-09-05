@@ -1,6 +1,12 @@
 import { and, count, desc, eq, gte, sql } from 'drizzle-orm';
 import { getAdminDb } from '@/lib/db/admin';
-import { appointments, hospitals, notificationOutbox, planTiers } from '@/lib/db/schema';
+import {
+  appointments,
+  hospitals,
+  notificationOutbox,
+  planTiers,
+  providerInvoices,
+} from '@/lib/db/schema';
 import {
   calculateMonthlyBill,
   messageRatio,
@@ -34,6 +40,40 @@ export type HospitalHealth = {
 export const PAISE_PER_MESSAGE = 14.5;
 
 /**
+ * What a message actually cost last time Meta billed us, or the planning figure
+ * if no invoice has been recorded yet.
+ *
+ * Worth reconciling rather than assuming: Meta's utility rate drops with
+ * monthly volume, so the true cost per message falls as the portfolio grows.
+ * Using a flat estimate understates margin at scale and overstates it if rates
+ * rise — either way it is a guess where a fact is available.
+ */
+export async function resolvePaisePerMessage(
+  month?: string,
+): Promise<{ paise: number; source: 'invoice' | 'estimate'; month?: string }> {
+  const rows = await getAdminDb()
+    .select({
+      periodMonth: providerInvoices.periodMonth,
+      messagesBilled: providerInvoices.messagesBilled,
+      amountPaise: providerInvoices.amountPaise,
+    })
+    .from(providerInvoices)
+    .orderBy(desc(providerInvoices.periodMonth))
+    .limit(1);
+
+  const latest = rows[0];
+  if (!latest || latest.messagesBilled <= 0) {
+    return { paise: PAISE_PER_MESSAGE, source: 'estimate' };
+  }
+
+  return {
+    paise: latest.amountPaise / latest.messagesBilled,
+    source: 'invoice',
+    month: String(latest.periodMonth),
+  };
+}
+
+/**
  * The operator's view across every hospital.
  *
  * Cross-tenant by necessity, which is why it runs on the admin connection and
@@ -46,6 +86,8 @@ export async function getPortfolioHealth(month?: string): Promise<HospitalHealth
   const start = month
     ? new Date(`${month}-01T00:00:00Z`)
     : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+
+  const rate = (await resolvePaisePerMessage(month)).paise;
 
   const rows = await db
     .select({
@@ -87,7 +129,7 @@ export async function getPortfolioHealth(month?: string): Promise<HospitalHealth
       const completedAppointments = Number(completed?.value ?? 0);
       const messagesSent = Number(messages?.value ?? 0);
       const ratio = messageRatio({ messagesSent, completedAppointments });
-      const messagingCostPaise = Math.round(messagesSent * PAISE_PER_MESSAGE);
+      const messagingCostPaise = Math.round(messagesSent * rate);
 
       const bill =
         row.planCode && row.includedAppointments && row.monthlyPricePaise

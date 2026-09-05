@@ -7,6 +7,10 @@ import { normalizeIndianPhone } from '@/lib/domain/phone';
 import { getProvider } from '@/lib/notify/provider';
 import { canConfigureHospital } from '@/lib/services/auth';
 import { getHospital, updateWhatsAppSettings } from '@/lib/services/hospital';
+import {
+  assignNumberToHospital,
+  getHospitalNumber,
+} from '@/lib/services/whatsapp-numbers';
 
 async function authorize() {
   const session = await requireSession();
@@ -29,9 +33,18 @@ export async function saveWhatsAppSettings(formData: FormData) {
 
   await updateWhatsAppSettings({
     hospitalId: session.hospitalId,
-    whatsappPhoneNumberId: phoneNumberId || null,
     ownerPhoneE164: ownerPhone,
   });
+
+  if (phoneNumberId) {
+    await assignNumberToHospital({
+      hospitalId: session.hospitalId,
+      phoneNumberId,
+      wabaId: String(formData.get('wabaId') ?? '').trim() || null,
+      displayPhoneNumber: String(formData.get('displayPhone') ?? '').trim() || null,
+      verifiedName: String(formData.get('verifiedName') ?? '').trim() || null,
+    });
+  }
 
   revalidatePath('/settings/whatsapp');
   redirect('/settings/whatsapp?saved=1');
@@ -49,9 +62,11 @@ export async function sendTestMessage(formData: FormData) {
   const to = normalizeIndianPhone(String(formData.get('testPhone') ?? ''));
   if (!to) redirect('/settings/whatsapp?error=phone');
 
-  const hospital = await getHospital(session.hospitalId);
-  const phoneNumberId =
-    hospital?.whatsappPhoneNumberId ?? process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const [hospital, number] = await Promise.all([
+    getHospital(session.hospitalId),
+    getHospitalNumber(session.hospitalId),
+  ]);
+  const phoneNumberId = number?.phoneNumberId ?? process.env.WHATSAPP_PHONE_NUMBER_ID;
 
   if (!phoneNumberId) redirect('/settings/whatsapp?error=nonumber');
 

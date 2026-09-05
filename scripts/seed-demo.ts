@@ -43,6 +43,15 @@ async function main() {
     returning id
   `;
 
+  await admin`
+    insert into whatsapp_numbers
+      (hospital_id, phone_number_id, display_phone_number, verified_name, status, quality_rating, messaging_tier, registered_at)
+    values (
+      ${hospital.id}, ${'demo-pn-' + hospital.id.slice(0, 8)}, '+919000000001',
+      'Sunrise Hospital', 'registered', 'GREEN', 'TIER_1K', now()
+    )
+  `;
+
   const doctorRows = await admin`
     insert into doctors (hospital_id, branch_id, name, specialty, default_consult_minutes)
     values

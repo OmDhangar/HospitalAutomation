@@ -1,7 +1,12 @@
 import 'dotenv/config';
 import { and, count, eq, gte, lt, sql } from 'drizzle-orm';
 import { closeAdminDb, getAdminDb } from '@/lib/db/admin';
-import { appointments, hospitals, notificationOutbox } from '@/lib/db/schema';
+import {
+  appointments,
+  hospitals,
+  notificationOutbox,
+  whatsappNumbers,
+} from '@/lib/db/schema';
 import { getProvider } from '@/lib/notify/provider';
 import type { Locale } from '@/lib/i18n/patient';
 
@@ -37,9 +42,10 @@ async function main() {
       name: hospitals.name,
       phone: hospitals.ownerPhoneE164,
       locale: hospitals.defaultLocale,
-      phoneNumberId: hospitals.whatsappPhoneNumberId,
+      phoneNumberId: whatsappNumbers.phoneNumberId,
     })
     .from(hospitals)
+    .leftJoin(whatsappNumbers, eq(whatsappNumbers.hospitalId, hospitals.id))
     .where(and(eq(hospitals.active, true), sql`${hospitals.ownerPhoneE164} is not null`));
 
   if (targets.length === 0) {
