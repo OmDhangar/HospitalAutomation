@@ -92,6 +92,13 @@
       "when": 1788629159380,
       "tag": "0012_prompt_budget",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1788689610417,
+      "tag": "0013_pricing_v2",
+      "breakpoints": true
     }
   ]
 }

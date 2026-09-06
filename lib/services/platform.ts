@@ -11,6 +11,8 @@ import {
   calculateMonthlyBill,
   messageRatio,
   ratioStatus,
+  recommendTier,
+  type PlanTier,
   type RatioStatus,
 } from '@/lib/domain/pricing';
 
@@ -27,6 +29,12 @@ export type HospitalHealth = {
   /** What this hospital is estimated to cost us in messaging this month. */
   messagingCostPaise: number;
   contributionPaise: number | null;
+  /**
+   * The tier this hospital's actual volume says they belong on. When it differs
+   * from what they pay for, that is either revenue being left on the table or a
+   * customer about to be surprised by overage — both worth a call.
+   */
+  recommendedTierCode: string | null;
 };
 
 /**
@@ -88,14 +96,16 @@ export async function getPortfolioHealth(month?: string): Promise<HospitalHealth
     : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 
   const rate = (await resolvePaisePerMessage(month)).paise;
+  // Recommendations come from the live rate card, not the seeded constants, so
+  // a price negotiated in the database is respected here too.
+  const allTiers = (await db.select().from(planTiers)) as PlanTier[];
 
   const rows = await db
     .select({
       hospitalId: hospitals.id,
       name: hospitals.name,
       planCode: hospitals.planTierCode,
-      includedAppointments: planTiers.includedAppointments,
-      monthlyPricePaise: planTiers.monthlyPricePaise,
+      tier: planTiers,
     })
     .from(hospitals)
     .leftJoin(planTiers, eq(planTiers.code, hospitals.planTierCode))
@@ -131,31 +141,30 @@ export async function getPortfolioHealth(month?: string): Promise<HospitalHealth
       const ratio = messageRatio({ messagesSent, completedAppointments });
       const messagingCostPaise = Math.round(messagesSent * rate);
 
-      const bill =
-        row.planCode && row.includedAppointments && row.monthlyPricePaise
-          ? calculateMonthlyBill({
-              tier: {
-                code: row.planCode,
-                name: row.planCode,
-                includedAppointments: row.includedAppointments,
-                monthlyPricePaise: row.monthlyPricePaise,
-              },
-              completedAppointments,
-            })
-          : null;
+      const bill = row.tier
+        ? calculateMonthlyBill({
+            tier: row.tier,
+            completedAppointments,
+            messagesSent,
+          })
+        : null;
 
       return {
         hospitalId: row.hospitalId,
         name: row.name,
         planCode: row.planCode,
-        includedAppointments: row.includedAppointments,
-        monthlyPricePaise: row.monthlyPricePaise,
+        includedAppointments: row.tier?.includedAppointments ?? null,
+        monthlyPricePaise: row.tier?.monthlyPricePaise ?? null,
         completedAppointments,
         messagesSent,
         ratio,
         status: ratioStatus(ratio),
         messagingCostPaise,
         contributionPaise: bill ? bill.totalPaise - messagingCostPaise : null,
+        recommendedTierCode:
+          completedAppointments > 0
+            ? (recommendTier(completedAppointments, allTiers)?.code ?? null)
+            : null,
       };
     }),
   );

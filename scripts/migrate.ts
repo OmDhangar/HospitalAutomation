@@ -25,11 +25,23 @@ async function main() {
       SEED_PLAN_TIERS.map((tier, index) => ({
         code: tier.code,
         name: tier.name,
+        patientsPerDay: tier.patientsPerDay,
         includedAppointments: tier.includedAppointments,
+        includedMessages: tier.includedMessages,
         monthlyPricePaise: tier.monthlyPricePaise,
+        annualPricePaise: tier.annualPricePaise,
+        setupFeePaise: tier.setupFeePaise,
+        overagePaisePerAppointment: tier.overagePaisePerAppointment,
+        overagePaisePerMessage: tier.overagePaisePerMessage,
         sortOrder: index,
       })),
     )
+    /**
+     * Only fills gaps. A price edited directly in the database is a deliberate
+     * commercial decision — a founding-customer rate, a negotiated tier — and
+     * must survive every subsequent deploy. Repricing everyone is a migration,
+     * written once and reviewed, not a side effect of running the seed.
+     */
     .onConflictDoNothing();
 
   /**

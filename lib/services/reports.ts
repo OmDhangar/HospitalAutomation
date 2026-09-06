@@ -86,15 +86,12 @@ export async function getMonthlyUsage(args: {
         .where(eq(planTiers.code, args.planCode));
 
       if (tier) {
+        // The row already matches PlanTier field for field; rebuilding a subset
+        // of it is how the two drifted apart last time.
         bill = calculateMonthlyBill({
-          tier: {
-            code: tier.code,
-            name: tier.name,
-            includedAppointments: tier.includedAppointments,
-            monthlyPricePaise: tier.monthlyPricePaise,
-          },
+          tier,
           completedAppointments,
-          overagePaisePerAppointment: tier.overagePaisePerAppointment,
+          messagesSent,
         });
       }
     }

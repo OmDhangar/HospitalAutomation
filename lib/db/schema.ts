@@ -64,9 +64,22 @@ const updatedAt = () => timestamp('updated_at', { withTimezone: true }).notNull(
 export const planTiers = pgTable('plan_tiers', {
   code: text('code').primaryKey(),
   name: text('name').notNull(),
+  /** Nameplate outpatients per day this tier is sold against. */
+  patientsPerDay: integer('patients_per_day').notNull().default(0),
   includedAppointments: integer('included_appointments').notNull(),
+  /**
+   * Where message volume itself becomes billable — set well above the alert
+   * threshold, because an abnormal ratio is nearly always our defect rather
+   * than the hospital's behaviour.
+   */
+  includedMessages: integer('included_messages').notNull().default(0),
   monthlyPricePaise: integer('monthly_price_paise').notNull(),
-  overagePaisePerAppointment: integer('overage_paise_per_appointment').notNull().default(0),
+  /** Ten months for twelve, and waives the setup fee. */
+  annualPricePaise: integer('annual_price_paise').notNull().default(0),
+  /** One-time, charged on setup. Per tier, because a multi-branch install is a bigger job. */
+  setupFeePaise: integer('setup_fee_paise').notNull().default(500_000),
+  overagePaisePerAppointment: integer('overage_paise_per_appointment').notNull().default(100),
+  overagePaisePerMessage: integer('overage_paise_per_message').notNull().default(25),
   sortOrder: smallint('sort_order').notNull().default(0),
   active: boolean('active').notNull().default(true),
 });

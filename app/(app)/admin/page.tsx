@@ -128,8 +128,19 @@ export default async function AdminPage() {
                   return (
                     <tr key={row.hospitalId}>
                       <td className="px-5 py-3 font-medium text-ink-900">{row.name}</td>
-                      <td className="px-5 py-3 capitalize text-ink-600">
-                        {row.planCode?.replace('_', ' ') ?? '—'}
+                      <td className="px-5 py-3 text-ink-600">
+                        <span className="capitalize">
+                          {row.planCode?.replace('_', ' ') ?? '—'}
+                        </span>
+                        {row.recommendedTierCode &&
+                        row.recommendedTierCode !== row.planCode ? (
+                          <span
+                            className="ml-1.5 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium capitalize text-amber-900 ring-1 ring-inset ring-amber-200"
+                            title="Their volume fits a different tier"
+                          >
+                            → {row.recommendedTierCode.replace('_', ' ')}
+                          </span>
+                        ) : null}
                       </td>
                       <td className="numeric px-5 py-3 text-right text-ink-700">
                         {row.completedAppointments.toLocaleString('en-IN')}
