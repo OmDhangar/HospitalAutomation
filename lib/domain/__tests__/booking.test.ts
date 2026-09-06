@@ -126,6 +126,37 @@ describe('booking conversation', () => {
     expect(result.context.doctorId).toBeUndefined();
     expect(result.context.locale).toBe('mr');
   });
+
+  it('redirects to web slot booking when patient selects slot:later', () => {
+    const result = nextBookingStep({
+      state: 'awaiting_slot',
+      context: { locale: 'en', doctorId: 'doc-a' },
+      message: { replyId: 'slot:later' },
+      knownLocale: 'en',
+      availableDoctorIds: DOCTORS,
+    });
+
+    expect(result.step.kind).toBe('redirect_web');
+    if (result.step.kind === 'redirect_web') {
+      expect(result.step.doctorId).toBe('doc-a');
+    }
+  });
+
+  it('confirms appointment directly when patient selects slot:now', () => {
+    const result = nextBookingStep({
+      state: 'awaiting_slot',
+      context: { locale: 'en', doctorId: 'doc-a' },
+      message: { replyId: 'slot:now' },
+      knownLocale: 'en',
+      availableDoctorIds: DOCTORS,
+    });
+
+    expect(result.step.kind).toBe('confirm');
+    if (result.step.kind === 'confirm') {
+      expect(result.step.doctorId).toBe('doc-a');
+      expect(result.step.slot).toBe('now');
+    }
+  });
 });
 
 describe('interactive list titles', () => {

@@ -34,6 +34,7 @@ export type QueueRow = {
   patientId: string;
   enqueuedAt: Date | null;
   calledAt: Date | null;
+  scheduledSlotAt?: Date | null;
 };
 
 export type QueueSnapshot = {
@@ -122,6 +123,7 @@ async function loadDayAppointments(
       patientId: appointments.patientId,
       patientName: patients.name,
       whatsappOptInAt: patients.whatsappOptInAt,
+      scheduledSlotAt: appointments.scheduledSlotAt,
     })
     .from(appointments)
     .innerJoin(patients, eq(patients.id, appointments.patientId))
@@ -633,6 +635,7 @@ export async function getQueueSnapshot(args: {
           patientId: row.patientId,
           enqueuedAt: row.enqueuedAt,
           calledAt: row.calledAt,
+          scheduledSlotAt: row.scheduledSlotAt,
         };
       }),
       parked: rows
@@ -647,6 +650,7 @@ export async function getQueueSnapshot(args: {
           patientId: row.patientId,
           enqueuedAt: row.enqueuedAt,
           calledAt: row.calledAt,
+          scheduledSlotAt: row.scheduledSlotAt,
         })),
     };
   });

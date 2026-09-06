@@ -21,6 +21,7 @@ export type BookingStep =
   | { kind: 'ask_doctor' }
   | { kind: 'ask_slot'; doctorId: string }
   | { kind: 'confirm'; doctorId: string; slot: string }
+  | { kind: 'redirect_web'; doctorId: string }
   | { kind: 'none' };
 
 export type InboundMessage = {
@@ -84,6 +85,14 @@ export function nextBookingStep(args: {
   }
 
   if (reply?.prefix === 'slot' && context.doctorId) {
+    if (reply.value === 'later') {
+      return {
+        state: 'idle',
+        context: { ...context, slot: reply.value },
+        step: { kind: 'redirect_web', doctorId: context.doctorId },
+      };
+    }
+
     return {
       state: 'idle',
       context: { ...context, slot: reply.value },
@@ -147,7 +156,9 @@ export function shouldSendPrompt(args: {
   promptsToday: number;
   now: Date;
 }): PromptDecision {
-  if (args.step === 'confirm' || args.step === 'none') return { send: true };
+  if (args.step === 'confirm' || args.step === 'redirect_web' || args.step === 'none') {
+    return { send: true };
+  }
 
   if (args.promptsToday >= DAILY_PROMPT_CAP) {
     return { send: false, reason: 'daily_cap' };

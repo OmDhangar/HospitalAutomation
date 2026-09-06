@@ -95,6 +95,27 @@ ${url}
 You can wait outside — we will message you when your turn is close.`,
 };
 
+const REDIRECT_WEB: Record<Locale, (doctor: string, url: string) => string> = {
+  mr: (doctor, url) =>
+    `डॉ. ${doctor} यांच्याकडे अपॉइंटमेंटची वेळ निवडण्यासाठी, कृपया आमच्या वेबसाईटवर उपलब्ध स्लॉट निवडा:
+
+${url}
+
+डॉ. ${doctor} यांना तुमच्या अपॉइंटमेंटची माहिती दिली जाईल जेणेकरून ते उपलब्ध राहू शकतील.`,
+  hi: (doctor, url) =>
+    `डॉ. ${doctor} के साथ अपॉइंटमेंट का समय चुनने के लिए, कृपया हमारी वेबसाइट पर उपलब्ध स्लॉट चुनें:
+
+${url}
+
+डॉ. ${doctor} को आपकी अपॉइंटमेंट की सूचना दे दी जाएगी ताकि वे उपलब्ध रह सकें।`,
+  en: (doctor, url) =>
+    `To choose your appointment time for Dr. ${doctor}, please select an available slot on our website:
+
+${url}
+
+Dr. ${doctor} will be notified of your appointment so they can be available.`,
+};
+
 const SLOT_ROWS: Record<Locale, ListRow[]> = {
   mr: [
     { id: 'slot:now', title: 'आता येत आहे' },
@@ -295,6 +316,33 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
               eq(notificationOutbox.milestone, 'queue_link'),
             ),
           ),
+      );
+      break;
+    }
+
+    case 'redirect_web': {
+      const doctor = doctors.find((d) => d.id === step.doctorId);
+      if (!doctor) break;
+
+      const baseUrl = process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000';
+      const bookUrl = `${baseUrl}/book?doctor=${doctor.id}&phone=${encodeURIComponent(phoneE164)}&hospital=${hospitalId}&locale=${locale}`;
+      const sent = await provider.sendText({
+        phoneNumberId: inbound.phoneNumberId,
+        toPhoneE164: phoneE164,
+        body: REDIRECT_WEB[locale](doctor.name, bookUrl),
+      });
+
+      await withTenant(hospitalId, (tx) =>
+        tx.insert(notificationOutbox).values({
+          hospitalId,
+          milestone: 'conversation:redirect_web',
+          templateCode: 'conversation',
+          locale,
+          payload: { doctorId: doctor.id, url: bookUrl },
+          status: 'sent',
+          providerMessageId: sent.providerMessageId,
+          sentAt: new Date(),
+        }),
       );
       break;
     }

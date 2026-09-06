@@ -14,7 +14,7 @@ import {
 } from '@/components/ui';
 import { SubscriptionCard, UsageNotice } from '@/components/subscription';
 import { requireSession } from '@/lib/auth/session';
-import { minutesBetween } from '@/lib/domain/time';
+import { formatTimeIn, minutesBetween } from '@/lib/domain/time';
 import { listBranches } from '@/lib/services/auth';
 import { listDoctors } from '@/lib/services/hospital';
 import { getQueueSnapshot, type QueueRow } from '@/lib/services/queue';
@@ -96,6 +96,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
     (row) => row.status === 'CALLED' || row.status === 'IN_CONSULTATION',
   );
   const waiting = snapshot?.rows.filter((row) => row.status === 'WAITING') ?? [];
+  const scheduledToday = snapshot?.rows.filter((row) => Boolean(row.scheduledSlotAt)) ?? [];
 
   return (
     <>
@@ -120,7 +121,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
               <span
                 className={cn(
                   'ml-2 text-xs',
-                  doctor.id === selectedId ? 'text-brand-100' : 'text-ink-400',
+                  doctor.id === selectedId ? 'text-brand-100' : 'text-ink-500',
                 )}
               >
                 {doctor.specialty}
@@ -138,7 +139,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
         </div>
       ) : null}
 
-      {usage ? (
+      {usage?.subscription ? (
         <div className="mb-4">
           <UsageNotice usage={usage} />
         </div>
@@ -151,6 +152,30 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
             {snapshot.pausedReason ? `${snapshot.pausedReason}. ` : ''}
             Patients are told the queue is on hold, and no reminders are sent.
           </Alert>
+        </div>
+      ) : null}
+
+      {scheduledToday.length > 0 ? (
+        <div className="mb-4">
+          <div className="rounded-xl border border-brand-200 bg-brand-50/70 p-3.5 text-xs text-brand-950 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-base">🕒</span>
+              <span>
+                <strong>
+                  {scheduledToday.length} Scheduled Appointment{scheduledToday.length === 1 ? '' : 's'} Today:
+                </strong>{' '}
+                {scheduledToday
+                  .map(
+                    (s) =>
+                      `${s.patientName} (Token ${s.tokenNumber} at ${formatTimeIn(session.timezone, s.scheduledSlotAt!)})`,
+                  )
+                  .join(' · ')}
+              </span>
+            </div>
+            <span className="rounded-full bg-brand-200/80 px-2.5 py-0.5 text-[10px] font-bold text-brand-900">
+              Doctor Notified
+            </span>
+          </div>
         </div>
       ) : null}
 
@@ -277,6 +302,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                     position={index + 1}
                     doctorId={selectedId!}
                     now={now}
+                    timezone={session.timezone}
                   />
                 ))}
               </ul>
@@ -398,11 +424,13 @@ function WaitingRow({
   position,
   doctorId,
   now,
+  timezone,
 }: {
   row: QueueRow;
   position: number;
   doctorId: string;
   now: Date;
+  timezone: string;
 }) {
   return (
     <li className="flex flex-wrap items-center gap-3 px-5 py-3">
@@ -411,7 +439,14 @@ function WaitingRow({
       </span>
 
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-ink-900">{row.patientName}</p>
+        <div className="flex items-center gap-2">
+          <p className="truncate text-sm font-medium text-ink-900">{row.patientName}</p>
+          {row.scheduledSlotAt ? (
+            <span className="inline-flex items-center gap-1 rounded bg-brand-100 px-1.5 py-0.5 text-[10px] font-semibold text-brand-900">
+              🕒 {formatTimeIn(timezone, row.scheduledSlotAt)}
+            </span>
+          ) : null}
+        </div>
         <p className="text-xs text-ink-500">
           #{position} in line · waiting {waitedFor(row.enqueuedAt, now)}
           {row.priority > 0 ? ' · priority' : ''}
