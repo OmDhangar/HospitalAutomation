@@ -23,6 +23,7 @@ export default async function AppLayout({ children }: LayoutProps<'/'>) {
             <NavLink href="/reports">Reports</NavLink>
             {session.role === 'owner' ? (
               <>
+                <NavLink href="/subscription">Subscription</NavLink>
                 <NavLink href="/audit">Activity</NavLink>
                 <NavLink href="/settings">Settings</NavLink>
               </>

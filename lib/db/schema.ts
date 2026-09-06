@@ -36,6 +36,15 @@ export const notificationStatus = pgEnum('notification_status', [
 ]);
 export const jobStatus = pgEnum('job_status', ['pending', 'running', 'done', 'failed']);
 
+export const billingCycle = pgEnum('billing_cycle', ['monthly', 'annual']);
+export const subscriptionStatus = pgEnum('subscription_status', [
+  'trial',
+  'active',
+  'expired',
+  'cancelled',
+  'suspended',
+]);
+
 export const whatsappNumberStatus = pgEnum('whatsapp_number_status', [
   'pending',
   'registered',
@@ -117,6 +126,74 @@ export const branches = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index('branches_hospital_idx').on(t.hospitalId)],
+);
+
+/**
+ * One row per subscription *period*, not one per hospital.
+ *
+ * Changing tier supersedes the current row and inserts a new one, so history
+ * falls out of the design rather than needing a separate audit table: the
+ * previous row still holds the tier, price, cycle and dates that applied at the
+ * time.
+ *
+ * Price and allowances are copied onto the row rather than read through to
+ * `plan_tiers`. That is the important decision here. A hospital on a
+ * founding-customer rate, or one that signed before a repricing, must keep what
+ * they agreed — and an invoice for August has to stay reproducible after
+ * September's price change. Pointing at the live rate card would silently
+ * rewrite both.
+ */
+export const subscriptions = pgTable(
+  'subscriptions',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    planTierCode: text('plan_tier_code')
+      .notNull()
+      .references(() => planTiers.code),
+    billingCycle: billingCycle('billing_cycle').notNull().default('monthly'),
+    status: subscriptionStatus('status').notNull().default('active'),
+
+    /** What this hospital actually agreed to pay, captured at signing. */
+    pricePaise: integer('price_paise').notNull(),
+    /** ₹5,000 on monthly, nil on annual prepay. */
+    setupFeePaise: integer('setup_fee_paise').notNull().default(0),
+
+    /** Allowances as they stood when the subscription began. */
+    dailyAppointmentCapacity: integer('daily_appointment_capacity').notNull(),
+    includedAppointments: integer('included_appointments').notNull(),
+    includedMessages: integer('included_messages').notNull(),
+
+    /** Usage periods are monthly windows anchored on this date. */
+    startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
+    /** End of the paid term: one month out on monthly, twelve on annual. */
+    endsAt: timestamp('ends_at', { withTimezone: true }).notNull(),
+    cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+
+    /** Why this row exists: initial, upgrade, downgrade, renewal, cycle_change… */
+    changeReason: text('change_reason'),
+    changedByUserId: uuid('changed_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    /** Set when a later subscription replaces this one. Null means current. */
+    supersededAt: timestamp('superseded_at', { withTimezone: true }),
+
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    /**
+     * Exactly one current subscription per hospital, enforced by the database
+     * rather than by remembering to supersede the old row first.
+     */
+    uniqueIndex('subscriptions_one_current_per_hospital')
+      .on(t.hospitalId)
+      .where(sql`superseded_at is null`),
+    index('subscriptions_hospital_idx').on(t.hospitalId, t.startsAt),
+    index('subscriptions_expiry_idx').on(t.status, t.endsAt),
+  ],
 );
 
 /* ----------------------------------------------------------------- identity */

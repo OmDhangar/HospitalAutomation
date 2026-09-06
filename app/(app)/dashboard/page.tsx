@@ -12,11 +12,14 @@ import {
   Stat,
   cn,
 } from '@/components/ui';
+import { SubscriptionCard, UsageNotice } from '@/components/subscription';
 import { requireSession } from '@/lib/auth/session';
 import { minutesBetween } from '@/lib/domain/time';
 import { listBranches } from '@/lib/services/auth';
 import { listDoctors } from '@/lib/services/hospital';
 import { getQueueSnapshot, type QueueRow } from '@/lib/services/queue';
+import { listActiveTiers } from '@/lib/services/subscriptions';
+import { getHospitalUsage } from '@/lib/services/usage';
 import {
   addWalkInAction,
   advanceQueueAction,
@@ -75,6 +78,20 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
       })
     : null;
 
+  /**
+   * Billing belongs to the owner, not to reception — a receptionist running a
+   * queue does not need a plan card in the way. Gated on role rather than
+   * hidden with CSS.
+   */
+  const isOwner = session.role === 'owner';
+  const usage = isOwner
+    ? await getHospitalUsage({ hospitalId: session.hospitalId, timezone: session.timezone })
+    : null;
+  const tierName = usage?.subscription
+    ? ((await listActiveTiers()).find((t) => t.code === usage.subscription!.planTierCode)
+        ?.name ?? null)
+    : null;
+
   const serving = snapshot?.rows.find(
     (row) => row.status === 'CALLED' || row.status === 'IN_CONSULTATION',
   );
@@ -118,6 +135,12 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
           <Alert tone="error">
             Enter a name and a valid 10-digit Indian mobile number.
           </Alert>
+        </div>
+      ) : null}
+
+      {usage ? (
+        <div className="mb-4">
+          <UsageNotice usage={usage} />
         </div>
       ) : null}
 
@@ -356,6 +379,14 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
               </ul>
             )}
           </Card>
+
+          {usage ? (
+            <SubscriptionCard
+              usage={usage}
+              tierName={tierName}
+              timezone={session.timezone}
+            />
+          ) : null}
         </div>
       </div>
     </>

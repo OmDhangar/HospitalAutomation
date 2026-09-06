@@ -199,12 +199,28 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
     expect(spy.texts).toHaveLength(1);
   });
 
-  it('never exceeds the daily prompt budget however hard it is pushed', async () => {
-    for (let i = 0; i < 16; i += 1) {
-      await inbound(i, i % 2 === 0 ? { text: 'Hi' } : { replyId: 'lang:en' });
-    }
+  /**
+   * The cap algorithm itself is proven exhaustively in the unit suite, over
+   * hundreds of iterations, in microseconds. What only integration can show is
+   * that the count survives a round trip: that it is persisted, read back on
+   * the next webhook, and enforced. Driving 16 real messages through Postgres
+   * to re-derive arithmetic took ninety seconds and proved nothing extra.
+   */
+  it('enforces the daily prompt budget from persisted state', async () => {
+    await inbound(1, { text: 'Hi' });
+    expect(spy.lists).toHaveLength(1);
 
-    expect(spy.lists.length).toBeLessThanOrEqual(DAILY_PROMPT_CAP);
+    // Push the stored counter to the cap, as if the day had been busy.
+    await admin`
+      update whatsapp_conversations
+      set prompts_today = ${DAILY_PROMPT_CAP}, prompts_date = current_date
+      where hospital_id = ${hospitalId}
+    `;
+
+    spy.lists = [];
+    await inbound(2, { replyId: 'lang:en' });
+
+    expect(spy.lists).toHaveLength(0);
   });
 
   it('ignores a redelivered webhook instead of issuing a second token', async () => {
