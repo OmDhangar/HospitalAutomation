@@ -421,6 +421,40 @@ export const whatsappNumbers = pgTable(
 );
 
 /**
+ * Inbound demo requests from the public marketing page.
+ *
+ * Platform-level, same as `provider_invoices`: it belongs to no hospital, so it
+ * carries no RLS policy. Access is application-gated — the public form writes
+ * rows; only `isPlatformAdmin` may list them.
+ */
+export const demoRequestStatus = pgEnum('demo_request_status', [
+  'new',
+  'contacted',
+  'demoed',
+  'won',
+  'lost',
+]);
+
+export const demoRequests = pgTable(
+  'demo_requests',
+  {
+    id: id(),
+    name: text('name').notNull(),
+    organisation: text('organisation').notNull(),
+    phoneE164: text('phone_e164').notNull(),
+    city: text('city').notNull(),
+    patientsPerDay: text('patients_per_day').notNull(),
+    status: demoRequestStatus('status').notNull().default('new'),
+    notes: text('notes'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('demo_requests_phone_created_idx').on(t.phoneE164, t.createdAt),
+    index('demo_requests_created_idx').on(t.createdAt),
+  ],
+);
+
+/**
  * What Meta actually charged, per month, across every hospital.
  *
  * Without this, cost per hospital is an estimate multiplied by a message count,
