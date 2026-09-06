@@ -69,27 +69,25 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
     );
   }
 
-  const snapshot = selectedId
-    ? await getQueueSnapshot({
-        hospitalId: session.hospitalId,
-        doctorId: selectedId,
-        timezone: session.timezone,
-        now,
-      })
-    : null;
-
-  /**
-   * Billing belongs to the owner, not to reception — a receptionist running a
-   * queue does not need a plan card in the way. Gated on role rather than
-   * hidden with CSS.
-   */
   const isOwner = session.role === 'owner';
-  const usage = isOwner
-    ? await getHospitalUsage({ hospitalId: session.hospitalId, timezone: session.timezone })
-    : null;
+
+  const [snapshot, usage, tiers] = await Promise.all([
+    selectedId
+      ? getQueueSnapshot({
+          hospitalId: session.hospitalId,
+          doctorId: selectedId,
+          timezone: session.timezone,
+          now,
+        })
+      : null,
+    isOwner
+      ? getHospitalUsage({ hospitalId: session.hospitalId, timezone: session.timezone })
+      : null,
+    isOwner ? listActiveTiers() : Promise.resolve([]),
+  ]);
+
   const tierName = usage?.subscription
-    ? ((await listActiveTiers()).find((t) => t.code === usage.subscription!.planTierCode)
-        ?.name ?? null)
+    ? (tiers.find((t) => t.code === usage.subscription!.planTierCode)?.name ?? null)
     : null;
 
   const serving = snapshot?.rows.find(

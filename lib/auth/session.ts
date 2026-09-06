@@ -1,13 +1,14 @@
+import { cache } from 'react';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { resolveSession, type Session } from '@/lib/services/auth';
 
 const COOKIE_NAME = 'opd_session';
 
-export async function getSession(): Promise<Session | null> {
+export const getSession = cache(async function getSession(): Promise<Session | null> {
   const store = await cookies();
   return resolveSession(store.get(COOKIE_NAME)?.value);
-}
+});
 
 /** For pages that must not render at all without a signed-in staff member. */
 export async function requireSession(): Promise<Session> {

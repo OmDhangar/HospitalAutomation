@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { Button, Card } from '@/components/ui';
-import { getSession } from '@/lib/auth/session';
+import { AuthButton } from '@/components/marketing/auth-button';
 import { DemoForm } from '@/components/marketing/demo-form';
 import {
   DoctorDayMock,
@@ -13,15 +13,14 @@ import {
   MockWhatsAppMenus,
 } from '@/components/marketing/mockups';
 
+
 export const metadata = {
   title: 'QueueCare — OPD Queue Management for Hospitals & Clinics',
   description:
     'Turn crowded hospital corridors into an orderly digital queue. WhatsApp booking, live queue links, and one-click reception calling.',
 };
 
-export default async function HomePage() {
-  const session = await getSession();
-
+export default function HomePage() {
   return (
     <div className="min-h-screen bg-white text-ink-900 selection:bg-brand-100 selection:text-brand-900">
       {/* ------------------------------------------------------------- Header */}
@@ -49,26 +48,7 @@ export default async function HomePage() {
             </a>
           </nav>
 
-          <div className="flex items-center gap-3">
-            {session ? (
-              <Link href="/dashboard">
-                <Button variant="primary" size="sm">
-                  Go to Dashboard →
-                </Button>
-              </Link>
-            ) : (
-              <>
-                <Link href="/login" className="text-xs font-semibold text-ink-700 hover:text-ink-900">
-                  Sign in
-                </Link>
-                <a href="#demo">
-                  <Button variant="primary" size="sm">
-                    Book Demo
-                  </Button>
-                </a>
-              </>
-            )}
-          </div>
+          <AuthButton />
         </div>
       </header>
 

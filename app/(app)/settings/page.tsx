@@ -30,8 +30,10 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
     );
   }
 
-  const branches = await listBranches(session.hospitalId);
-  const doctors = await listDoctors({ hospitalId: session.hospitalId });
+  const [branches, doctors] = await Promise.all([
+    listBranches(session.hospitalId),
+    listDoctors({ hospitalId: session.hospitalId }),
+  ]);
 
   return (
     <div className="space-y-5">

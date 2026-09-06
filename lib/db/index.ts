@@ -16,7 +16,12 @@ export function getDb() {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) throw new Error('DATABASE_URL is not set');
 
-    cachedClient = postgres(connectionString, { max: 10 });
+    cachedClient = postgres(connectionString, {
+      max: 10,
+      prepare: false,
+      idle_timeout: 30,
+      connect_timeout: 10,
+    });
     cachedDb = drizzle(cachedClient, { schema });
   }
   return cachedDb;
