@@ -157,6 +157,90 @@ describe('booking conversation', () => {
       expect(result.step.slot).toBe('now');
     }
   });
+
+  describe('active appointment flow', () => {
+    const mockAppt = {
+      id: 'appt-123',
+      tokenNumber: 5,
+      doctorName: 'Dr Kulkarni',
+      doctorId: 'doc-a',
+      status: 'WAITING',
+      publicToken: 'tok-abc',
+      serviceDate: '2026-09-08',
+    };
+
+    it('presents ask_active_choice when patient with active appointment sends greeting', () => {
+      const result = nextBookingStep({
+        state: 'idle',
+        context: { locale: 'en' },
+        message: { text: 'Hi' },
+        knownLocale: 'en',
+        availableDoctorIds: DOCTORS,
+        activeAppointment: mockAppt,
+      });
+
+      expect(result.step.kind).toBe('ask_active_choice');
+      expect(result.state).toBe('awaiting_active_choice');
+    });
+
+    it('shows active appointment details when patient selects active_appt:view', () => {
+      const result = nextBookingStep({
+        state: 'awaiting_active_choice',
+        context: { locale: 'en' },
+        message: { replyId: 'active_appt:view' },
+        knownLocale: 'en',
+        availableDoctorIds: DOCTORS,
+        activeAppointment: mockAppt,
+      });
+
+      expect(result.step.kind).toBe('show_active_appointment');
+      if (result.step.kind === 'show_active_appointment') {
+        expect(result.step.appointment.tokenNumber).toBe(5);
+        expect(result.step.appointment.publicToken).toBe('tok-abc');
+      }
+    });
+
+    it('routes to new booking doctor selection when patient selects active_appt:new_booking', () => {
+      const result = nextBookingStep({
+        state: 'awaiting_active_choice',
+        context: { locale: 'en' },
+        message: { replyId: 'active_appt:new_booking' },
+        knownLocale: 'en',
+        availableDoctorIds: DOCTORS,
+        activeAppointment: mockAppt,
+      });
+
+      expect(result.step.kind).toBe('ask_doctor');
+      expect(result.state).toBe('awaiting_doctor');
+    });
+
+    it('resends active queue link when patient types keyword "status" or "link"', () => {
+      const result = nextBookingStep({
+        state: 'idle',
+        context: { locale: 'en' },
+        message: { text: 'status' },
+        knownLocale: 'en',
+        availableDoctorIds: DOCTORS,
+        activeAppointment: mockAppt,
+      });
+
+      expect(result.step.kind).toBe('show_active_appointment');
+    });
+
+    it('proceeds directly to normal booking workflow when patient has NO active appointment', () => {
+      const result = nextBookingStep({
+        state: 'idle',
+        context: { locale: 'en' },
+        message: { text: 'Hi' },
+        knownLocale: 'en',
+        availableDoctorIds: DOCTORS,
+        activeAppointment: null,
+      });
+
+      expect(result.step.kind).toBe('ask_doctor');
+      expect(result.state).toBe('awaiting_doctor');
+    });
+  });
 });
 
 describe('interactive list titles', () => {

@@ -1,6 +1,8 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { getDb, withTenant } from '@/lib/db';
 import {
+  appointments,
+  doctors as doctorsTable,
   idempotencyKeys,
   notificationOutbox,
   patients,
@@ -10,6 +12,7 @@ import {
   fitListTitle,
   nextBookingStep,
   shouldSendPrompt,
+  type ActiveAppointmentInfo,
   type BookingContext,
   type ConversationState,
 } from '@/lib/domain/booking';
@@ -50,18 +53,96 @@ const PROMPTS: Record<Locale, { language: string; doctor: string; slot: string; 
   },
 };
 
-/**
- * Confirmation sent the instant a booking completes.
- *
- * Free-form rather than the queue_link template, because the patient has just
- * messaged us and that opens a 24-hour window in which plain messages need no
- * approval. Three things follow: the booking path does not wait on Meta's
- * template review, the patient gets an answer in the same second rather than
- * whenever the worker next drains, and it costs exactly the same one message.
- *
- * The template still earns its place for walk-ins, where reception adds a
- * patient who has not messaged us and no window is open.
- */
+const ACTIVE_CHOICE_PROMPTS: Record<
+  Locale,
+  {
+    body: (doctor: string, token: number, url: string) => string;
+    viewTitle: string;
+    viewDesc: string;
+    newTitle: string;
+    newDesc: string;
+  }
+> = {
+  mr: {
+    body: (doctor, token, url) =>
+      `तुमची एक अपॉइंटमेंट आधीच नोंदवलेली आहे!
+
+टोकन क्रमांक: ${token}
+डॉक्टर: डॉ. ${doctor}
+
+रांगेतील तुमची सद्यस्थिती इथे पाहा:
+${url}
+
+तुम्हाला पुढे काय करायचे आहे?`,
+    viewTitle: 'अपॉइंटमेंट पाहा',
+    viewDesc: 'लाइव्ह रांग लिंक मिळवा',
+    newTitle: 'नवीन अपॉइंटमेंट घ्या',
+    newDesc: 'दुसऱ्या डॉक्टरांसाठी बुकिंग करा',
+  },
+  hi: {
+    body: (doctor, token, url) =>
+      `आपकी एक अपॉइंटमेंट पहले से दर्ज है!
+
+टोकन नंबर: ${token}
+डॉक्टर: डॉ. ${doctor}
+
+कतार में अपनी स्थिति यहाँ देखें:
+${url}
+
+आप क्या करना चाहते हैं?`,
+    viewTitle: 'अपॉइंटमेंट देखें',
+    viewDesc: 'लाइव कतार लिंक प्राप्त करें',
+    newTitle: 'नई अपॉइंटमेंट लें',
+    newDesc: 'दूसरे डॉक्टर के लिए बुकिंग करें',
+  },
+  en: {
+    body: (doctor, token, url) =>
+      `You already have an active appointment booked!
+
+Token number: ${token}
+Doctor: Dr. ${doctor}
+
+Track your position in the queue here:
+${url}
+
+What would you like to do?`,
+    viewTitle: 'View Active Queue',
+    viewDesc: 'Get your live queue tracking link',
+    newTitle: 'Book New Appointment',
+    newDesc: 'Book another doctor or department',
+  },
+};
+
+const SHOW_ACTIVE_PROMPTS: Record<
+  Locale,
+  (doctor: string, token: number, url: string) => string
+> = {
+  mr: (doctor, token, url) =>
+    `तुमच्या सद्य अपॉइंटमेंटची माहिती खालीलप्रमाणे आहे:
+
+टोकन क्रमांक: ${token}
+डॉक्टर: डॉ. ${doctor}
+
+रांगेतील सद्यस्थिती इथे पाहा:
+${url}`,
+  hi: (doctor, token, url) =>
+    `आपकी वर्तमान अपॉइंटमेंट का विवरण:
+
+टोकन नंबर: ${token}
+डॉक्टर: डॉ. ${doctor}
+
+कतार में अपनी स्थिति यहाँ देखें:
+${url}`,
+  en: (doctor, token, url) =>
+    `Here are your active appointment details:
+
+Token number: ${token}
+Doctor: Dr. ${doctor}
+
+Track your position in the queue here:
+${url}`,
+};
+
 const CONFIRMATION: Record<Locale, (token: number, doctor: string, url: string) => string> = {
   mr: (token, doctor, url) =>
     `तुमची अपॉइंटमेंट नोंदवली आहे.
@@ -131,18 +212,46 @@ const SLOT_ROWS: Record<Locale, ListRow[]> = {
   ],
 };
 
+export async function getActiveAppointment(
+  hospitalId: string,
+  phoneE164: string,
+): Promise<ActiveAppointmentInfo | null> {
+  return withTenant(hospitalId, async (tx) => {
+    const rows = await tx
+      .select({
+        id: appointments.id,
+        tokenNumber: appointments.tokenNumber,
+        status: appointments.status,
+        publicToken: appointments.publicToken,
+        serviceDate: appointments.serviceDate,
+        doctorId: appointments.doctorId,
+        doctorName: doctorsTable.name,
+      })
+      .from(appointments)
+      .innerJoin(patients, eq(appointments.patientId, patients.id))
+      .innerJoin(doctorsTable, eq(appointments.doctorId, doctorsTable.id))
+      .where(
+        and(
+          eq(appointments.hospitalId, hospitalId),
+          eq(patients.phoneE164, phoneE164),
+          sql`${appointments.status} not in ('COMPLETED', 'CANCELLED', 'NO_SHOW', 'EXPIRED')`,
+          sql`${appointments.publicTokenExpiresAt} > now()`,
+        ),
+      )
+      .orderBy(desc(appointments.createdAt))
+      .limit(1);
+
+    if (rows.length === 0) return null;
+    return rows[0];
+  });
+}
+
 /**
  * Handles one inbound WhatsApp message.
- *
- * Deliberately tolerant: a patient who types nonsense, taps a stale button, or
- * comes back a week later gets a clean restart rather than an error. The one
- * thing it must never do is process the same webhook twice.
  */
 export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<void> {
   const db = getDb();
 
-  // Which hospital owns this WhatsApp number. Bootstrap lookup, same contract
-  // as the other two: one identifier in, one hospital id out.
   const [resolved] = await db.execute<{ hospital_id: string | null }>(
     sql`select public.resolve_whatsapp_number(${inbound.phoneNumberId}) as hospital_id`,
   );
@@ -152,8 +261,6 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
   const phoneE164 = normalizeIndianPhone(inbound.fromPhone);
   if (!phoneE164) return;
 
-  // Replay protection. Meta redelivers on any non-2xx, and a redelivered
-  // booking would otherwise issue a second token.
   const claimed = await withTenant(hospitalId, async (tx) => {
     const rows = await tx
       .insert(idempotencyKeys)
@@ -175,12 +282,15 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
   const conversation = await loadConversation(hospitalId, phoneE164);
   const { state, context, knownLocale } = conversation;
 
+  const activeAppointment = await getActiveAppointment(hospitalId, phoneE164);
+
   const transition = nextBookingStep({
     state,
     context,
     message: { replyId: inbound.replyId, text: inbound.text },
     knownLocale,
     availableDoctorIds: doctors.map((doctor) => doctor.id),
+    activeAppointment,
   });
 
   const locale = transition.context.locale ?? knownLocale ?? 'en';
@@ -189,7 +299,6 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
 
   const now = new Date();
   const today = serviceDateIn('Asia/Kolkata', now);
-  // Yesterday's count must not bleed into today's budget.
   const promptsToday = conversation.promptsDate === today ? conversation.promptsToday : 0;
 
   const decision = shouldSendPrompt({
@@ -203,11 +312,6 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
   let promptsSent = promptsToday;
 
   const send = async (bodyText: string, rows: ListRow[], milestone: string) => {
-    /**
-     * The patient already has this exact menu in their thread and it is still
-     * tappable, so repeating it buys nothing and costs a message. Staying quiet
-     * is the better answer for them as well as for us.
-     */
     if (!decision.send) return;
     promptsSent += 1;
 
@@ -219,7 +323,6 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
       rows,
     });
 
-    // Recorded so conversation traffic counts towards messages-per-appointment.
     await withTenant(hospitalId, (tx) =>
       tx.insert(notificationOutbox).values({
         hospitalId,
@@ -236,6 +339,62 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
 
   const step = transition.step;
   switch (step.kind) {
+    case 'ask_active_choice': {
+      const baseUrl = process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000';
+      const appt = step.appointment;
+      const choicePrompt = ACTIVE_CHOICE_PROMPTS[locale];
+      await send(
+        choicePrompt.body(
+          appt.doctorName,
+          appt.tokenNumber,
+          `${baseUrl}/q/${appt.publicToken}`,
+        ),
+        [
+          {
+            id: 'active_appt:view',
+            title: fitListTitle(choicePrompt.viewTitle),
+            description: fitListTitle(choicePrompt.viewDesc),
+          },
+          {
+            id: 'active_appt:new_booking',
+            title: fitListTitle(choicePrompt.newTitle),
+            description: fitListTitle(choicePrompt.newDesc),
+          },
+        ],
+        'conversation:active_choice',
+      );
+      break;
+    }
+
+    case 'show_active_appointment': {
+      const baseUrl = process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000';
+      const appt = step.appointment;
+      const bodyText = SHOW_ACTIVE_PROMPTS[locale](
+        appt.doctorName,
+        appt.tokenNumber,
+        `${baseUrl}/q/${appt.publicToken}`,
+      );
+      const sent = await provider.sendText({
+        phoneNumberId: inbound.phoneNumberId,
+        toPhoneE164: phoneE164,
+        body: bodyText,
+      });
+
+      await withTenant(hospitalId, (tx) =>
+        tx.insert(notificationOutbox).values({
+          hospitalId,
+          milestone: 'conversation:show_active',
+          templateCode: 'conversation',
+          locale,
+          payload: { appointmentId: appt.id },
+          status: 'sent',
+          providerMessageId: sent.providerMessageId,
+          sentAt: new Date(),
+        }),
+      );
+      break;
+    }
+
     case 'ask_language':
       await send(
         LOCALES.map((code) => PROMPTS[code].language).join('\n'),
@@ -264,12 +423,6 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
       const doctor = doctors.find((d) => d.id === step.doctorId);
       if (!doctor) break;
 
-      /**
-       * The token link IS the confirmation, so booking costs one message here
-       * rather than a confirmation followed by a link. createWalkIn queues it
-       * through the outbox like any other, which keeps de-duplication and the
-       * circuit breaker on the same path.
-       */
       const created = await createWalkIn({
         hospitalId,
         branchId: doctor.branchId,
@@ -281,8 +434,6 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
           locale,
         },
         source: 'whatsapp',
-        // A patient who messaged this number first has given about as clear an
-        // affirmative consent to be replied to as exists.
         whatsappOptIn: true,
       });
 
@@ -297,11 +448,6 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
         ),
       });
 
-      /**
-       * createWalkIn queued the queue_link template for the worker. It has now
-       * been delivered by other means, so close the row out rather than leaving
-       * the worker to send the patient a second copy.
-       */
       await withTenant(hospitalId, (tx) =>
         tx
           .update(notificationOutbox)
@@ -356,8 +502,6 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
     phoneE164,
     state: transition.state,
     context: transition.context,
-    // Only record a prompt we actually sent, or the cooldown would restart on
-    // every suppressed message and quietly become permanent.
     lastPromptStep: decision.send ? transition.step.kind : conversation.lastPromptStep,
     lastPromptAt: decision.send ? now : conversation.lastPromptAt,
     promptsToday: promptsSent,
@@ -387,8 +531,6 @@ async function loadConversation(hospitalId: string, phoneE164: string) {
     return {
       state: (conversation?.state ?? 'idle') as ConversationState,
       context: (conversation?.context ?? {}) as BookingContext,
-      // Language remembered against the patient, not the conversation: this is
-      // what makes a returning patient's booking cost one message less.
       knownLocale: (patient?.locale ?? null) as Locale | null,
       lastPromptStep: conversation?.lastPromptStep ?? null,
       lastPromptAt: conversation?.lastPromptAt ?? null,
@@ -409,8 +551,6 @@ async function existingName(hospitalId: string, phoneE164: string): Promise<stri
     return patient?.name ?? null;
   });
 
-  // Reception fills in the real name at the desk; a placeholder is better than
-  // interrogating a patient over WhatsApp for data we do not strictly need.
   return found ?? 'WhatsApp patient';
 }
 
@@ -453,7 +593,6 @@ async function saveConversation(args: {
       }),
   );
 
-  // Persist the chosen language on the patient so it survives the conversation.
   if (args.context.locale) {
     await withTenant(args.hospitalId, (tx) =>
       tx

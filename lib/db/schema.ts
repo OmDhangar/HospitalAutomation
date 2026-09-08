@@ -56,6 +56,7 @@ export const whatsappNumberStatus = pgEnum('whatsapp_number_status', [
 export const conversationState = pgEnum('conversation_state', [
   'idle',
   'awaiting_language',
+  'awaiting_active_choice',
   'awaiting_doctor',
   'awaiting_slot',
 ]);

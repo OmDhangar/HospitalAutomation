@@ -3,6 +3,7 @@ import { isLocale, type Locale } from '@/lib/i18n/patient';
 export type ConversationState =
   | 'idle'
   | 'awaiting_language'
+  | 'awaiting_active_choice'
   | 'awaiting_doctor'
   | 'awaiting_slot';
 
@@ -12,12 +13,24 @@ export type BookingContext = {
   slot?: string;
 };
 
+export type ActiveAppointmentInfo = {
+  id: string;
+  tokenNumber: number;
+  doctorName: string;
+  doctorId: string;
+  status: string;
+  publicToken: string;
+  serviceDate: string;
+};
+
 /**
  * What the business sends next. Every variant except `none` costs one billable
  * WhatsApp message, so the shape of this union is the shape of the cost model.
  */
 export type BookingStep =
   | { kind: 'ask_language' }
+  | { kind: 'ask_active_choice'; appointment: ActiveAppointmentInfo }
+  | { kind: 'show_active_appointment'; appointment: ActiveAppointmentInfo }
   | { kind: 'ask_doctor' }
   | { kind: 'ask_slot'; doctorId: string }
   | { kind: 'confirm'; doctorId: string; slot: string }
@@ -46,6 +59,8 @@ const parseReply = (replyId: string | undefined) => {
   };
 };
 
+const KEYWORD_STATUS_REGEX = /^(status|link|queue|token|view|appointment|अपॉइंटमेंट|कतार|रांग)/i;
+
 /**
  * Drives a WhatsApp booking conversation.
  *
@@ -64,10 +79,49 @@ export function nextBookingStep(args: {
   knownLocale: Locale | null;
   /** Doctors the patient may pick from, used to reject stale or forged ids. */
   availableDoctorIds: string[];
+  /** Active unfulfilled appointment for this patient if one exists. */
+  activeAppointment?: ActiveAppointmentInfo | null;
 }): BookingTransition {
-  const { context, message, knownLocale, availableDoctorIds } = args;
+  const { context, message, knownLocale, availableDoctorIds, activeAppointment } = args;
   const reply = parseReply(message.replyId);
 
+  // 1. Explicit request to view active appointment (via interactive reply or keyword)
+  if (reply?.prefix === 'active_appt' && reply.value === 'view') {
+    if (activeAppointment) {
+      return {
+        state: 'idle',
+        context,
+        step: { kind: 'show_active_appointment', appointment: activeAppointment },
+      };
+    }
+  }
+
+  if (activeAppointment && message.text && KEYWORD_STATUS_REGEX.test(message.text.trim())) {
+    return {
+      state: 'idle',
+      context,
+      step: { kind: 'show_active_appointment', appointment: activeAppointment },
+    };
+  }
+
+  // 2. Explicit request to start new booking when active appointment exists
+  if (reply?.prefix === 'active_appt' && reply.value === 'new_booking') {
+    const locale = context.locale ?? knownLocale ?? undefined;
+    if (!locale) {
+      return {
+        state: 'awaiting_language',
+        context: { ...context, doctorId: undefined, slot: undefined },
+        step: { kind: 'ask_language' },
+      };
+    }
+    return {
+      state: 'awaiting_doctor',
+      context: { locale, doctorId: undefined, slot: undefined },
+      step: { kind: 'ask_doctor' },
+    };
+  }
+
+  // 3. Normal interactive reply handling for language, doctor, slot
   if (reply?.prefix === 'lang' && isLocale(reply.value)) {
     return {
       state: 'awaiting_doctor',
@@ -100,7 +154,16 @@ export function nextBookingStep(args: {
     };
   }
 
-  // Anything else — a greeting, free text, a stale button — restarts cleanly.
+  // 4. Free text / Greeting / Starting fresh when patient HAS an active unfulfilled appointment
+  if (activeAppointment && !reply) {
+    return {
+      state: 'awaiting_active_choice',
+      context,
+      step: { kind: 'ask_active_choice', appointment: activeAppointment },
+    };
+  }
+
+  // 5. Anything else — a greeting, free text, returning patient without active appointment
   const locale = context.locale ?? knownLocale ?? undefined;
   if (!locale) {
     return {
@@ -156,7 +219,12 @@ export function shouldSendPrompt(args: {
   promptsToday: number;
   now: Date;
 }): PromptDecision {
-  if (args.step === 'confirm' || args.step === 'redirect_web' || args.step === 'none') {
+  if (
+    args.step === 'confirm' ||
+    args.step === 'redirect_web' ||
+    args.step === 'show_active_appointment' ||
+    args.step === 'none'
+  ) {
     return { send: true };
   }
 
@@ -173,9 +241,7 @@ export function shouldSendPrompt(args: {
 }
 
 /**
- * Meta caps interactive list row titles at 24 characters. Devanagari reaches
- * that far sooner than Latin, so labels are truncated here rather than being
- * rejected by the API at send time.
+ * Meta caps interactive list row titles at 24 characters.
  */
 export const LIST_ROW_TITLE_LIMIT = 24;
 

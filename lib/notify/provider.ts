@@ -140,8 +140,8 @@ export class MetaCloudProvider implements NotificationProvider {
     return this.post(message.phoneNumberId, {
       to: message.toPhoneE164,
       type: 'text',
-      // The queue link is the point of the message; let it render a preview.
-      text: { preview_url: true, body: message.body },
+      // preview_url is set to false to prevent Meta's link scraper from timing out (10-15s delay)
+      text: { preview_url: false, body: message.body },
     });
   }
 
