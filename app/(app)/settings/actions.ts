@@ -36,6 +36,8 @@ export async function addDoctorAction(formData: FormData) {
   if (!name || !branchId) redirect('/settings?error=name');
 
   const minutes = Number(formData.get('defaultConsultMinutes') ?? 10);
+  const rawMode = String(formData.get('mode') ?? 'both');
+  const mode = rawMode === 'slot' ? 'slot' : rawMode === 'queue' ? 'queue' : 'both';
 
   await createDoctor({
     hospitalId: session.hospitalId,
@@ -44,6 +46,7 @@ export async function addDoctorAction(formData: FormData) {
     specialty: String(formData.get('specialty') ?? '').trim() || undefined,
     // Seeds the ETA until real consultations accumulate.
     defaultConsultMinutes: Number.isFinite(minutes) && minutes > 0 ? minutes : 10,
+    mode,
   });
 
   revalidatePath('/settings');

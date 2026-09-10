@@ -57,12 +57,14 @@ export const conversationState = pgEnum('conversation_state', [
   'idle',
   'awaiting_language',
   'awaiting_active_choice',
+  'awaiting_patient_choice',
+  'awaiting_patient_name_age',
   'awaiting_doctor',
   'awaiting_queue_choice',
   'awaiting_slot',
 ]);
 
-export const doctorScheduleMode = pgEnum('doctor_schedule_mode', ['queue', 'slot']);
+export const doctorScheduleMode = pgEnum('doctor_schedule_mode', ['queue', 'slot', 'both']);
 
 
 const id = () => uuid('id').primaryKey().defaultRandom();
@@ -301,6 +303,8 @@ export const doctorSchedules = pgTable(
     startTime: time('start_time').notNull(),
     endTime: time('end_time').notNull(),
     slotMinutes: smallint('slot_minutes').notNull().default(10),
+    breakStartTime: time('break_start_time'),
+    breakEndTime: time('break_end_time'),
     effectiveFrom: date('effective_from').notNull(),
     effectiveTo: date('effective_to'),
     createdAt: createdAt(),
@@ -329,6 +333,47 @@ export const doctorScheduleExceptions = pgTable(
   (t) => [uniqueIndex('doctor_schedule_exceptions_key').on(t.doctorId, t.serviceDate)],
 );
 
+/** Specific slot activation/deactivation overrides set by doctor/admin. */
+export const doctorSlotOverrides = pgTable(
+  'doctor_slot_overrides',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    doctorId: uuid('doctor_id')
+      .notNull()
+      .references(() => doctors.id, { onDelete: 'cascade' }),
+    serviceDate: date('service_date').notNull(),
+    slotTime: time('slot_time').notNull(),
+    isAvailable: boolean('is_available').notNull().default(true),
+    reason: text('reason'),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('doctor_slot_overrides_key').on(t.doctorId, t.serviceDate, t.slotTime)],
+);
+
+/** Emergency / temporary unavailability interval blocks. */
+export const doctorIntervalBlocks = pgTable(
+  'doctor_interval_blocks',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    doctorId: uuid('doctor_id')
+      .notNull()
+      .references(() => doctors.id, { onDelete: 'cascade' }),
+    serviceDate: date('service_date').notNull(),
+    startTime: time('start_time').notNull(),
+    endTime: time('end_time').notNull(),
+    reason: text('reason'),
+    active: boolean('active').notNull().default(true),
+    createdAt: createdAt(),
+  },
+  (t) => [index('doctor_interval_blocks_idx').on(t.doctorId, t.serviceDate)],
+);
+
 /* ----------------------------------------------------------------- patients */
 
 /**
@@ -348,12 +393,17 @@ export const patients = pgTable(
       .references(() => hospitals.id, { onDelete: 'cascade' }),
     phoneE164: text('phone_e164').notNull(),
     name: text('name').notNull(),
+    age: smallint('age'),
+    gender: text('gender'),
     locale: locale('locale'),
     whatsappOptInAt: timestamp('whatsapp_opt_in_at', { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [uniqueIndex('patients_hospital_phone_key').on(t.hospitalId, t.phoneE164)],
+  (t) => [
+    uniqueIndex('patients_hospital_phone_name_key').on(t.hospitalId, t.phoneE164, t.name),
+    index('patients_hospital_phone_idx').on(t.hospitalId, t.phoneE164),
+  ],
 );
 
 /* ------------------------------------------------------- appointments/queue */

@@ -4,6 +4,7 @@ import {
   fitListTitle,
   LIST_ROW_TITLE_LIMIT,
   nextBookingStep,
+  parsePatientNameAge,
   PROMPT_COOLDOWN_SECONDS,
   shouldSendPrompt,
   type BookingContext,
@@ -15,6 +16,7 @@ import {
 const DOCTORS: DoctorWithMode[] = [
   { id: 'doc-a', name: 'Dr Kulkarni', mode: 'queue' },
   { id: 'doc-b', name: 'Dr Mehta', mode: 'slot' },
+  { id: 'doc-c', name: 'Dr Joshi', mode: 'both' },
 ];
 
 /** Replays a whole conversation and reports what the business had to send. */
@@ -43,20 +45,35 @@ function runConversation(args: {
 }
 
 describe('booking conversation', () => {
-  it('branches to queue choices for queue-mode doctor', () => {
+  it('directly issues queue token for queue-mode doctor without intermediate questions', () => {
     const { sent, context } = runConversation({
       knownLocale: null,
       inbound: [
         { text: 'Hi' },
         { replyId: 'lang:mr' },
         { replyId: 'doc:doc-a' },
+      ],
+    });
+
+    expect(sent).toEqual(['ask_language', 'ask_doctor', 'confirm_queue']);
+    expect(context.locale).toBe('mr');
+    expect(context.doctorId).toBe('doc-a');
+  });
+
+  it('branches to queue vs slot choices for hybrid (both) mode doctor', () => {
+    const { sent, context } = runConversation({
+      knownLocale: null,
+      inbound: [
+        { text: 'Hi' },
+        { replyId: 'lang:mr' },
+        { replyId: 'doc:doc-c' },
         { replyId: 'queue_choice:join' },
       ],
     });
 
     expect(sent).toEqual(['ask_language', 'ask_doctor', 'ask_queue_branch', 'confirm_queue']);
     expect(context.locale).toBe('mr');
-    expect(context.doctorId).toBe('doc-a');
+    expect(context.doctorId).toBe('doc-c');
   });
 
   it('branches directly to slot selection for slot-mode doctor', () => {
@@ -67,32 +84,6 @@ describe('booking conversation', () => {
 
     expect(sent).toEqual(['ask_doctor', 'ask_slot', 'confirm_slot']);
     expect(sent).toHaveLength(3);
-  });
-
-  it('shows wait time without issuing a token when patient picks "See wait time first"', () => {
-    const result = nextBookingStep({
-      state: 'awaiting_queue_choice',
-      context: { locale: 'en', doctorId: 'doc-a' },
-      message: { replyId: 'queue_choice:wait' },
-      knownLocale: 'en',
-      availableDoctors: DOCTORS,
-    });
-
-    expect(result.step.kind).toBe('show_queue_wait_time');
-    expect(result.state).toBe('awaiting_queue_choice');
-  });
-
-  it('issues token when patient explicitly picks "Join queue now" after seeing wait time', () => {
-    const result = nextBookingStep({
-      state: 'awaiting_queue_choice',
-      context: { locale: 'en', doctorId: 'doc-a', queueChoice: 'wait_time' },
-      message: { replyId: 'queue_choice:join' },
-      knownLocale: 'en',
-      availableDoctors: DOCTORS,
-    });
-
-    expect(result.step.kind).toBe('confirm_queue');
-    expect(result.state).toBe('idle');
   });
 
   it('never sends more than four messages, however confused the patient gets', () => {
@@ -254,3 +245,94 @@ describe('prompt suppression', () => {
     ).toEqual({ send: true });
   });
 });
+
+describe('patient name and age parser', () => {
+  it('parses standard name and age', () => {
+    expect(parsePatientNameAge('Aarav Sharma 7')).toEqual({ name: 'Aarav Sharma', age: 7 });
+    expect(parsePatientNameAge('Priya Patil, 28')).toEqual({ name: 'Priya Patil', age: 28 });
+    expect(parsePatientNameAge('Ramesh Gupta 45 yrs')).toEqual({ name: 'Ramesh Gupta', age: 45 });
+    expect(parsePatientNameAge('Ananya (5)')).toEqual({ name: 'Ananya', age: 5 });
+  });
+
+  it('parses Devanagari numerals in Marathi and Hindi', () => {
+    expect(parsePatientNameAge('सुरेश पाटील ३२')).toEqual({ name: 'सुरेश पाटील', age: 32 });
+    expect(parsePatientNameAge('आरव शर्मा ७ वर्षे')).toEqual({ name: 'आरव शर्मा', age: 7 });
+  });
+
+  it('falls back cleanly to name when age is omitted', () => {
+    expect(parsePatientNameAge('Sneha Deshmukh')).toEqual({ name: 'Sneha Deshmukh' });
+    expect(parsePatientNameAge('')).toBeNull();
+  });
+});
+
+describe('multi-patient profile selection', () => {
+  const KNOWN_PATIENTS = [
+    { id: 'p-1', name: 'Ramesh Sharma', age: 35 },
+    { id: 'p-2', name: 'Aarav Sharma', age: 7 },
+  ];
+
+  it('prompts to select from existing patient profiles on returning phone', () => {
+    const res = nextBookingStep({
+      state: 'idle',
+      context: { locale: 'en' },
+      message: { text: 'Hi' },
+      knownLocale: 'en',
+      availableDoctors: DOCTORS,
+      knownPatients: KNOWN_PATIENTS,
+    });
+
+    expect(res.state).toBe('awaiting_patient_choice');
+    expect(res.step).toEqual({
+      kind: 'ask_patient_choice',
+      patients: KNOWN_PATIENTS,
+    });
+  });
+
+  it('selects existing profile and proceeds to doctor selection', () => {
+    const res = nextBookingStep({
+      state: 'awaiting_patient_choice',
+      context: { locale: 'en' },
+      message: { replyId: 'patient:p-2' },
+      knownLocale: 'en',
+      availableDoctors: DOCTORS,
+      knownPatients: KNOWN_PATIENTS,
+    });
+
+    expect(res.state).toBe('awaiting_doctor');
+    expect(res.context.patientId).toBe('p-2');
+    expect(res.context.patientName).toBe('Aarav Sharma');
+    expect(res.context.patientAge).toBe(7);
+    expect(res.step.kind).toBe('ask_doctor');
+  });
+
+  it('prompts for new patient details when Add New Patient is picked', () => {
+    const res = nextBookingStep({
+      state: 'awaiting_patient_choice',
+      context: { locale: 'en' },
+      message: { replyId: 'patient:new' },
+      knownLocale: 'en',
+      availableDoctors: DOCTORS,
+      knownPatients: KNOWN_PATIENTS,
+    });
+
+    expect(res.state).toBe('awaiting_patient_name_age');
+    expect(res.step.kind).toBe('ask_patient_name_age');
+  });
+
+  it('accepts new patient text input and moves to doctor selection', () => {
+    const res = nextBookingStep({
+      state: 'awaiting_patient_name_age',
+      context: { locale: 'en' },
+      message: { text: 'Meera Sharma 32' },
+      knownLocale: 'en',
+      availableDoctors: DOCTORS,
+      knownPatients: KNOWN_PATIENTS,
+    });
+
+    expect(res.state).toBe('awaiting_doctor');
+    expect(res.context.patientName).toBe('Meera Sharma');
+    expect(res.context.patientAge).toBe(32);
+    expect(res.step.kind).toBe('ask_doctor');
+  });
+});
+

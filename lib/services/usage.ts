@@ -1,5 +1,5 @@
 import { and, count, eq, gte, lt, sql } from 'drizzle-orm';
-import { withTenant } from '@/lib/db';
+import { withTenant, type Tx } from '@/lib/db';
 import { appointments, notificationOutbox } from '@/lib/db/schema';
 import {
   categoriseMessage,
@@ -53,6 +53,16 @@ const EMPTY_AXIS: UsageAxis = {
   level: 'normal',
 };
 
+const EMPTY_USAGE: HospitalUsage = {
+  subscription: null,
+  period: null,
+  today: EMPTY_AXIS,
+  appointments: EMPTY_AXIS,
+  messages: EMPTY_AXIS,
+  messagesPerAppointment: null,
+  expiry: { endsAt: null, bucket: null, daysRemaining: null },
+};
+
 export async function getHospitalUsage(args: {
   hospitalId: string;
   timezone: string;
@@ -61,67 +71,73 @@ export async function getHospitalUsage(args: {
   const now = args.now ?? new Date();
   const subscription = await getCurrentSubscription(args.hospitalId);
 
-  // A hospital that has never been given a plan gets zeroes and a null
-  // subscription, not fabricated allowances.
   if (!subscription) {
-    return {
-      subscription: null,
-      period: null,
-      today: EMPTY_AXIS,
-      appointments: EMPTY_AXIS,
-      messages: EMPTY_AXIS,
-      messagesPerAppointment: null,
-      expiry: { endsAt: null, bucket: null, daysRemaining: null },
-    };
+    return EMPTY_USAGE;
   }
 
+  return withTenant(args.hospitalId, (tx) =>
+    getHospitalUsageInTx(tx, { timezone: args.timezone, now, subscription }),
+  );
+}
+
+/**
+ * Runs inside an already-open transaction. The subscription must be
+ * pre-fetched by the caller so we do not open a second withTenant.
+ *
+ * All three count queries run in parallel — they read different tables
+ * and do not depend on each other.
+ */
+export async function getHospitalUsageInTx(
+  tx: Tx,
+  args: {
+    timezone: string;
+    now: Date;
+    subscription: Subscription;
+  },
+): Promise<HospitalUsage> {
+  const { subscription, now } = args;
   const period = billingPeriod({ startsAt: subscription.startsAt, now });
   const today = serviceDateIn(args.timezone, now);
 
-  const { completedToday, completedInPeriod, messagesInPeriod } = await withTenant(
-    args.hospitalId,
-    async (tx) => {
-      const [todayRow] = await tx
-        .select({ value: count() })
-        .from(appointments)
-        .where(
-          and(
-            eq(appointments.serviceDate, today),
-            eq(appointments.status, 'COMPLETED'),
-          ),
-        );
+  // All three counts are independent — run in parallel
+  const [todayRow, periodRow, messageRow] = await Promise.all([
+    tx
+      .select({ value: count() })
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.serviceDate, today),
+          eq(appointments.status, 'COMPLETED'),
+        ),
+      )
+      .then(([r]) => r),
+    tx
+      .select({ value: count() })
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.status, 'COMPLETED'),
+          gte(appointments.completedAt, period.start),
+          lt(appointments.completedAt, period.end),
+        ),
+      )
+      .then(([r]) => r),
+    tx
+      .select({ value: count() })
+      .from(notificationOutbox)
+      .where(
+        and(
+          eq(notificationOutbox.status, 'sent'),
+          gte(notificationOutbox.sentAt, period.start),
+          lt(notificationOutbox.sentAt, period.end),
+        ),
+      )
+      .then(([r]) => r),
+  ]);
 
-      const [periodRow] = await tx
-        .select({ value: count() })
-        .from(appointments)
-        .where(
-          and(
-            eq(appointments.status, 'COMPLETED'),
-            gte(appointments.completedAt, period.start),
-            lt(appointments.completedAt, period.end),
-          ),
-        );
-
-      const [messageRow] = await tx
-        .select({ value: count() })
-        .from(notificationOutbox)
-        .where(
-          and(
-            // Only what actually reached somebody. Meta bills on delivery, so a
-            // failed or suppressed message must not consume the allowance.
-            eq(notificationOutbox.status, 'sent'),
-            gte(notificationOutbox.sentAt, period.start),
-            lt(notificationOutbox.sentAt, period.end),
-          ),
-        );
-
-      return {
-        completedToday: Number(todayRow?.value ?? 0),
-        completedInPeriod: Number(periodRow?.value ?? 0),
-        messagesInPeriod: Number(messageRow?.value ?? 0),
-      };
-    },
-  );
+  const completedToday = Number(todayRow?.value ?? 0);
+  const completedInPeriod = Number(periodRow?.value ?? 0);
+  const messagesInPeriod = Number(messageRow?.value ?? 0);
 
   return {
     subscription,

@@ -1,5 +1,7 @@
 import Link from 'next/link';
 import { Suspense } from 'react';
+import { ToastProvider } from '@/components/toast';
+import { MobileNav, type NavItem } from '@/components/mobile-nav';
 import { requireSession } from '@/lib/auth/session';
 import { signOutAction } from './dashboard/actions';
 
@@ -11,6 +13,23 @@ import { signOutAction } from './dashboard/actions';
  */
 async function AppHeader() {
   const session = await requireSession();
+
+  const navItems: NavItem[] = [
+    { label: 'Queue', href: '/dashboard' },
+    { label: 'Reports', href: '/reports' },
+  ];
+
+  if (session.role === 'owner') {
+    navItems.push(
+      { label: 'Subscription', href: '/subscription' },
+      { label: 'Activity', href: '/audit' },
+      { label: 'Settings', href: '/settings' },
+    );
+  }
+
+  if (session.isPlatformAdmin) {
+    navItems.push({ label: 'Platform', href: '/admin' });
+  }
 
   return (
     <header className="sticky top-0 z-40 border-b border-ink-200 bg-white">
@@ -24,17 +43,13 @@ async function AppHeader() {
           </span>
         </Link>
 
+        {/* Desktop Nav */}
         <nav className="ml-4 hidden items-center gap-1 sm:flex">
-          <NavLink href="/dashboard">Queue</NavLink>
-          <NavLink href="/reports">Reports</NavLink>
-          {session.role === 'owner' ? (
-            <>
-              <NavLink href="/subscription">Subscription</NavLink>
-              <NavLink href="/audit">Activity</NavLink>
-              <NavLink href="/settings">Settings</NavLink>
-            </>
-          ) : null}
-          {session.isPlatformAdmin ? <NavLink href="/admin">Platform</NavLink> : null}
+          {navItems.map((item) => (
+            <NavLink key={item.href} href={item.href}>
+              {item.label}
+            </NavLink>
+          ))}
         </nav>
 
         <div className="ml-auto flex items-center gap-3">
@@ -46,7 +61,7 @@ async function AppHeader() {
               {session.role}
             </p>
           </div>
-          <form action={signOutAction}>
+          <form action={signOutAction} className="hidden sm:block">
             <button
               type="submit"
               className="rounded-lg px-3 py-1.5 text-sm font-medium text-ink-600 transition-colors hover:bg-ink-100"
@@ -54,6 +69,15 @@ async function AppHeader() {
               Sign out
             </button>
           </form>
+
+          {/* Mobile Hamburger Navigation */}
+          <MobileNav
+            items={navItems}
+            userName={session.name}
+            userRole={session.role}
+            hospitalName={session.hospitalName}
+            signOutAction={signOutAction}
+          />
         </div>
       </div>
     </header>
@@ -92,13 +116,15 @@ function HeaderSkeleton() {
 
 export default function AppLayout({ children }: LayoutProps<'/'>) {
   return (
-    <div className="min-h-dvh bg-ink-100">
-      <Suspense fallback={<HeaderSkeleton />}>
-        <AppHeader />
-      </Suspense>
+    <ToastProvider>
+      <div className="min-h-dvh bg-ink-100">
+        <Suspense fallback={<HeaderSkeleton />}>
+          <AppHeader />
+        </Suspense>
 
-      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6">{children}</main>
-    </div>
+        <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6">{children}</main>
+      </div>
+    </ToastProvider>
   );
 }
 

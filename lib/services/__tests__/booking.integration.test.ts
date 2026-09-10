@@ -1,3 +1,4 @@
+
 import { eq } from 'drizzle-orm';
 import postgres from 'postgres';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
@@ -52,7 +53,7 @@ class SpyProvider implements NotificationProvider {
     phoneNumberId: string;
     messageId: string;
     toPhoneE164: string;
-  }): Promise<void> {}
+  }): Promise<void> { }
 
   get totalSent() {
     return this.templates.length + this.lists.length + this.buttons.length + this.texts.length;
@@ -98,6 +99,10 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
     await admin`
       insert into doctors (id, hospital_id, branch_id, name)
       values (${doctorId}, ${hospitalId}, ${branchId}, 'Dr Kulkarni')
+    `;
+    await admin`
+      insert into doctor_schedules (hospital_id, doctor_id, weekday, mode, start_time, end_time, effective_from)
+      values (${hospitalId}, ${doctorId}, extract(dow from current_date)::smallint, 'both', '09:00', '17:00', current_date)
     `;
   });
 

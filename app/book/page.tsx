@@ -10,12 +10,13 @@ export const dynamic = 'force-dynamic';
 export default async function BookSlotPage({
   searchParams,
 }: {
-  searchParams: Promise<{ doctor?: string; hospital?: string; phone?: string; locale?: string }>;
+  searchParams: Promise<{ doctor?: string; hospital?: string; phone?: string; locale?: string; date?: string }>;
 }) {
   const query = await searchParams;
   const doctorId = query.doctor;
   const hospitalId = query.hospital;
   const phone = query.phone ?? '';
+  const date = query.date;
   const locale: Locale = isLocale(query.locale) ? query.locale : 'en';
 
   if (!doctorId || !hospitalId) {
@@ -42,7 +43,7 @@ export default async function BookSlotPage({
     );
   }
 
-  const details = await getDoctorBookingDetails({ hospitalId, doctorId });
+  const details = await getDoctorBookingDetails({ hospitalId, doctorId, serviceDate: date });
 
   if (!details) {
     return (

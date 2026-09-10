@@ -48,6 +48,7 @@ export type DoctorBookingDetails = {
 export async function getDoctorBookingDetails(args: {
   hospitalId: string;
   doctorId: string;
+  serviceDate?: string;
 }): Promise<DoctorBookingDetails | null> {
   return withTenant(args.hospitalId, async (tx) => {
     const [row] = await tx
@@ -72,76 +73,28 @@ export async function getDoctorBookingDetails(args: {
 
     const timezone = row.timezone ?? 'Asia/Kolkata';
     const now = new Date();
-    const serviceDate = serviceDateIn(timezone, now);
+    const serviceDate = args.serviceDate || serviceDateIn(timezone, now);
 
-    // Existing scheduled appointments for this doctor today
-    const existing = await tx
-      .select({
-        scheduledSlotAt: appointments.scheduledSlotAt,
-      })
-      .from(appointments)
-      .where(
-        and(
-          eq(appointments.doctorId, args.doctorId),
-          eq(appointments.serviceDate, serviceDate),
-          sql`${appointments.scheduledSlotAt} is not null`,
-          sql`${appointments.status} not in ('CANCELLED', 'NO_SHOW')`,
-        ),
-      );
+    // Fetch dynamically calculated slots from scheduling service
+    const { getDoctorSlotsForDate } = await import('./scheduling');
+    const scheduleResult = await getDoctorSlotsForDate({
+      hospitalId: args.hospitalId,
+      doctorId: args.doctorId,
+      serviceDate,
+    });
 
-    const bookedTimes = new Set(
-      existing
-        .map((e) => e.scheduledSlotAt?.toISOString())
-        .filter((iso): iso is string => Boolean(iso)),
-    );
-
-    // Generate standard slots for today: morning session (10:00 to 13:00) and evening session (16:00 to 20:00)
-    // using the doctor's default consultation interval (or 20 mins)
-    const slotInterval = Math.max(row.doctorConsultMinutes || 15, 15);
-    const slots: TimeSlot[] = [];
-
-    const slotHours = [
-      { startH: 10, startM: 0, endH: 13, endM: 0 },
-      { startH: 16, startM: 0, endH: 20, endM: 0 },
-    ];
-
-    const todayDateParts = serviceDate.split('-').map(Number); // [YYYY, MM, DD]
-
-    for (const session of slotHours) {
-      let curMinutes = session.startH * 60 + session.startM;
-      const endMinutes = session.endH * 60 + session.endM;
-
-      while (curMinutes < endMinutes) {
-        const h = Math.floor(curMinutes / 60);
-        const m = curMinutes % 60;
-
-        // Construct slot date in UTC based on Kolkata (+05:30) offset
-        const slotDate = new Date(
-          Date.UTC(todayDateParts[0], todayDateParts[1] - 1, todayDateParts[2], h - 5, m - 30),
-        );
-
-        const iso = slotDate.toISOString();
-        const timeStr = formatTimeIn(timezone, slotDate);
-        // Only mark available if it's at least 15 minutes in the future and not already booked
-        const isPast = slotDate.getTime() < now.getTime() + 10 * 60 * 1000;
-        const available = !isPast && !bookedTimes.has(iso);
-
-        slots.push({
-          timeStr,
-          datetimeIso: iso,
-          available,
-        });
-
-        curMinutes += slotInterval;
-      }
-    }
+    const slots: TimeSlot[] = scheduleResult.slots.map((s) => ({
+      timeStr: s.timeStr,
+      datetimeIso: s.datetimeIso,
+      available: s.available,
+    }));
 
     return {
       doctor: {
         id: row.doctorId,
         name: row.doctorName,
         specialty: row.doctorSpecialty,
-        defaultConsultMinutes: row.doctorConsultMinutes,
+        defaultConsultMinutes: scheduleResult.config.slotMinutes || row.doctorConsultMinutes,
       },
       branch: {
         id: row.branchId,
@@ -166,6 +119,8 @@ export async function bookScheduledSlot(args: {
   hospitalId: string;
   doctorId: string;
   patientName: string;
+  patientAge?: number | null;
+  gender?: string | null;
   phoneE164: string;
   slotDatetimeIso: string;
   locale?: Locale;
@@ -212,13 +167,17 @@ export async function bookScheduledSlot(args: {
         hospitalId: args.hospitalId,
         phoneE164: args.phoneE164,
         name: args.patientName.trim(),
+        age: args.patientAge ?? null,
+        gender: args.gender ?? null,
         locale: args.locale ?? 'en',
         whatsappOptInAt: now,
       })
       .onConflictDoUpdate({
-        target: [patients.hospitalId, patients.phoneE164],
+        target: [patients.hospitalId, patients.phoneE164, patients.name],
         set: {
           name: args.patientName.trim(),
+          age: args.patientAge !== undefined ? args.patientAge : patients.age,
+          gender: args.gender !== undefined ? args.gender : patients.gender,
           updatedAt: now,
           whatsappOptInAt: sql`coalesce(${patients.whatsappOptInAt}, excluded.whatsapp_opt_in_at)`,
         },
@@ -245,17 +204,19 @@ export async function bookScheduledSlot(args: {
         .set({ lastTokenNumber: tokenNumber, updatedAt: now })
         .where(eq(doctorDayStates.id, existingDay.id));
     } else {
-      await tx.insert(doctorDayStates).values({
-        hospitalId: args.hospitalId,
-        doctorId: doctor.id,
-        serviceDate,
-        lastTokenNumber: tokenNumber,
-        scheduledStartAt: slotDate,
-      });
+      await tx
+        .insert(doctorDayStates)
+        .values({
+          hospitalId: args.hospitalId,
+          doctorId: doctor.id,
+          serviceDate,
+          lastTokenNumber: tokenNumber,
+        })
+        .onConflictDoNothing();
     }
 
     const publicToken = generatePublicToken();
-    const publicTokenExpiresAt = new Date(slotDate.getTime() + 18 * 60 * 60 * 1000);
+    const publicTokenExpiresAt = new Date(slotDate.getTime() + 24 * 60 * 60 * 1000);
 
     const [appointment] = await tx
       .insert(appointments)
@@ -328,6 +289,7 @@ export async function bookScheduledSlot(args: {
       slotTimeFormatted,
       doctorName: doctor.name,
       patientName: patient.name,
+      patientAge: patient.age,
     };
   });
 }

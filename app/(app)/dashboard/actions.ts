@@ -14,12 +14,6 @@ import {
   setPriority,
 } from '@/lib/services/queue';
 
-/**
- * Every action re-reads the session server-side and re-checks the role. The
- * form fields say which doctor and appointment, but never which hospital —
- * that comes from the session, so a crafted request cannot reach another
- * tenant's queue.
- */
 async function authorize() {
   const session = await requireSession();
   if (!canMutateQueue(session.role)) throw new Error('Not allowed to change the queue');
@@ -38,6 +32,8 @@ export async function addWalkInAction(formData: FormData) {
   const branchId = String(formData.get('branchId') ?? '');
   const name = String(formData.get('name') ?? '').trim();
   const rawPhone = String(formData.get('phone') ?? '');
+  const rawAge = formData.get('age');
+  const age = rawAge ? parseInt(String(rawAge), 10) : undefined;
 
   const phoneE164 = normalizeIndianPhone(rawPhone);
   if (!name || !phoneE164) {
@@ -49,13 +45,143 @@ export async function addWalkInAction(formData: FormData) {
     branchId,
     doctorId,
     timezone: session.timezone,
-    patient: { phoneE164, name },
+    patient: {
+      phoneE164,
+      name,
+      age: !isNaN(age as number) ? age : null,
+    },
     actorUserId: session.userId,
     source: 'walk_in',
     whatsappOptIn: formData.get('whatsappOptIn') === 'yes',
   });
 
   backToDoctor(doctorId);
+}
+
+export async function addWalkInDynamic(args: {
+  doctorId: string;
+  branchId: string;
+  name: string;
+  age?: number | null;
+  phone: string;
+  whatsappOptIn: boolean;
+}): Promise<{ ok: boolean; tokenNumber?: number; error?: string }> {
+  try {
+    const session = await authorize();
+    const name = args.name.trim();
+    const phoneE164 = normalizeIndianPhone(args.phone);
+
+    if (!name) {
+      return { ok: false, error: 'Patient name is required' };
+    }
+    if (!phoneE164) {
+      return { ok: false, error: 'Enter a valid 10-digit mobile number' };
+    }
+
+    const appt = await createWalkIn({
+      hospitalId: session.hospitalId,
+      branchId: args.branchId,
+      doctorId: args.doctorId,
+      timezone: session.timezone,
+      patient: {
+        phoneE164,
+        name,
+        age: args.age,
+      },
+      actorUserId: session.userId,
+      source: 'walk_in',
+      whatsappOptIn: args.whatsappOptIn,
+    });
+
+    revalidatePath('/dashboard');
+    return { ok: true, tokenNumber: appt.tokenNumber };
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to add walk-in' };
+  }
+}
+
+export async function advanceQueueDynamic(args: {
+  doctorId: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const session = await authorize();
+    await advanceQueue({
+      hospitalId: session.hospitalId,
+      doctorId: args.doctorId,
+      timezone: session.timezone,
+      actorUserId: session.userId,
+    });
+
+    revalidatePath('/dashboard');
+    return { ok: true };
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to advance queue' };
+  }
+}
+
+export async function queueActionDynamic(args: {
+  doctorId: string;
+  appointmentId: string;
+  action: QueueAction;
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const session = await authorize();
+    await applyQueueAction({
+      hospitalId: session.hospitalId,
+      appointmentId: args.appointmentId,
+      action: args.action,
+      timezone: session.timezone,
+      actorUserId: session.userId,
+    });
+
+    revalidatePath('/dashboard');
+    return { ok: true };
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to perform queue action' };
+  }
+}
+
+export async function setPriorityDynamic(args: {
+  doctorId: string;
+  appointmentId: string;
+  priority: number;
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const session = await authorize();
+    await setPriority({
+      hospitalId: session.hospitalId,
+      appointmentId: args.appointmentId,
+      priority: args.priority,
+      actorUserId: session.userId,
+    });
+
+    revalidatePath('/dashboard');
+    return { ok: true };
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to set priority' };
+  }
+}
+
+export async function togglePauseDynamic(args: {
+  doctorId: string;
+  paused: boolean;
+  reason?: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const session = await authorize();
+    await setDoctorPaused({
+      hospitalId: session.hospitalId,
+      doctorId: args.doctorId,
+      timezone: session.timezone,
+      paused: args.paused,
+      reason: args.reason || null,
+    });
+
+    revalidatePath('/dashboard');
+    return { ok: true };
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to toggle pause status' };
+  }
 }
 
 export async function advanceQueueAction(formData: FormData) {

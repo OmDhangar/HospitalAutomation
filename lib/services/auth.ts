@@ -1,5 +1,5 @@
 import { and, eq, gt, sql } from 'drizzle-orm';
-import { getDb, withTenant } from '@/lib/db';
+import { getDb, withTenant, type Tx } from '@/lib/db';
 import { auditLogs, branches, hospitals, sessions, staffMemberships, users } from '@/lib/db/schema';
 import { hashPassword, verifyPassword } from '@/lib/security/password';
 import { generateSessionToken, hashToken } from '@/lib/security/tokens';
@@ -117,8 +117,21 @@ export async function login(email: string, password: string): Promise<string | n
   return token;
 }
 
+// In-memory session cache (30s TTL) — avoids a DB roundtrip on every
+// auto-refresh cycle. Cleared on logout.
+type SessionCacheEntry = { session: Session; expiresAt: number };
+const sessionCache = new Map<string, SessionCacheEntry>();
+const SESSION_CACHE_TTL = 30_000;
+
 export async function resolveSession(token: string | undefined): Promise<Session | null> {
   if (!token) return null;
+
+  const tokenH = hashToken(token);
+
+  const cached = sessionCache.get(tokenH);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.session;
+  }
 
   const db = getDb();
 
@@ -134,7 +147,7 @@ export async function resolveSession(token: string | undefined): Promise<Session
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
-    .where(and(eq(sessions.tokenHash, hashToken(token)), gt(sessions.expiresAt, new Date())));
+    .where(and(eq(sessions.tokenHash, tokenH), gt(sessions.expiresAt, new Date())));
 
   if (!row || !row.active) return null;
 
@@ -158,7 +171,7 @@ export async function resolveSession(token: string | undefined): Promise<Session
   // Membership revoked since the session was issued.
   if (!context) return null;
 
-  return {
+  const session: Session = {
     userId: row.userId,
     name: row.name,
     email: row.email,
@@ -169,11 +182,16 @@ export async function resolveSession(token: string | undefined): Promise<Session
     role: context.role,
     branchId: context.branchId,
   };
+
+  sessionCache.set(tokenH, { session, expiresAt: Date.now() + SESSION_CACHE_TTL });
+  return session;
 }
 
 export async function logout(token: string | undefined) {
   if (!token) return;
-  await getDb().delete(sessions).where(eq(sessions.tokenHash, hashToken(token)));
+  const tokenH = hashToken(token);
+  sessionCache.delete(tokenH);
+  await getDb().delete(sessions).where(eq(sessions.tokenHash, tokenH));
 }
 
 /** Reception and owners may move the queue; doctors may move their own. */
@@ -184,10 +202,12 @@ export const canConfigureHospital = (role: StaffRole): boolean => role === 'owne
 
 /** Branches are tenant data, so this read goes through the RLS-scoped path. */
 export async function listBranches(hospitalId: string) {
-  return withTenant(hospitalId, (tx) =>
-    tx
-      .select({ id: branches.id, name: branches.name })
-      .from(branches)
-      .where(eq(branches.active, true)),
-  );
+  return withTenant(hospitalId, (tx) => listBranchesInTx(tx));
+}
+
+export async function listBranchesInTx(tx: Tx) {
+  return tx
+    .select({ id: branches.id, name: branches.name })
+    .from(branches)
+    .where(eq(branches.active, true));
 }

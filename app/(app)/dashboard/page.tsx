@@ -6,8 +6,6 @@ import {
   Card,
   CardHeader,
   EmptyState,
-  Field,
-  Input,
   StatusPill,
   Stat,
   cn,
@@ -15,18 +13,16 @@ import {
 import { SubscriptionCard, UsageNotice } from '@/components/subscription';
 import { requireSession } from '@/lib/auth/session';
 import { formatTimeIn, minutesBetween } from '@/lib/domain/time';
-import { listBranches } from '@/lib/services/auth';
-import { listDoctors } from '@/lib/services/hospital';
-import { getQueueSnapshot, type QueueRow } from '@/lib/services/queue';
-import { listActiveTiers } from '@/lib/services/subscriptions';
-import { getHospitalUsage } from '@/lib/services/usage';
+import { loadDashboardData } from '@/lib/services/dashboard-loader';
+import type { QueueRow } from '@/lib/services/queue';
 import {
-  addWalkInAction,
-  advanceQueueAction,
-  prioritiseAction,
-  queueActionForm,
-  togglePauseAction,
-} from './actions';
+  AddWalkInForm,
+  CallNextButton,
+  DoctorTabs,
+  PriorityButton,
+  QueueActionButton,
+  TogglePauseButton,
+} from './dashboard-queue-actions';
 
 export const metadata = { title: 'Queue · OPD Queue' };
 
@@ -42,14 +38,22 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
   const params = await searchParams;
   const now = new Date();
 
-  const branches = await listBranches(session.hospitalId);
-  const branchId =
-    (typeof params.branch === 'string' ? params.branch : null) ??
-    session.branchId ??
-    branches[0]?.id ??
-    null;
+  const isOwner = session.role === 'owner';
 
-  const doctors = await listDoctors({ hospitalId: session.hospitalId, branchId });
+  // Single consolidated loader — one transaction, parallel queries
+  const { branches, doctors, snapshot, usage, tiers } = await loadDashboardData({
+    hospitalId: session.hospitalId,
+    branchId:
+      (typeof params.branch === 'string' ? params.branch : null) ??
+      session.branchId ??
+      null,
+    selectedDoctorId: typeof params.doctor === 'string' ? params.doctor : null,
+    timezone: session.timezone,
+    isOwner,
+    now,
+  });
+
+  const branchId = branches[0]?.id ?? null;
   const selectedId =
     (typeof params.doctor === 'string' ? params.doctor : null) ?? doctors[0]?.id ?? null;
 
@@ -69,23 +73,6 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
     );
   }
 
-  const isOwner = session.role === 'owner';
-
-  const [snapshot, usage, tiers] = await Promise.all([
-    selectedId
-      ? getQueueSnapshot({
-          hospitalId: session.hospitalId,
-          doctorId: selectedId,
-          timezone: session.timezone,
-          now,
-        })
-      : null,
-    isOwner
-      ? getHospitalUsage({ hospitalId: session.hospitalId, timezone: session.timezone })
-      : null,
-    isOwner ? listActiveTiers() : Promise.resolve([]),
-  ]);
-
   const tierName = usage?.subscription
     ? (tiers.find((t) => t.code === usage.subscription!.planTierCode)?.name ?? null)
     : null;
@@ -100,34 +87,8 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
     <>
       <AutoRefresh seconds={10} />
 
-      {/* Doctor selector. Counts sit in the tab so reception can triage at a
-          glance without opening each queue in turn. */}
-      <div className="mb-5 flex flex-wrap gap-2">
-        {doctors.map((doctor) => (
-          <Link
-            key={doctor.id}
-            href={`/dashboard?doctor=${doctor.id}`}
-            className={cn(
-              'rounded-lg px-4 py-2.5 text-sm font-medium transition-colors',
-              doctor.id === selectedId
-                ? 'bg-brand-600 text-white shadow-sm'
-                : 'bg-white text-ink-700 ring-1 ring-inset ring-ink-200 hover:bg-ink-50',
-            )}
-          >
-            {doctor.name}
-            {doctor.specialty ? (
-              <span
-                className={cn(
-                  'ml-2 text-xs',
-                  doctor.id === selectedId ? 'text-brand-100' : 'text-ink-500',
-                )}
-              >
-                {doctor.specialty}
-              </span>
-            ) : null}
-          </Link>
-        ))}
-      </div>
+      {/* Doctor selector tabs. Instant client-side tab feedback */}
+      <DoctorTabs doctors={doctors} selectedId={selectedId!} />
 
       {params.error === 'phone' ? (
         <div className="mb-4">
@@ -185,17 +146,10 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
               title="Now serving"
               hint={snapshot?.doctorName}
               action={
-                <form action={togglePauseAction}>
-                  <input type="hidden" name="doctorId" value={selectedId ?? ''} />
-                  <input
-                    type="hidden"
-                    name="paused"
-                    value={String(!(snapshot?.paused ?? false))}
-                  />
-                  <Button type="submit" size="sm">
-                    {snapshot?.paused ? 'Resume queue' : 'Pause queue'}
-                  </Button>
-                </form>
+                <TogglePauseButton
+                  doctorId={selectedId ?? ''}
+                  paused={snapshot?.paused ?? false}
+                />
               }
             />
 
@@ -216,6 +170,11 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-2xl font-semibold text-ink-900">
                       {serving.patientName}
+                      {serving.patientAge ? (
+                        <span className="ml-2 text-lg font-normal text-ink-500">
+                          ({serving.patientAge} yrs)
+                        </span>
+                      ) : null}
                     </p>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <StatusPill status={serving.status} />
@@ -246,19 +205,12 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
               )}
             </div>
 
-            {/* One primary action. Everything else is deliberately smaller. */}
+            {/* One primary action. Interactive SPA controls */}
             <div className="flex flex-wrap items-center gap-3 border-t border-ink-200 bg-ink-50 px-6 py-4">
-              <form action={advanceQueueAction}>
-                <input type="hidden" name="doctorId" value={selectedId ?? ''} />
-                <Button
-                  type="submit"
-                  variant="primary"
-                  size="xl"
-                  disabled={waiting.length === 0 && !serving}
-                >
-                  Call next patient
-                </Button>
-              </form>
+              <CallNextButton
+                doctorId={selectedId ?? ''}
+                disabled={waiting.length === 0 && !serving}
+              />
 
               {serving ? (
                 <>
@@ -312,41 +264,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
         <div className="space-y-5">
           <Card>
             <CardHeader title="Add walk-in" hint="Issues a token and sends the queue link" />
-            <form action={addWalkInAction} className="space-y-4 p-5">
-              <input type="hidden" name="doctorId" value={selectedId ?? ''} />
-              <input type="hidden" name="branchId" value={branchId} />
-              <Field label="Patient name">
-                <Input name="name" required placeholder="Ramesh Patil" autoComplete="off" />
-              </Field>
-              <Field label="Mobile number" hint="10 digits. The queue link goes here.">
-                <Input
-                  name="phone"
-                  required
-                  inputMode="numeric"
-                  placeholder="98765 43210"
-                  autoComplete="off"
-                />
-              </Field>
-              <label className="flex items-start gap-2.5 text-sm text-ink-700">
-                <input
-                  type="checkbox"
-                  name="whatsappOptIn"
-                  value="yes"
-                  defaultChecked
-                  className="mt-0.5 size-4 rounded border-ink-300 text-brand-600 focus:ring-brand-600"
-                />
-                <span>
-                  Patient agreed to WhatsApp updates
-                  <span className="mt-0.5 block text-xs text-ink-500">
-                    Untick if they said no. They still get a token and the printed
-                    QR code.
-                  </span>
-                </span>
-              </label>
-              <Button type="submit" variant="primary" size="lg" className="w-full">
-                Add to queue
-              </Button>
-            </form>
+            <AddWalkInForm doctorId={selectedId ?? ''} branchId={branchId} />
           </Card>
 
           <Card>
@@ -388,6 +306,11 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium text-ink-800">
                         {row.patientName}
+                        {row.patientAge ? (
+                          <span className="ml-1.5 text-xs text-ink-500 font-normal">
+                            ({row.patientAge}y)
+                          </span>
+                        ) : null}
                       </p>
                       <StatusPill status={row.status} />
                     </div>
@@ -438,7 +361,14 @@ function WaitingRow({
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <p className="truncate text-sm font-medium text-ink-900">{row.patientName}</p>
+          <p className="truncate text-sm font-medium text-ink-900">
+            {row.patientName}
+            {row.patientAge ? (
+              <span className="ml-1.5 text-xs text-ink-500 font-normal">
+                ({row.patientAge}y)
+              </span>
+            ) : null}
+          </p>
           {row.scheduledSlotAt ? (
             <span className="inline-flex items-center gap-1 rounded bg-brand-100 px-1.5 py-0.5 text-[10px] font-semibold text-brand-900">
               🕒 {formatTimeIn(timezone, row.scheduledSlotAt)}
@@ -453,14 +383,7 @@ function WaitingRow({
 
       <div className="flex shrink-0 items-center gap-1.5">
         {row.priority === 0 ? (
-          <form action={prioritiseAction}>
-            <input type="hidden" name="doctorId" value={doctorId} />
-            <input type="hidden" name="appointmentId" value={row.appointmentId} />
-            <input type="hidden" name="priority" value="10" />
-            <Button type="submit" size="sm" title="Move to the front of the waiting line">
-              Priority
-            </Button>
-          </form>
+          <PriorityButton doctorId={doctorId} appointmentId={row.appointmentId} />
         ) : null}
         <QueueActionButton
           doctorId={doctorId}
@@ -479,32 +402,5 @@ function WaitingRow({
         />
       </div>
     </li>
-  );
-}
-
-function QueueActionButton({
-  doctorId,
-  appointmentId,
-  action,
-  label,
-  size = 'lg',
-  variant = 'secondary',
-}: {
-  doctorId: string;
-  appointmentId: string;
-  action: string;
-  label: string;
-  size?: 'sm' | 'md' | 'lg' | 'xl';
-  variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
-}) {
-  return (
-    <form action={queueActionForm}>
-      <input type="hidden" name="doctorId" value={doctorId} />
-      <input type="hidden" name="appointmentId" value={appointmentId} />
-      <input type="hidden" name="action" value={action} />
-      <Button type="submit" size={size} variant={variant}>
-        {label}
-      </Button>
-    </form>
   );
 }

@@ -31,6 +31,7 @@ export type QueueRow = {
   status: AppointmentStatus;
   priority: number;
   patientName: string;
+  patientAge?: number | null;
   patientId: string;
   enqueuedAt: Date | null;
   calledAt: Date | null;
@@ -122,6 +123,7 @@ async function loadDayAppointments(
       createdAt: appointments.createdAt,
       patientId: appointments.patientId,
       patientName: patients.name,
+      patientAge: patients.age,
       whatsappOptInAt: patients.whatsappOptInAt,
       scheduledSlotAt: appointments.scheduledSlotAt,
     })
@@ -159,6 +161,43 @@ async function loadConsultDurations(tx: Tx, doctorId: string): Promise<number[]>
     .map((row) => Number(row.minutes))
     // A consultation cannot take zero minutes or three hours; clock skew and
     // forgotten Complete clicks would otherwise poison the median.
+    .filter((minutes) => Number.isFinite(minutes) && minutes > 0 && minutes < 180)
+    .reverse();
+}
+
+/**
+ * Dashboard-optimized variant: scoped to a single service date.
+ *
+ * On the dashboard, the queue resets daily and all patients are handled
+ * within the day, so we only need today's durations for the ETA model.
+ * This avoids scanning the entire appointment history.
+ */
+async function loadConsultDurationsForDate(
+  tx: Tx,
+  doctorId: string,
+  serviceDate: string,
+): Promise<number[]> {
+  const rows = await tx
+    .select({
+      minutes: sql<number>`
+        extract(epoch from (${appointments.completedAt} - ${appointments.consultStartedAt})) / 60
+      `,
+    })
+    .from(appointments)
+    .where(
+      and(
+        eq(appointments.doctorId, doctorId),
+        eq(appointments.serviceDate, serviceDate),
+        eq(appointments.status, 'COMPLETED'),
+        isNotNull(appointments.consultStartedAt),
+        isNotNull(appointments.completedAt),
+      ),
+    )
+    .orderBy(desc(appointments.completedAt))
+    .limit(CONSULT_SAMPLE_SIZE);
+
+  return rows
+    .map((row) => Number(row.minutes))
     .filter((minutes) => Number.isFinite(minutes) && minutes > 0 && minutes < 180)
     .reverse();
 }
@@ -284,7 +323,13 @@ export async function createWalkIn(args: {
   branchId: string;
   doctorId: string;
   timezone: string;
-  patient: { phoneE164: string; name: string; locale?: 'mr' | 'hi' | 'en' };
+  patient: {
+    phoneE164: string;
+    name: string;
+    age?: number | null;
+    gender?: string | null;
+    locale?: 'mr' | 'hi' | 'en';
+  };
   actorUserId?: string | null;
   source?: 'walk_in' | 'reception' | 'whatsapp';
   /**
@@ -316,13 +361,17 @@ export async function createWalkIn(args: {
         hospitalId: args.hospitalId,
         phoneE164: args.patient.phoneE164,
         name: args.patient.name,
+        age: args.patient.age ?? null,
+        gender: args.patient.gender ?? null,
         locale: args.patient.locale,
         whatsappOptInAt: optedIn ? now : null,
       })
       .onConflictDoUpdate({
-        target: [patients.hospitalId, patients.phoneE164],
+        target: [patients.hospitalId, patients.phoneE164, patients.name],
         set: {
           name: args.patient.name,
+          age: args.patient.age !== undefined ? args.patient.age : patients.age,
+          gender: args.patient.gender !== undefined ? args.patient.gender : patients.gender,
           updatedAt: now,
           /**
            * Consent is recorded once and not silently re-dated on every visit.
@@ -574,6 +623,107 @@ export async function setDoctorPaused(args: {
 
 /* ----------------------------------------------------------------- queries */
 
+/**
+ * Queue snapshot that runs inside an already-open transaction.
+ *
+ * By default uses the date-scoped `loadConsultDurationsForDate` which is
+ * much faster on the dashboard (the queue resets daily). Pass
+ * `fullHistoryDurations: true` to scan across all time instead — useful
+ * for reports or the public patient view.
+ */
+export async function getQueueSnapshotInTx(
+  tx: Tx,
+  args: {
+    doctorId: string;
+    serviceDate: string;
+    now: Date;
+    fullHistoryDurations?: boolean;
+  },
+): Promise<QueueSnapshot | null> {
+  // doctor + dayState are independent — fetch in parallel
+  const [doctorRows, dayRows] = await Promise.all([
+    tx
+      .select({ id: doctors.id, name: doctors.name })
+      .from(doctors)
+      .where(eq(doctors.id, args.doctorId)),
+    tx
+      .select()
+      .from(doctorDayStates)
+      .where(
+        and(
+          eq(doctorDayStates.doctorId, args.doctorId),
+          eq(doctorDayStates.serviceDate, args.serviceDate),
+        ),
+      ),
+  ]);
+
+  const doctor = doctorRows[0];
+  if (!doctor) return null;
+  const day = dayRows[0];
+
+  // appointments + durations are independent — fetch in parallel
+  const [rows, durations] = await Promise.all([
+    loadDayAppointments(tx, { doctorId: args.doctorId, serviceDate: args.serviceDate }),
+    args.fullHistoryDurations
+      ? loadConsultDurations(tx, args.doctorId)
+      : loadConsultDurationsForDate(tx, args.doctorId, args.serviceDate),
+  ]);
+
+  const ordered = orderQueue(rows.map(toQueueEntry));
+  const byId = new Map(rows.map((row) => [row.id, row]));
+
+  const serving = ordered.find(
+    (e) => e.status === 'CALLED' || e.status === 'IN_CONSULTATION',
+  );
+
+  return {
+    doctorId: doctor.id,
+    doctorName: doctor.name,
+    serviceDate: args.serviceDate,
+    paused: day?.paused ?? false,
+    pausedReason: day?.pausedReason ?? null,
+    currentToken: serving?.tokenNumber ?? null,
+    waitingCount: ordered.filter((e) => e.status === 'WAITING').length,
+    completedCount: rows.filter((r) => r.status === 'COMPLETED').length,
+    medianConsultMinutes: durations.length > 0 ? durations[Math.floor(durations.length / 2)] : null,
+    delayMinutes: currentDelayMinutes({
+      scheduledStartAt: day?.scheduledStartAt ?? null,
+      sessionStartedAt: day?.sessionStartedAt ?? null,
+      now: args.now,
+    }),
+    rows: ordered.map((entry) => {
+      const row = byId.get(entry.appointmentId)!;
+      return {
+        appointmentId: entry.appointmentId,
+        tokenNumber: entry.tokenNumber,
+        status: entry.status,
+        priority: entry.priority,
+        patientName: row.patientName,
+        patientAge: row.patientAge,
+        patientId: row.patientId,
+        enqueuedAt: row.enqueuedAt,
+        calledAt: row.calledAt,
+        scheduledSlotAt: row.scheduledSlotAt,
+      };
+    }),
+    parked: rows
+      .filter((row) => row.status === 'SKIPPED' || row.status === 'HELD')
+      .sort((a, b) => a.tokenNumber - b.tokenNumber)
+      .map((row) => ({
+        appointmentId: row.id,
+        tokenNumber: row.tokenNumber,
+        status: row.status,
+        priority: row.priority,
+        patientName: row.patientName,
+        patientAge: row.patientAge,
+        patientId: row.patientId,
+        enqueuedAt: row.enqueuedAt,
+        calledAt: row.calledAt,
+        scheduledSlotAt: row.scheduledSlotAt,
+      })),
+  };
+}
+
 export async function getQueueSnapshot(args: {
   hospitalId: string;
   doctorId: string;
@@ -583,77 +733,14 @@ export async function getQueueSnapshot(args: {
   const now = args.now ?? new Date();
   const serviceDate = serviceDateIn(args.timezone, now);
 
-  return withTenant(args.hospitalId, async (tx) => {
-    const [doctor] = await tx
-      .select({ id: doctors.id, name: doctors.name })
-      .from(doctors)
-      .where(eq(doctors.id, args.doctorId));
-    if (!doctor) return null;
-
-    const [day] = await tx
-      .select()
-      .from(doctorDayStates)
-      .where(
-        and(
-          eq(doctorDayStates.doctorId, args.doctorId),
-          eq(doctorDayStates.serviceDate, serviceDate),
-        ),
-      );
-
-    const rows = await loadDayAppointments(tx, { doctorId: args.doctorId, serviceDate });
-    const durations = await loadConsultDurations(tx, args.doctorId);
-    const ordered = orderQueue(rows.map(toQueueEntry));
-    const byId = new Map(rows.map((row) => [row.id, row]));
-
-    const serving = ordered.find(
-      (e) => e.status === 'CALLED' || e.status === 'IN_CONSULTATION',
-    );
-
-    return {
-      doctorId: doctor.id,
-      doctorName: doctor.name,
+  return withTenant(args.hospitalId, (tx) =>
+    getQueueSnapshotInTx(tx, {
+      doctorId: args.doctorId,
       serviceDate,
-      paused: day?.paused ?? false,
-      pausedReason: day?.pausedReason ?? null,
-      currentToken: serving?.tokenNumber ?? null,
-      waitingCount: ordered.filter((e) => e.status === 'WAITING').length,
-      completedCount: rows.filter((r) => r.status === 'COMPLETED').length,
-      medianConsultMinutes: durations.length > 0 ? durations[Math.floor(durations.length / 2)] : null,
-      delayMinutes: currentDelayMinutes({
-        scheduledStartAt: day?.scheduledStartAt ?? null,
-        sessionStartedAt: day?.sessionStartedAt ?? null,
-        now,
-      }),
-      rows: ordered.map((entry) => {
-        const row = byId.get(entry.appointmentId)!;
-        return {
-          appointmentId: entry.appointmentId,
-          tokenNumber: entry.tokenNumber,
-          status: entry.status,
-          priority: entry.priority,
-          patientName: row.patientName,
-          patientId: row.patientId,
-          enqueuedAt: row.enqueuedAt,
-          calledAt: row.calledAt,
-          scheduledSlotAt: row.scheduledSlotAt,
-        };
-      }),
-      parked: rows
-        .filter((row) => row.status === 'SKIPPED' || row.status === 'HELD')
-        .sort((a, b) => a.tokenNumber - b.tokenNumber)
-        .map((row) => ({
-          appointmentId: row.id,
-          tokenNumber: row.tokenNumber,
-          status: row.status,
-          priority: row.priority,
-          patientName: row.patientName,
-          patientId: row.patientId,
-          enqueuedAt: row.enqueuedAt,
-          calledAt: row.calledAt,
-          scheduledSlotAt: row.scheduledSlotAt,
-        })),
-    };
-  });
+      now,
+      fullHistoryDurations: true,
+    }),
+  );
 }
 
 export type PublicQueueView = {
@@ -791,4 +878,4 @@ export async function getBranchSnapshots(args: {
   return snapshots.filter((snapshot): snapshot is QueueSnapshot => snapshot !== null);
 }
 
-export { isActive, inArray };
+export { isActive };

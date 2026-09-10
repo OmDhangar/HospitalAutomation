@@ -1,5 +1,5 @@
-import { and, asc, eq, sql } from 'drizzle-orm';
-import { withTenant } from '@/lib/db';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { withTenant, type Tx } from '@/lib/db';
 import { branches, doctorDayStates, doctors, doctorSchedules, hospitals } from '@/lib/db/schema';
 import type { DoctorScheduleMode } from '@/lib/domain/booking';
 
@@ -11,6 +11,7 @@ export type DoctorListItem = {
   branchName: string;
   defaultConsultMinutes: number;
   mode: DoctorScheduleMode;
+  active: boolean;
 };
 
 // In-memory cache for doctor lists per hospital (60s TTL)
@@ -25,79 +26,101 @@ export function clearDoctorCache(hospitalId?: string) {
   }
 }
 
+export async function listDoctorsInTx(
+  tx: Tx,
+  args: {
+    branchId?: string | null;
+    serviceDate?: string;
+    includeInactive?: boolean;
+  },
+): Promise<DoctorListItem[]> {
+  const serviceDate = args.serviceDate ?? new Date().toISOString().slice(0, 10);
+  const includeInactive = args.includeInactive ?? false;
+
+  const whereConditions = [];
+  if (!includeInactive) {
+    whereConditions.push(eq(doctors.active, true));
+  }
+  if (args.branchId) {
+    whereConditions.push(eq(doctors.branchId, args.branchId));
+  }
+
+  const rawDoctors = await tx
+    .select({
+      id: doctors.id,
+      name: doctors.name,
+      specialty: doctors.specialty,
+      branchId: doctors.branchId,
+      branchName: branches.name,
+      defaultConsultMinutes: doctors.defaultConsultMinutes,
+      active: doctors.active,
+    })
+    .from(doctors)
+    .innerJoin(branches, eq(branches.id, doctors.branchId))
+    .where(whereConditions.length > 0 ? and(...whereConditions) : undefined)
+    .orderBy(asc(doctors.name));
+
+  if (rawDoctors.length === 0) {
+    return [];
+  }
+
+  const docIds = rawDoctors.map((d) => d.id);
+
+  // Batch fetch day-states and schedules in parallel — they're independent
+  const [dayStates, schedules] = await Promise.all([
+    tx
+      .select({ doctorId: doctorDayStates.doctorId, mode: doctorDayStates.mode })
+      .from(doctorDayStates)
+      .where(
+        and(
+          inArray(doctorDayStates.doctorId, docIds),
+          eq(doctorDayStates.serviceDate, serviceDate),
+        ),
+      ),
+    tx
+      .select({ doctorId: doctorSchedules.doctorId, mode: doctorSchedules.mode })
+      .from(doctorSchedules)
+      .where(
+        and(
+          inArray(doctorSchedules.doctorId, docIds),
+          sql`weekday = extract(dow from ${serviceDate}::date)`,
+          sql`effective_from <= ${serviceDate}::date`,
+          sql`(effective_to is null or effective_to >= ${serviceDate}::date)`,
+        ),
+      ),
+  ]);
+
+  const dayStateMap = new Map(
+    dayStates
+      .filter((d): d is { doctorId: string; mode: DoctorScheduleMode } => Boolean(d.mode))
+      .map((d) => [d.doctorId, d.mode]),
+  );
+  const schedMap = new Map(schedules.map((s) => [s.doctorId, s.mode]));
+
+  return rawDoctors.map((doc) => ({
+    ...doc,
+    mode: dayStateMap.get(doc.id) ?? schedMap.get(doc.id) ?? 'queue',
+  }));
+}
+
 export async function listDoctors(args: {
   hospitalId: string;
   branchId?: string | null;
   serviceDate?: string;
+  includeInactive?: boolean;
 }): Promise<DoctorListItem[]> {
   const serviceDate = args.serviceDate ?? new Date().toISOString().slice(0, 10);
-  const cacheKey = `${args.hospitalId}:${args.branchId ?? 'all'}:${serviceDate}`;
+  const includeInactive = args.includeInactive ?? false;
+  const cacheKey = `${args.hospitalId}:${args.branchId ?? 'all'}:${serviceDate}:${includeInactive}`;
   const cached = doctorCache.get(cacheKey);
 
   if (cached && cached.expiresAt > Date.now()) {
     return cached.data;
   }
 
-  const result = await withTenant(args.hospitalId, async (tx) => {
-    const rawDoctors = await tx
-      .select({
-        id: doctors.id,
-        name: doctors.name,
-        specialty: doctors.specialty,
-        branchId: doctors.branchId,
-        branchName: branches.name,
-        defaultConsultMinutes: doctors.defaultConsultMinutes,
-      })
-      .from(doctors)
-      .innerJoin(branches, eq(branches.id, doctors.branchId))
-      .where(
-        args.branchId
-          ? and(eq(doctors.active, true), eq(doctors.branchId, args.branchId))
-          : eq(doctors.active, true),
-      )
-      .orderBy(asc(doctors.name));
-
-    // Resolve mode for each doctor on serviceDate
-    const doctorList: DoctorListItem[] = [];
-    for (const doc of rawDoctors) {
-      // 1. Check doctor_day_states for date-specific override
-      const [dayState] = await tx
-        .select({ mode: doctorDayStates.mode })
-        .from(doctorDayStates)
-        .where(
-          and(
-            eq(doctorDayStates.doctorId, doc.id),
-            eq(doctorDayStates.serviceDate, serviceDate),
-          ),
-        );
-
-      if (dayState?.mode) {
-        doctorList.push({ ...doc, mode: dayState.mode });
-        continue;
-      }
-
-      // 2. Check doctor_schedules for weekday schedule
-      const [sched] = await tx
-        .select({ mode: doctorSchedules.mode })
-        .from(doctorSchedules)
-        .where(
-          and(
-            eq(doctorSchedules.doctorId, doc.id),
-            sql`weekday = extract(dow from ${serviceDate}::date)`,
-            sql`effective_from <= ${serviceDate}::date`,
-            sql`(effective_to is null or effective_to >= ${serviceDate}::date)`,
-          ),
-        )
-        .limit(1);
-
-      doctorList.push({
-        ...doc,
-        mode: sched?.mode ?? 'queue',
-      });
-    }
-
-    return doctorList;
-  });
+  const result = await withTenant(args.hospitalId, (tx) =>
+    listDoctorsInTx(tx, args),
+  );
 
   doctorCache.set(cacheKey, { data: result, expiresAt: Date.now() + 60_000 });
   return result;

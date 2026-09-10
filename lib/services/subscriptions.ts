@@ -1,5 +1,5 @@
 import { and, desc, eq, isNull, lt } from 'drizzle-orm';
-import { withTenant } from '@/lib/db';
+import { withTenant, type Tx } from '@/lib/db';
 import { getAdminDb } from '@/lib/db/admin';
 import { auditLogs, hospitals, planTiers, subscriptions } from '@/lib/db/schema';
 import {
@@ -17,18 +17,23 @@ export type Tier = typeof planTiers.$inferSelect;
 export async function getCurrentSubscription(
   hospitalId: string,
 ): Promise<Subscription | null> {
-  return withTenant(hospitalId, async (tx) => {
-    const [row] = await tx
-      .select()
-      .from(subscriptions)
-      .where(
-        and(
-          eq(subscriptions.hospitalId, hospitalId),
-          isNull(subscriptions.supersededAt),
-        ),
-      );
-    return row ?? null;
-  });
+  return withTenant(hospitalId, (tx) => getCurrentSubscriptionInTx(tx, hospitalId));
+}
+
+export async function getCurrentSubscriptionInTx(
+  tx: Tx,
+  hospitalId: string,
+): Promise<Subscription | null> {
+  const [row] = await tx
+    .select()
+    .from(subscriptions)
+    .where(
+      and(
+        eq(subscriptions.hospitalId, hospitalId),
+        isNull(subscriptions.supersededAt),
+      ),
+    );
+  return row ?? null;
 }
 
 /** Every subscription this hospital has had, newest first. */

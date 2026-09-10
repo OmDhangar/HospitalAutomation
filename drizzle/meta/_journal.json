@@ -106,6 +106,34 @@
       "when": 1788690992304,
       "tag": "0014_subscriptions",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1789057970970,
+      "tag": "0015_special_barracuda",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1789100000000,
+      "tag": "0016_doctor_schedule_mode",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1789150000000,
+      "tag": "0017_patient_age_multiple_profiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789180000000,
+      "tag": "0018_doctor_schedule_mode_both",
+      "breakpoints": true
     }
   ]
 }
