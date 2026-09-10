@@ -1,16 +1,27 @@
 import { isLocale, type Locale } from '@/lib/i18n/patient';
 
+export type DoctorScheduleMode = 'queue' | 'slot';
+
+export type DoctorWithMode = {
+  id: string;
+  name: string;
+  specialty?: string | null;
+  mode: DoctorScheduleMode;
+};
+
 export type ConversationState =
   | 'idle'
   | 'awaiting_language'
   | 'awaiting_active_choice'
   | 'awaiting_doctor'
+  | 'awaiting_queue_choice'
   | 'awaiting_slot';
 
 export type BookingContext = {
   locale?: Locale;
   doctorId?: string;
   slot?: string;
+  queueChoice?: 'join' | 'wait_time';
 };
 
 export type ActiveAppointmentInfo = {
@@ -32,9 +43,12 @@ export type BookingStep =
   | { kind: 'ask_active_choice'; appointment: ActiveAppointmentInfo }
   | { kind: 'show_active_appointment'; appointment: ActiveAppointmentInfo }
   | { kind: 'ask_doctor' }
+  | { kind: 'ask_queue_branch'; doctorId: string }
+  | { kind: 'show_queue_wait_time'; doctorId: string }
   | { kind: 'ask_slot'; doctorId: string }
-  | { kind: 'confirm'; doctorId: string; slot: string }
-  | { kind: 'redirect_web'; doctorId: string }
+  | { kind: 'confirm_queue'; doctorId: string }
+  | { kind: 'confirm_slot'; doctorId: string; slot: string }
+  | { kind: 'redirect_web_slot'; doctorId: string }
   | { kind: 'none' };
 
 export type InboundMessage = {
@@ -67,22 +81,24 @@ const KEYWORD_STATUS_REGEX = /^(status|link|queue|token|view|appointment|अप�
  * Pure on purpose: the number of billable messages a booking costs is decided
  * entirely here, so it can be asserted in a test rather than discovered on an
  * invoice.
- *
- * The key economy is `knownLocale`. Language is a property of the patient, not
- * of the conversation, so a returning patient skips the language question
- * entirely and their booking costs three messages instead of four.
  */
 export function nextBookingStep(args: {
   state: ConversationState;
   context: BookingContext;
   message: InboundMessage;
   knownLocale: Locale | null;
-  /** Doctors the patient may pick from, used to reject stale or forged ids. */
-  availableDoctorIds: string[];
+  /** Doctors the patient may pick from, with optional daily schedule mode. */
+  availableDoctorIds?: string[];
+  availableDoctors?: Array<string | DoctorWithMode>;
   /** Active unfulfilled appointment for this patient if one exists. */
   activeAppointment?: ActiveAppointmentInfo | null;
 }): BookingTransition {
-  const { context, message, knownLocale, availableDoctorIds, activeAppointment } = args;
+  const { context, message, knownLocale, activeAppointment } = args;
+  const rawDoctors = args.availableDoctors ?? args.availableDoctorIds ?? [];
+  const doctors: DoctorWithMode[] = rawDoctors.map((d) =>
+    typeof d === 'string' ? { id: d, name: d, mode: 'queue' } : d,
+  );
+
   const reply = parseReply(message.replyId);
 
   // 1. Explicit request to view active appointment (via interactive reply or keyword)
@@ -110,18 +126,18 @@ export function nextBookingStep(args: {
     if (!locale) {
       return {
         state: 'awaiting_language',
-        context: { ...context, doctorId: undefined, slot: undefined },
+        context: { ...context, doctorId: undefined, slot: undefined, queueChoice: undefined },
         step: { kind: 'ask_language' },
       };
     }
     return {
       state: 'awaiting_doctor',
-      context: { locale, doctorId: undefined, slot: undefined },
+      context: { locale, doctorId: undefined, slot: undefined, queueChoice: undefined },
       step: { kind: 'ask_doctor' },
     };
   }
 
-  // 3. Normal interactive reply handling for language, doctor, slot
+  // 3. Interactive reply handling
   if (reply?.prefix === 'lang' && isLocale(reply.value)) {
     return {
       state: 'awaiting_doctor',
@@ -130,12 +146,40 @@ export function nextBookingStep(args: {
     };
   }
 
-  if (reply?.prefix === 'doc' && availableDoctorIds.includes(reply.value)) {
-    return {
-      state: 'awaiting_slot',
-      context: { ...context, doctorId: reply.value },
-      step: { kind: 'ask_slot', doctorId: reply.value },
-    };
+  if (reply?.prefix === 'doc') {
+    const doctorObj = doctors.find((d) => d.id === reply.value);
+    if (doctorObj) {
+      if (doctorObj.mode === 'queue') {
+        return {
+          state: 'awaiting_queue_choice',
+          context: { ...context, doctorId: doctorObj.id, queueChoice: undefined },
+          step: { kind: 'ask_queue_branch', doctorId: doctorObj.id },
+        };
+      } else {
+        return {
+          state: 'awaiting_slot',
+          context: { ...context, doctorId: doctorObj.id, slot: undefined },
+          step: { kind: 'ask_slot', doctorId: doctorObj.id },
+        };
+      }
+    }
+  }
+
+  if (reply?.prefix === 'queue_choice' && context.doctorId) {
+    if (reply.value === 'join') {
+      return {
+        state: 'idle',
+        context: { ...context, queueChoice: 'join' },
+        step: { kind: 'confirm_queue', doctorId: context.doctorId },
+      };
+    }
+    if (reply.value === 'wait') {
+      return {
+        state: 'awaiting_queue_choice',
+        context: { ...context, queueChoice: 'wait_time' },
+        step: { kind: 'show_queue_wait_time', doctorId: context.doctorId },
+      };
+    }
   }
 
   if (reply?.prefix === 'slot' && context.doctorId) {
@@ -143,14 +187,14 @@ export function nextBookingStep(args: {
       return {
         state: 'idle',
         context: { ...context, slot: reply.value },
-        step: { kind: 'redirect_web', doctorId: context.doctorId },
+        step: { kind: 'redirect_web_slot', doctorId: context.doctorId },
       };
     }
 
     return {
       state: 'idle',
       context: { ...context, slot: reply.value },
-      step: { kind: 'confirm', doctorId: context.doctorId, slot: reply.value },
+      step: { kind: 'confirm_slot', doctorId: context.doctorId, slot: reply.value },
     };
   }
 
@@ -168,36 +212,25 @@ export function nextBookingStep(args: {
   if (!locale) {
     return {
       state: 'awaiting_language',
-      context: { ...context, doctorId: undefined, slot: undefined },
+      context: { ...context, doctorId: undefined, slot: undefined, queueChoice: undefined },
       step: { kind: 'ask_language' },
     };
   }
 
   return {
     state: 'awaiting_doctor',
-    context: { locale, doctorId: undefined, slot: undefined },
+    context: { locale, doctorId: undefined, slot: undefined, queueChoice: undefined },
     step: { kind: 'ask_doctor' },
   };
 }
 
 /**
  * How long an identical prompt is considered already answered.
- *
- * Re-sending a menu the patient already has adds nothing: WhatsApp keeps the
- * previous list tappable in the thread, so an impatient second "Hi" is best
- * answered by the message already sitting on their screen. Two minutes covers
- * double-taps and impatience without stranding someone who genuinely returns
- * later.
  */
 export const PROMPT_COOLDOWN_SECONDS = 120;
 
 /**
  * The most prompts one phone number can trigger in a day.
- *
- * A real booking takes three. Twelve leaves room for a confused patient to
- * restart several times, and stops a bored or malicious sender from running up
- * a WhatsApp bill by messaging the number in a loop. Past the cap we go quiet
- * rather than replying "too many messages" — that reply would itself cost.
  */
 export const DAILY_PROMPT_CAP = 12;
 
@@ -205,13 +238,6 @@ export type PromptDecision =
   | { send: true }
   | { send: false; reason: 'duplicate' | 'daily_cap' };
 
-/**
- * Whether a prompt is worth the money it costs.
- *
- * Confirmations are exempt from both rules: a patient who has completed a
- * booking must always be told, and the one-active-token constraint already
- * prevents that happening twice.
- */
 export function shouldSendPrompt(args: {
   step: BookingStep['kind'];
   lastPromptStep: string | null;
@@ -220,9 +246,11 @@ export function shouldSendPrompt(args: {
   now: Date;
 }): PromptDecision {
   if (
-    args.step === 'confirm' ||
-    args.step === 'redirect_web' ||
+    args.step === 'confirm_queue' ||
+    args.step === 'confirm_slot' ||
+    args.step === 'redirect_web_slot' ||
     args.step === 'show_active_appointment' ||
+    args.step === 'show_queue_wait_time' ||
     args.step === 'none'
   ) {
     return { send: true };

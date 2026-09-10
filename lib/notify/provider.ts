@@ -25,6 +25,15 @@ export type InteractiveListMessage = {
   rows: ListRow[];
 };
 
+export type InteractiveButton = { id: string; title: string };
+
+export type InteractiveButtonMessage = {
+  phoneNumberId: string;
+  toPhoneE164: string;
+  bodyText: string;
+  buttons: InteractiveButton[];
+};
+
 /**
  * A plain message, with no template.
  *
@@ -54,8 +63,14 @@ export interface NotificationProvider {
   readonly name: string;
   sendTemplate(message: TemplateMessage): Promise<SendResult>;
   sendInteractiveList(message: InteractiveListMessage): Promise<SendResult>;
+  sendInteractiveButtons(message: InteractiveButtonMessage): Promise<SendResult>;
   /** Free-form; valid only inside an open customer service window. */
   sendText(message: TextMessage): Promise<SendResult>;
+  sendReadAndTypingIndicator(args: {
+    phoneNumberId: string;
+    messageId: string;
+    toPhoneE164: string;
+  }): Promise<void>;
 }
 
 /* ------------------------------------------------------------ Meta Cloud API */
@@ -159,6 +174,56 @@ export class MetaCloudProvider implements NotificationProvider {
       },
     });
   }
+
+  async sendInteractiveButtons(message: InteractiveButtonMessage): Promise<SendResult> {
+    return this.post(message.phoneNumberId, {
+      to: message.toPhoneE164,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: message.bodyText },
+        action: {
+          buttons: message.buttons.map((b) => ({
+            type: 'reply',
+            reply: { id: b.id, title: b.title },
+          })),
+        },
+      },
+    });
+  }
+
+  async sendReadAndTypingIndicator(args: {
+    phoneNumberId: string;
+    messageId: string;
+    toPhoneE164: string;
+  }): Promise<void> {
+    fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${args.phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        status: 'read',
+        message_id: args.messageId,
+      }),
+    }).catch(() => {});
+
+    fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${args.phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: args.toPhoneE164,
+        type: 'typing_indicator',
+      }),
+    }).catch(() => {});
+  }
 }
 
 /* -------------------------------------------------------------- development */
@@ -202,6 +267,23 @@ export class ConsoleProvider implements NotificationProvider {
     );
     this.id += 1;
     return { providerMessageId: `console-${Date.now()}-${this.id}` };
+  }
+
+  async sendInteractiveButtons(message: InteractiveButtonMessage): Promise<SendResult> {
+    const btns = message.buttons.map((b) => `   [Button: ${b.title} (${b.id})]`).join('\n');
+    console.log(
+      `[whatsapp:buttons] -> ${message.toPhoneE164}\n${message.bodyText}\n${btns}\n`,
+    );
+    this.id += 1;
+    return { providerMessageId: `console-${Date.now()}-${this.id}` };
+  }
+
+  async sendReadAndTypingIndicator(args: {
+    phoneNumberId: string;
+    messageId: string;
+    toPhoneE164: string;
+  }): Promise<void> {
+    console.log(`[whatsapp:read+typing] -> ${args.toPhoneE164} (msg: ${args.messageId})`);
   }
 }
 

@@ -1,7 +1,8 @@
 import { eq } from 'drizzle-orm';
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/db/admin';
 import { notificationOutbox } from '@/lib/db/schema';
+import { getProvider } from '@/lib/notify/provider';
 import {
   parseWebhook,
   verifyChallenge,
@@ -45,33 +46,47 @@ export async function POST(request: Request) {
   }
 
   const { messages, statuses } = parseWebhook(payload);
+  const provider = getProvider();
 
-  for (const message of messages) {
-    try {
-      await handleInboundMessage(message);
-    } catch (error) {
-      // One bad message must not abandon the rest of the batch, nor turn into a
-      // non-2xx that makes Meta redeliver everything.
-      console.error('whatsapp inbound failed', message.messageId, error);
+  // Phase 1: Return 200 OK instantly.
+  // Phase 2: Process typing indicators and inbound messages asynchronously via after()
+  after(async () => {
+    // 1. Immediately trigger read status & typing indicator for incoming messages
+    for (const message of messages) {
+      try {
+        await provider.sendReadAndTypingIndicator({
+          phoneNumberId: message.phoneNumberId,
+          messageId: message.messageId,
+          toPhoneE164: message.fromPhone,
+        });
+      } catch (err) {
+        console.error('failed to send typing indicator', message.messageId, err);
+      }
     }
-  }
 
-  // Reconciling delivery receipts is what separates "we sent it" from "it
-  // arrived" — the distinction a hospital asks about when a patient says they
-  // never got their token.
-  for (const status of statuses) {
-    if (status.status !== 'delivered' && status.status !== 'read') continue;
-    try {
-      await getAdminDb()
-        .update(notificationOutbox)
-        .set({ deliveredAt: new Date() })
-        .where(eq(notificationOutbox.providerMessageId, status.providerMessageId));
-    } catch (error) {
-      console.error('whatsapp status update failed', status.providerMessageId, error);
+    // 2. Process inbound conversation logic
+    for (const message of messages) {
+      try {
+        await handleInboundMessage(message);
+      } catch (error) {
+        // One bad message must not abandon the rest of the batch
+        console.error('whatsapp inbound failed', message.messageId, error);
+      }
     }
-  }
 
-  // Always 200 once the signature is valid. Meta retries non-2xx aggressively,
-  // so a downstream error must not become a redelivery storm.
+    // 3. Reconcile delivery receipts
+    for (const status of statuses) {
+      if (status.status !== 'delivered' && status.status !== 'read') continue;
+      try {
+        await getAdminDb()
+          .update(notificationOutbox)
+          .set({ deliveredAt: new Date() })
+          .where(eq(notificationOutbox.providerMessageId, status.providerMessageId));
+      } catch (error) {
+        console.error('whatsapp status update failed', status.providerMessageId, error);
+      }
+    }
+  });
+
   return NextResponse.json({ received: true });
 }

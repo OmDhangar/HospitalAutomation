@@ -58,8 +58,12 @@ export const conversationState = pgEnum('conversation_state', [
   'awaiting_language',
   'awaiting_active_choice',
   'awaiting_doctor',
+  'awaiting_queue_choice',
   'awaiting_slot',
 ]);
+
+export const doctorScheduleMode = pgEnum('doctor_schedule_mode', ['queue', 'slot']);
+
 
 const id = () => uuid('id').primaryKey().defaultRandom();
 const createdAt = () => timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
@@ -293,6 +297,7 @@ export const doctorSchedules = pgTable(
       .references(() => doctors.id, { onDelete: 'cascade' }),
     /** 0 = Sunday, matching Postgres `extract(dow ...)`. */
     weekday: smallint('weekday').notNull(),
+    mode: doctorScheduleMode('mode').notNull().default('queue'),
     startTime: time('start_time').notNull(),
     endTime: time('end_time').notNull(),
     slotMinutes: smallint('slot_minutes').notNull().default(10),
@@ -398,6 +403,7 @@ export const appointments = pgTable(
       .where(sql`status not in ('COMPLETED', 'CANCELLED', 'NO_SHOW', 'EXPIRED')`),
     index('appointments_queue_idx').on(t.doctorId, t.serviceDate, t.status),
     index('appointments_hospital_date_idx').on(t.hospitalId, t.serviceDate),
+    index('appointments_patient_status_idx').on(t.patientId, t.status),
   ],
 );
 
@@ -450,6 +456,7 @@ export const doctorDayStates = pgTable(
       .notNull()
       .references(() => doctors.id, { onDelete: 'cascade' }),
     serviceDate: date('service_date').notNull(),
+    mode: doctorScheduleMode('mode'),
     paused: boolean('paused').notNull().default(false),
     pausedReason: text('paused_reason'),
     scheduledStartAt: timestamp('scheduled_start_at', { withTimezone: true }),

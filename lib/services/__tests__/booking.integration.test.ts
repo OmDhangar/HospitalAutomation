@@ -4,6 +4,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, withTenant } from '@/lib/db';
 import { appointments, notificationOutbox } from '@/lib/db/schema';
 import type {
+  InteractiveButtonMessage,
   InteractiveListMessage,
   NotificationProvider,
   SendResult,
@@ -24,6 +25,7 @@ class SpyProvider implements NotificationProvider {
   readonly name = 'spy';
   templates: TemplateMessage[] = [];
   lists: InteractiveListMessage[] = [];
+  buttons: InteractiveButtonMessage[] = [];
   texts: TextMessage[] = [];
 
   async sendTemplate(message: TemplateMessage): Promise<SendResult> {
@@ -41,8 +43,19 @@ class SpyProvider implements NotificationProvider {
     return { providerMessageId: `spy-l-${this.lists.length}` };
   }
 
+  async sendInteractiveButtons(message: InteractiveButtonMessage): Promise<SendResult> {
+    this.buttons.push(message);
+    return { providerMessageId: `spy-b-${this.buttons.length}` };
+  }
+
+  async sendReadAndTypingIndicator(args: {
+    phoneNumberId: string;
+    messageId: string;
+    toPhoneE164: string;
+  }): Promise<void> {}
+
   get totalSent() {
-    return this.templates.length + this.lists.length + this.texts.length;
+    return this.templates.length + this.lists.length + this.buttons.length + this.texts.length;
   }
 }
 
@@ -104,10 +117,11 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
     await inbound(1, { text: 'Hi' });
     await inbound(2, { replyId: 'lang:mr' });
     await inbound(3, { replyId: `doc:${doctorId}` });
-    await inbound(4, { replyId: 'slot:now' });
+    await inbound(4, { replyId: 'queue_choice:join' });
 
-    // Three interactive prompts, then the confirmation with the queue link.
-    expect(spy.lists).toHaveLength(3);
+    // Two interactive list prompts, one button prompt, then the confirmation with the queue link.
+    expect(spy.lists).toHaveLength(2);
+    expect(spy.buttons).toHaveLength(1);
     expect(spy.texts).toHaveLength(1);
     expect(spy.totalSent).toBe(4);
 
@@ -128,7 +142,7 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
     await inbound(1, { text: 'Hi' });
     await inbound(2, { replyId: 'lang:en' });
     await inbound(3, { replyId: `doc:${doctorId}` });
-    await inbound(4, { replyId: 'slot:now' });
+    await inbound(4, { replyId: 'queue_choice:join' });
 
     const [created] = await appointmentsFor();
     const queued = await withTenant(hospitalId, (tx) =>
@@ -151,10 +165,11 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
     await inbound(1, { text: 'Hi' });
     await inbound(2, { replyId: 'lang:mr' });
     await inbound(3, { replyId: `doc:${doctorId}` });
-    await inbound(4, { replyId: 'slot:now' });
+    await inbound(4, { replyId: 'queue_choice:join' });
 
-    const firstVisitSends = spy.lists.length;
+    const firstVisitSends = spy.lists.length + spy.buttons.length;
     spy.lists = [];
+    spy.buttons = [];
     spy.texts = [];
 
     // Same patient, a later visit. Clear the day's appointment first so the
@@ -163,10 +178,12 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
 
     await inbound(5, { text: 'Hi' });
     await inbound(6, { replyId: `doc:${doctorId}` });
-    await inbound(7, { replyId: 'slot:now' });
+    await inbound(7, { replyId: 'queue_choice:join' });
 
     expect(firstVisitSends).toBe(3);
-    expect(spy.lists).toHaveLength(2);
+    expect(spy.lists).toHaveLength(1);
+    expect(spy.buttons).toHaveLength(1);
+    expect(spy.texts).toHaveLength(1);
     expect(spy.lists.some((m) => m.rows.some((r) => r.id.startsWith('lang:')))).toBe(false);
   });
 
@@ -192,20 +209,13 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
     expect(spy.lists).toHaveLength(2);
 
     await inbound(4, { replyId: `doc:${doctorId}` });
-    expect(spy.lists).toHaveLength(3);
+    expect(spy.buttons).toHaveLength(1);
 
-    await inbound(5, { replyId: 'slot:now' });
+    await inbound(5, { replyId: 'queue_choice:join' });
     expect(await appointmentsFor()).toHaveLength(1);
     expect(spy.texts).toHaveLength(1);
   });
 
-  /**
-   * The cap algorithm itself is proven exhaustively in the unit suite, over
-   * hundreds of iterations, in microseconds. What only integration can show is
-   * that the count survives a round trip: that it is persisted, read back on
-   * the next webhook, and enforced. Driving 16 real messages through Postgres
-   * to re-derive arithmetic took ninety seconds and proved nothing extra.
-   */
   it('enforces the daily prompt budget from persisted state', async () => {
     await inbound(1, { text: 'Hi' });
     expect(spy.lists).toHaveLength(1);

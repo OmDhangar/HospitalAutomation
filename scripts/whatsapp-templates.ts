@@ -32,7 +32,8 @@ const GRAPH_VERSION = 'v23.0';
 /** Meta requires sample values for each {{n}} so reviewers can see the shape. */
 const EXAMPLES: Record<string, string[]> = {
   opd_queue_link: ['42', 'Dr Kulkarni'],
-  opd_queue_milestone: ['4', 'Dr Kulkarni'],
+  opd_queue_milestone: ['42', 'Dr Kulkarni', '3', '15'],
+  opd_slot_reminder: ['Dr Mehta', '10:30 AM'],
   opd_owner_monthly_report: ['2026-08', '4820', '18', '96'],
 };
 
