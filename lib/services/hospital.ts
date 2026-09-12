@@ -37,69 +37,58 @@ export async function listDoctorsInTx(
   const serviceDate = args.serviceDate ?? new Date().toISOString().slice(0, 10);
   const includeInactive = args.includeInactive ?? false;
 
-  const whereConditions = [];
-  if (!includeInactive) {
-    whereConditions.push(eq(doctors.active, true));
-  }
-  if (args.branchId) {
-    whereConditions.push(eq(doctors.branchId, args.branchId));
-  }
+  const branchFilter = args.branchId ? sql`and d.branch_id = ${args.branchId}::uuid` : sql``;
+  const activeFilter = !includeInactive ? sql`and d.active = true` : sql``;
 
-  const rawDoctors = await tx
-    .select({
-      id: doctors.id,
-      name: doctors.name,
-      specialty: doctors.specialty,
-      branchId: doctors.branchId,
-      branchName: branches.name,
-      defaultConsultMinutes: doctors.defaultConsultMinutes,
-      active: doctors.active,
-    })
-    .from(doctors)
-    .innerJoin(branches, eq(branches.id, doctors.branchId))
-    .where(whereConditions.length > 0 ? and(...whereConditions) : undefined)
-    .orderBy(asc(doctors.name));
+  const rows = await tx.execute<{
+    id: string;
+    name: string;
+    specialty: string | null;
+    branch_id: string;
+    branch_name: string;
+    default_consult_minutes: number;
+    active: boolean;
+    mode: DoctorScheduleMode;
+  }>(sql`
+    select 
+      d.id,
+      d.name,
+      d.specialty,
+      d.branch_id,
+      b.name as branch_name,
+      d.default_consult_minutes,
+      d.active,
+      coalesce(
+        dds.mode,
+        ds.mode,
+        'queue'
+      )::text as mode
+    from doctors d
+    inner join branches b on b.id = d.branch_id
+    left join doctor_day_states dds on dds.doctor_id = d.id and dds.service_date = ${serviceDate}
+    left join lateral (
+      select s.mode
+      from doctor_schedules s
+      where s.doctor_id = d.id
+        and s.weekday = extract(dow from ${serviceDate}::date)
+        and s.effective_from <= ${serviceDate}::date
+        and (s.effective_to is null or s.effective_to >= ${serviceDate}::date)
+      order by s.created_at desc
+      limit 1
+    ) ds on true
+    where 1=1 ${activeFilter} ${branchFilter}
+    order by d.name asc
+  `);
 
-  if (rawDoctors.length === 0) {
-    return [];
-  }
-
-  const docIds = rawDoctors.map((d) => d.id);
-
-  // Batch fetch day-states and schedules in parallel — they're independent
-  const [dayStates, schedules] = await Promise.all([
-    tx
-      .select({ doctorId: doctorDayStates.doctorId, mode: doctorDayStates.mode })
-      .from(doctorDayStates)
-      .where(
-        and(
-          inArray(doctorDayStates.doctorId, docIds),
-          eq(doctorDayStates.serviceDate, serviceDate),
-        ),
-      ),
-    tx
-      .select({ doctorId: doctorSchedules.doctorId, mode: doctorSchedules.mode })
-      .from(doctorSchedules)
-      .where(
-        and(
-          inArray(doctorSchedules.doctorId, docIds),
-          sql`weekday = extract(dow from ${serviceDate}::date)`,
-          sql`effective_from <= ${serviceDate}::date`,
-          sql`(effective_to is null or effective_to >= ${serviceDate}::date)`,
-        ),
-      ),
-  ]);
-
-  const dayStateMap = new Map(
-    dayStates
-      .filter((d): d is { doctorId: string; mode: DoctorScheduleMode } => Boolean(d.mode))
-      .map((d) => [d.doctorId, d.mode]),
-  );
-  const schedMap = new Map(schedules.map((s) => [s.doctorId, s.mode]));
-
-  return rawDoctors.map((doc) => ({
-    ...doc,
-    mode: dayStateMap.get(doc.id) ?? schedMap.get(doc.id) ?? 'queue',
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    specialty: r.specialty,
+    branchId: r.branch_id,
+    branchName: r.branch_name,
+    defaultConsultMinutes: r.default_consult_minutes,
+    active: r.active,
+    mode: r.mode ?? 'queue',
   }));
 }
 

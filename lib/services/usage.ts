@@ -99,45 +99,35 @@ export async function getHospitalUsageInTx(
   const period = billingPeriod({ startsAt: subscription.startsAt, now });
   const today = serviceDateIn(args.timezone, now);
 
-  // All three counts are independent — run in parallel
-  const [todayRow, periodRow, messageRow] = await Promise.all([
-    tx
-      .select({ value: count() })
-      .from(appointments)
-      .where(
-        and(
-          eq(appointments.serviceDate, today),
-          eq(appointments.status, 'COMPLETED'),
-        ),
-      )
-      .then(([r]) => r),
-    tx
-      .select({ value: count() })
-      .from(appointments)
-      .where(
-        and(
-          eq(appointments.status, 'COMPLETED'),
-          gte(appointments.completedAt, period.start),
-          lt(appointments.completedAt, period.end),
-        ),
-      )
-      .then(([r]) => r),
-    tx
-      .select({ value: count() })
-      .from(notificationOutbox)
-      .where(
-        and(
-          eq(notificationOutbox.status, 'sent'),
-          gte(notificationOutbox.sentAt, period.start),
-          lt(notificationOutbox.sentAt, period.end),
-        ),
-      )
-      .then(([r]) => r),
-  ]);
+  const periodStart = period.start.toISOString();
+  const periodEnd = period.end.toISOString();
 
-  const completedToday = Number(todayRow?.value ?? 0);
-  const completedInPeriod = Number(periodRow?.value ?? 0);
-  const messagesInPeriod = Number(messageRow?.value ?? 0);
+  const [counts] = await tx.execute<{
+    today_count: string | number;
+    period_count: string | number;
+    message_count: string | number;
+  }>(sql`
+    select 
+      (
+        select count(*)::int 
+        from appointments 
+        where service_date = ${today} and status = 'COMPLETED'
+      ) as today_count,
+      (
+        select count(*)::int 
+        from appointments 
+        where status = 'COMPLETED' and completed_at >= ${periodStart}::timestamptz and completed_at < ${periodEnd}::timestamptz
+      ) as period_count,
+      (
+        select count(*)::int 
+        from notification_outbox 
+        where status = 'sent' and sent_at >= ${periodStart}::timestamptz and sent_at < ${periodEnd}::timestamptz
+      ) as message_count
+  `);
+
+  const completedToday = Number(counts?.today_count ?? 0);
+  const completedInPeriod = Number(counts?.period_count ?? 0);
+  const messagesInPeriod = Number(counts?.message_count ?? 0);
 
   return {
     subscription,

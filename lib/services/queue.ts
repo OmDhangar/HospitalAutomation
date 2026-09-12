@@ -345,104 +345,215 @@ export async function createWalkIn(args: {
 }) {
   const now = args.now ?? new Date();
   const serviceDate = serviceDateIn(args.timezone, now);
-
+  const tStart = performance.now();
   return withTenant(args.hospitalId, async (tx) => {
-    const day = await lockDoctorDay(tx, {
-      hospitalId: args.hospitalId,
-      doctorId: args.doctorId,
-      serviceDate,
-    });
-
+    const t0 = performance.now();
     const optedIn = args.whatsappOptIn ?? true;
-
-    const [patient] = await tx
-      .insert(patients)
-      .values({
-        hospitalId: args.hospitalId,
-        phoneE164: args.patient.phoneE164,
-        name: args.patient.name,
-        age: args.patient.age ?? null,
-        gender: args.patient.gender ?? null,
-        locale: args.patient.locale,
-        whatsappOptInAt: optedIn ? now : null,
-      })
-      .onConflictDoUpdate({
-        target: [patients.hospitalId, patients.phoneE164, patients.name],
-        set: {
-          name: args.patient.name,
-          age: args.patient.age !== undefined ? args.patient.age : patients.age,
-          gender: args.patient.gender !== undefined ? args.patient.gender : patients.gender,
-          updatedAt: now,
-          /**
-           * Consent is recorded once and not silently re-dated on every visit.
-           * `excluded` is the row we tried to insert, so this keeps any earlier
-           * timestamp and otherwise takes the new one — with no bound Date in a
-           * raw fragment, which postgres.js cannot type without a column to
-           * infer from.
-           */
-          ...(optedIn
-            ? {
-                whatsappOptInAt: sql`coalesce(${patients.whatsappOptInAt}, excluded.whatsapp_opt_in_at)`,
-              }
-            : {}),
-        },
-      })
-      .returning();
-
-    const tokenNumber = day.lastTokenNumber + 1;
     const publicToken = generatePublicToken();
+    const publicTokenExpiresAt = new Date(now.getTime() + 18 * 60 * 60 * 1000);
 
-    const [appointment] = await tx
-      .insert(appointments)
-      .values({
-        hospitalId: args.hospitalId,
-        branchId: args.branchId,
-        doctorId: args.doctorId,
-        patientId: patient.id,
-        serviceDate,
-        tokenNumber,
-        status: 'WAITING',
-        source: args.source ?? 'walk_in',
-        publicToken,
-        // The link dies a few hours after the session, so a forwarded message
-        // cannot be used to watch a queue days later.
-        publicTokenExpiresAt: new Date(now.getTime() + 18 * 60 * 60 * 1000),
-        enqueuedAt: now,
-      })
-      .returning();
+    const nowIso = now.toISOString();
+    const publicTokenExpiresAtIso = publicTokenExpiresAt.toISOString();
+    const whatsappOptInAtIso = optedIn ? nowIso : null;
 
-    await tx
-      .update(doctorDayStates)
-      .set({ lastTokenNumber: tokenNumber, updatedAt: now })
-      .where(eq(doctorDayStates.id, day.id));
+    const [row] = await tx.execute<{
+      appt_id: string;
+      appt_hospital_id: string;
+      appt_branch_id: string;
+      appt_doctor_id: string;
+      appt_patient_id: string;
+      appt_service_date: string;
+      appt_token_number: number;
+      appt_status: AppointmentStatus;
+      appt_priority: number;
+      appt_source: typeof appointments.$inferSelect['source'];
+      appt_public_token: string;
+      appt_public_token_expires_at: Date;
+      appt_enqueued_at: Date | null;
+      appt_scheduled_slot_at: Date | null;
+      appt_called_at: Date | null;
+      appt_consult_started_at: Date | null;
+      appt_completed_at: Date | null;
+      appt_created_at: Date;
+      appt_updated_at: Date;
+      patient_id: string;
+      patient_hospital_id: string;
+      patient_phone_e164: string;
+      patient_name: string;
+      patient_age: number | null;
+      patient_gender: string | null;
+      patient_locale: typeof patients.$inferSelect['locale'];
+      patient_whatsapp_opt_in_at: Date | null;
+      patient_created_at: Date;
+      patient_updated_at: Date;
+    }>(sql`
+      with
+        day_state as (
+          insert into doctor_day_states (hospital_id, doctor_id, service_date, paused, last_token_number)
+          values (${args.hospitalId}::uuid, ${args.doctorId}::uuid, ${serviceDate}, false, 1)
+          on conflict (doctor_id, service_date)
+          do update set
+            last_token_number = doctor_day_states.last_token_number + 1,
+            updated_at = ${nowIso}::timestamptz
+          returning id, last_token_number
+        ),
+        upserted_patient as (
+          insert into patients (hospital_id, phone_e164, name, age, gender, locale, whatsapp_opt_in_at)
+          values (
+            ${args.hospitalId}::uuid,
+            ${args.patient.phoneE164},
+            ${args.patient.name},
+            ${args.patient.age ?? null},
+            ${args.patient.gender ?? null},
+            ${args.patient.locale ?? 'en'},
+            ${whatsappOptInAtIso ? sql`${whatsappOptInAtIso}::timestamptz` : sql`NULL`}
+          )
+          on conflict (hospital_id, phone_e164, name)
+          do update set
+            name = ${args.patient.name},
+            age = coalesce(${args.patient.age ?? null}, patients.age),
+            gender = coalesce(${args.patient.gender ?? null}, patients.gender),
+            whatsapp_opt_in_at = case 
+              when ${optedIn} then coalesce(patients.whatsapp_opt_in_at, excluded.whatsapp_opt_in_at)
+              else patients.whatsapp_opt_in_at
+            end,
+            updated_at = ${nowIso}::timestamptz
+          returning *
+        ),
+        inserted_appt as (
+          insert into appointments (
+            hospital_id, branch_id, doctor_id, patient_id, service_date,
+            token_number, status, source, public_token, public_token_expires_at, enqueued_at
+          )
+          select
+            ${args.hospitalId}::uuid,
+            ${args.branchId}::uuid,
+            ${args.doctorId}::uuid,
+            upserted_patient.id,
+            ${serviceDate},
+            day_state.last_token_number,
+            'WAITING',
+            ${args.source ?? 'walk_in'},
+            ${publicToken},
+            ${publicTokenExpiresAtIso}::timestamptz,
+            ${nowIso}::timestamptz
+          from upserted_patient, day_state
+          returning *
+        ),
+        inserted_event as (
+          insert into queue_events (
+            hospital_id, appointment_id, doctor_id, action, from_status, to_status, actor_user_id
+          )
+          select
+            ${args.hospitalId}::uuid,
+            inserted_appt.id,
+            ${args.doctorId}::uuid,
+            'enqueue',
+            'CREATED',
+            'WAITING',
+            ${args.actorUserId ? sql`${args.actorUserId}::uuid` : sql`NULL`}
+          from inserted_appt
+        ),
+        inserted_outbox as (
+          insert into notification_outbox (
+            hospital_id, appointment_id, patient_id, milestone, template_code, locale, payload
+          )
+          select
+            ${args.hospitalId}::uuid,
+            inserted_appt.id,
+            upserted_patient.id,
+            'queue_link',
+            'queue_link',
+            coalesce(upserted_patient.locale, 'en'),
+            jsonb_build_object('tokenNumber', inserted_appt.token_number, 'publicToken', inserted_appt.public_token)
+          from inserted_appt, upserted_patient
+          where upserted_patient.whatsapp_opt_in_at is not null
+          on conflict do nothing
+        )
+      select
+        inserted_appt.id as appt_id,
+        inserted_appt.hospital_id as appt_hospital_id,
+        inserted_appt.branch_id as appt_branch_id,
+        inserted_appt.doctor_id as appt_doctor_id,
+        inserted_appt.patient_id as appt_patient_id,
+        inserted_appt.service_date as appt_service_date,
+        inserted_appt.token_number as appt_token_number,
+        inserted_appt.status as appt_status,
+        inserted_appt.priority as appt_priority,
+        inserted_appt.source as appt_source,
+        inserted_appt.public_token as appt_public_token,
+        inserted_appt.public_token_expires_at as appt_public_token_expires_at,
+        inserted_appt.enqueued_at as appt_enqueued_at,
+        inserted_appt.scheduled_slot_at as appt_scheduled_slot_at,
+        inserted_appt.called_at as appt_called_at,
+        inserted_appt.consult_started_at as appt_consult_started_at,
+        inserted_appt.completed_at as appt_completed_at,
+        inserted_appt.created_at as appt_created_at,
+        inserted_appt.updated_at as appt_updated_at,
+        upserted_patient.id as patient_id,
+        upserted_patient.hospital_id as patient_hospital_id,
+        upserted_patient.phone_e164 as patient_phone_e164,
+        upserted_patient.name as patient_name,
+        upserted_patient.age as patient_age,
+        upserted_patient.gender as patient_gender,
+        upserted_patient.locale as patient_locale,
+        upserted_patient.whatsapp_opt_in_at as patient_whatsapp_opt_in_at,
+        upserted_patient.created_at as patient_created_at,
+        upserted_patient.updated_at as patient_updated_at
+      from inserted_appt, upserted_patient;
+    `);
 
-    await tx.insert(queueEvents).values({
-      hospitalId: args.hospitalId,
-      appointmentId: appointment.id,
-      doctorId: args.doctorId,
-      action: 'enqueue',
-      fromStatus: 'CREATED',
-      toStatus: 'WAITING',
-      actorUserId: args.actorUserId ?? null,
-    });
+    const tEnd = performance.now();
+    console.log(
+      `[PERF:createWalkIn:CTE] singleRoundtripQuery: ${(tEnd - t0).toFixed(1)}ms | ` +
+      `overall: ${(tEnd - tStart).toFixed(1)}ms`
+    );
 
-    // No consent, no message. The token and the printed QR still work.
-    if (patient.whatsappOptInAt) {
-      await tx
-        .insert(notificationOutbox)
-        .values({
-          hospitalId: args.hospitalId,
-          appointmentId: appointment.id,
-          patientId: patient.id,
-          milestone: 'queue_link',
-          templateCode: 'queue_link',
-          locale: patient.locale ?? 'en',
-          payload: { tokenNumber, publicToken },
-        })
-        .onConflictDoNothing();
+    if (!row) {
+      throw new Error('Failed to create walk-in appointment');
     }
 
-    return { appointment, patient, tokenNumber, publicToken };
+    const appointment: typeof appointments.$inferSelect = {
+      id: row.appt_id,
+      hospitalId: row.appt_hospital_id,
+      branchId: row.appt_branch_id,
+      doctorId: row.appt_doctor_id,
+      patientId: row.appt_patient_id,
+      serviceDate: row.appt_service_date,
+      tokenNumber: Number(row.appt_token_number),
+      status: row.appt_status,
+      priority: Number(row.appt_priority),
+      source: row.appt_source,
+      publicToken: row.appt_public_token,
+      publicTokenExpiresAt: new Date(row.appt_public_token_expires_at),
+      scheduledSlotAt: row.appt_scheduled_slot_at ? new Date(row.appt_scheduled_slot_at) : null,
+      enqueuedAt: row.appt_enqueued_at ? new Date(row.appt_enqueued_at) : null,
+      calledAt: row.appt_called_at ? new Date(row.appt_called_at) : null,
+      consultStartedAt: row.appt_consult_started_at ? new Date(row.appt_consult_started_at) : null,
+      completedAt: row.appt_completed_at ? new Date(row.appt_completed_at) : null,
+      createdAt: new Date(row.appt_created_at),
+      updatedAt: new Date(row.appt_updated_at),
+    };
+
+    const patient: typeof patients.$inferSelect = {
+      id: row.patient_id,
+      hospitalId: row.patient_hospital_id,
+      phoneE164: row.patient_phone_e164,
+      name: row.patient_name,
+      age: row.patient_age !== null && row.patient_age !== undefined ? Number(row.patient_age) : null,
+      gender: row.patient_gender,
+      locale: row.patient_locale,
+      whatsappOptInAt: row.patient_whatsapp_opt_in_at ? new Date(row.patient_whatsapp_opt_in_at) : null,
+      createdAt: new Date(row.patient_created_at),
+      updatedAt: new Date(row.patient_updated_at),
+    };
+
+    return {
+      appointment,
+      patient,
+      tokenNumber: appointment.tokenNumber,
+      publicToken: appointment.publicToken,
+    };
   });
 }
 
@@ -591,12 +702,14 @@ export async function setPriority(args: {
   });
 }
 
+/** Toggles doctor pause on the active day state. */
 export async function setDoctorPaused(args: {
   hospitalId: string;
   doctorId: string;
   timezone: string;
   paused: boolean;
   reason?: string | null;
+  actorUserId?: string | null;
   now?: Date;
 }) {
   const now = args.now ?? new Date();
@@ -636,12 +749,12 @@ export async function getQueueSnapshotInTx(
   args: {
     doctorId: string;
     serviceDate: string;
-    now: Date;
+    now?: Date;
     fullHistoryDurations?: boolean;
   },
 ): Promise<QueueSnapshot | null> {
-  // doctor + dayState are independent — fetch in parallel
-  const [doctorRows, dayRows] = await Promise.all([
+  // All 4 queries are completely independent — run in parallel in 1 network roundtrip
+  const [doctorRows, dayRows, rows, durations] = await Promise.all([
     tx
       .select({ id: doctors.id, name: doctors.name })
       .from(doctors)
@@ -655,19 +768,15 @@ export async function getQueueSnapshotInTx(
           eq(doctorDayStates.serviceDate, args.serviceDate),
         ),
       ),
-  ]);
-
-  const doctor = doctorRows[0];
-  if (!doctor) return null;
-  const day = dayRows[0];
-
-  // appointments + durations are independent — fetch in parallel
-  const [rows, durations] = await Promise.all([
     loadDayAppointments(tx, { doctorId: args.doctorId, serviceDate: args.serviceDate }),
     args.fullHistoryDurations
       ? loadConsultDurations(tx, args.doctorId)
       : loadConsultDurationsForDate(tx, args.doctorId, args.serviceDate),
   ]);
+
+  const doctor = doctorRows[0];
+  if (!doctor) return null;
+  const day = dayRows[0];
 
   const ordered = orderQueue(rows.map(toQueueEntry));
   const byId = new Map(rows.map((row) => [row.id, row]));

@@ -66,8 +66,11 @@ export async function addWalkInDynamic(args: {
   phone: string;
   whatsappOptIn: boolean;
 }): Promise<{ ok: boolean; tokenNumber?: number; error?: string }> {
+  const tStart = performance.now();
   try {
+    const t0 = performance.now();
     const session = await authorize();
+    const tAuth = performance.now();
     const name = args.name.trim();
     const phoneE164 = normalizeIndianPhone(args.phone);
 
@@ -92,8 +95,18 @@ export async function addWalkInDynamic(args: {
       source: 'walk_in',
       whatsappOptIn: args.whatsappOptIn,
     });
+    const tWalkIn = performance.now();
 
     revalidatePath('/dashboard');
+    const tRevalidate = performance.now();
+
+    console.log(
+      `[PERF:action:addWalkInDynamic] authorize: ${(tAuth - t0).toFixed(1)}ms | ` +
+      `createWalkIn: ${(tWalkIn - tAuth).toFixed(1)}ms | ` +
+      `revalidatePath: ${(tRevalidate - tWalkIn).toFixed(1)}ms | ` +
+      `totalAction: ${(tRevalidate - tStart).toFixed(1)}ms`
+    );
+
     return { ok: true, tokenNumber: appt.tokenNumber };
   } catch (err: unknown) {
     return { ok: false, error: err instanceof Error ? err.message : 'Failed to add walk-in' };

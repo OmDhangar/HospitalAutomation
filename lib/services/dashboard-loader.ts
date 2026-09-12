@@ -31,6 +31,7 @@ export async function loadDashboardData(args: {
   isOwner: boolean;
   now?: Date;
 }): Promise<DashboardData> {
+  const tStart = performance.now();
   const now = args.now ?? new Date();
   const serviceDate = serviceDateIn(args.timezone, now);
 
@@ -38,6 +39,7 @@ export async function loadDashboardData(args: {
   const tiersPromise = args.isOwner ? listActiveTiers() : Promise.resolve([]);
 
   const tenantData = await withTenant(args.hospitalId, async (tx) => {
+    const t0 = performance.now();
     // Phase 1: branches + doctors + subscription — all independent
     const [branches, doctors, subscription] = await Promise.all([
       listBranchesInTx(tx),
@@ -47,6 +49,7 @@ export async function loadDashboardData(args: {
       }),
       args.isOwner ? getCurrentSubscriptionInTx(tx, args.hospitalId) : null,
     ]);
+    const tPhase1 = performance.now();
 
     // Phase 2: snapshot + usage — can run in parallel, both depend on Phase 1
     //          only for the selectedDoctorId (which we already have from args)
@@ -64,12 +67,29 @@ export async function loadDashboardData(args: {
         ? getHospitalUsageInTx(tx, { timezone: args.timezone, now, subscription })
         : null,
     ]);
+    const tPhase2 = performance.now();
+
+    console.log(
+      `[PERF:loadDashboardData:inTx] Phase1(branches+docs+sub): ${(tPhase1 - t0).toFixed(1)}ms | ` +
+      `Phase2(snapshot+usage): ${(tPhase2 - tPhase1).toFixed(1)}ms | ` +
+      `totalInTx: ${(tPhase2 - t0).toFixed(1)}ms`
+    );
 
     return { branches, doctors, snapshot, usage };
   });
 
+  const tBeforeTiers = performance.now();
+  const tiers = await tiersPromise;
+  const tEnd = performance.now();
+
+  console.log(
+    `[PERF:loadDashboardData] withTenant: ${(tBeforeTiers - tStart).toFixed(1)}ms | ` +
+    `tiers: ${(tEnd - tBeforeTiers).toFixed(1)}ms | ` +
+    `totalLoader: ${(tEnd - tStart).toFixed(1)}ms`
+  );
+
   return {
     ...tenantData,
-    tiers: await tiersPromise,
+    tiers,
   };
 }

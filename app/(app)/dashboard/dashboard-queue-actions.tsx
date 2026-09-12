@@ -22,7 +22,7 @@ export function DoctorTabs({
 }) {
   const router = useRouter();
   const [activeId, setActiveId] = useState(selectedId);
-  const [, startTransition] = useTransition();
+  const [isPending, startTransition] = useTransition();
 
   React.useEffect(() => {
     setActiveId(selectedId);
@@ -40,23 +40,29 @@ export function DoctorTabs({
     <div className="mb-5 flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
       {doctors.map((doctor) => {
         const isSelected = doctor.id === activeId;
+        const isLoadingThis = isSelected && isPending;
         return (
           <button
             key={doctor.id}
             type="button"
             onClick={() => handleSelectDoctor(doctor.id)}
+            disabled={isPending}
             className={cn(
-              'shrink-0 rounded-lg px-4 py-2.5 text-sm font-medium transition-all cursor-pointer select-none',
+              'shrink-0 inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all cursor-pointer select-none',
               isSelected
                 ? 'bg-brand-600 text-white shadow-sm ring-2 ring-brand-600'
                 : 'bg-white text-ink-700 ring-1 ring-inset ring-ink-200 hover:bg-ink-50',
+              isPending && !isSelected && 'opacity-60 cursor-not-allowed',
             )}
           >
-            {doctor.name}
+            {isLoadingThis ? (
+              <span className="inline-block size-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+            ) : null}
+            <span>{doctor.name}</span>
             {doctor.specialty ? (
               <span
                 className={cn(
-                  'ml-2 text-xs',
+                  'text-xs',
                   isSelected ? 'text-brand-100' : 'text-ink-500',
                 )}
               >

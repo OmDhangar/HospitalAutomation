@@ -59,9 +59,15 @@ export async function withTenant<T>(
     throw new Error('withTenant requires a UUID hospital id');
   }
 
+  const t0 = performance.now();
   return getDb().transaction(async (tx) => {
+    const tTx = performance.now();
     await tx.execute(sql`select set_config('app.hospital_id', ${hospitalId}, true)`);
-    return fn(tx);
+    const tConfig = performance.now();
+    const result = await fn(tx);
+    const tEnd = performance.now();
+    console.log(`[PERF:withTenant] acquire+begin: ${(tTx - t0).toFixed(1)}ms | set_config: ${(tConfig - tTx).toFixed(1)}ms | callback: ${(tEnd - tConfig).toFixed(1)}ms | total: ${(tEnd - t0).toFixed(1)}ms`);
+    return result;
   });
 }
 
