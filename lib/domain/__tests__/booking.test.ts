@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  cleanDoctorName,
   DAILY_PROMPT_CAP,
   fitListTitle,
+  formatDoctorName,
   LIST_ROW_TITLE_LIMIT,
   nextBookingStep,
   parsePatientNameAge,
@@ -334,5 +336,27 @@ describe('multi-patient profile selection', () => {
     expect(res.context.patientAge).toBe(32);
     expect(res.step.kind).toBe('ask_doctor');
   });
+
+  describe('doctor name formatting', () => {
+    it('strips duplicate or existing doctor prefixes properly', () => {
+      expect(cleanDoctorName('Dr Rohan Gujrathi')).toBe('Rohan Gujrathi');
+      expect(cleanDoctorName('Dr. Rohan Gujrathi')).toBe('Rohan Gujrathi');
+      expect(cleanDoctorName('Dr. Dr Rohan Gujrathi')).toBe('Rohan Gujrathi');
+      expect(cleanDoctorName('डॉ. रोहन गुजराथी')).toBe('रोहन गुजराथी');
+      expect(cleanDoctorName('डॉ. डॉ. रोहन गुजराथी')).toBe('रोहन गुजराथी');
+      expect(cleanDoctorName('Rohan Gujrathi')).toBe('Rohan Gujrathi');
+      expect(cleanDoctorName('')).toBe('');
+    });
+
+    it('formats localized display titles cleanly without double prefixes', () => {
+      expect(formatDoctorName('Dr. Dr Rohan Gujrathi', 'en')).toBe('Dr. Rohan Gujrathi');
+      expect(formatDoctorName('Dr Rohan Gujrathi', 'en')).toBe('Dr. Rohan Gujrathi');
+      expect(formatDoctorName('Rohan Gujrathi', 'en')).toBe('Dr. Rohan Gujrathi');
+      expect(formatDoctorName('Dr Rohan Gujrathi', 'mr')).toBe('डॉ. Rohan Gujrathi');
+      expect(formatDoctorName('डॉ. रोहन गुजराथी', 'mr')).toBe('डॉ. रोहन गुजराथी');
+      expect(formatDoctorName('रोहन गुजराथी', 'hi')).toBe('डॉ. रोहन गुजराथी');
+    });
+  });
 });
+
 

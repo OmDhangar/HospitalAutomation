@@ -11,6 +11,7 @@ import {
   queueEvents,
 } from '@/lib/db/schema';
 import { generatePublicToken } from '@/lib/security/tokens';
+import { formatDoctorName } from '@/lib/domain/booking';
 import { formatTimeIn, serviceDateIn } from '@/lib/domain/time';
 import type { Locale } from '@/lib/i18n/patient';
 import { getProvider } from '@/lib/notify/provider';
@@ -261,7 +262,7 @@ export async function bookScheduledSlot(args: {
         await provider.sendText({
           phoneNumberId: 'system',
           toPhoneE164: hospital.ownerPhoneE164,
-          body: `📅 New appointment scheduled: ${patient.name} (${patient.phoneE164}) with Dr. ${doctor.name} today at ${slotTimeFormatted}.`,
+          body: `📅 New appointment scheduled: ${patient.name} (${patient.phoneE164}) with ${formatDoctorName(doctor.name, 'en')} today at ${slotTimeFormatted}.`,
         });
       } catch (err) {
         console.warn('Failed to send doctor notification:', err);
@@ -278,7 +279,26 @@ export async function bookScheduledSlot(args: {
         milestone: 'queue_link',
         templateCode: 'queue_link',
         locale: patient.locale ?? 'en',
-        payload: { tokenNumber, publicToken, slotTime: slotTimeFormatted },
+        payload: { tokenNumber, publicToken, slotTime: slotTimeFormatted, doctorName: doctor.name },
+      })
+      .onConflictDoNothing();
+
+    // Queue 15-minute slot reminder
+    const reminderTime = new Date(Math.max(now.getTime(), slotDate.getTime() - 15 * 60 * 1000));
+    await tx
+      .insert(notificationOutbox)
+      .values({
+        hospitalId: args.hospitalId,
+        appointmentId: appointment.id,
+        patientId: patient.id,
+        milestone: 'slot_reminder_15m',
+        templateCode: 'slot_reminder',
+        locale: patient.locale ?? 'en',
+        scheduledFor: reminderTime,
+        payload: {
+          doctorName: doctor.name,
+          appointmentTime: slotTimeFormatted,
+        },
       })
       .onConflictDoNothing();
 

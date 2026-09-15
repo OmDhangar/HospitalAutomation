@@ -2,10 +2,12 @@ import { and, count, eq, gte, isNull, lte, sql } from 'drizzle-orm';
 import { getAdminDb } from '@/lib/db/admin';
 import {
   appointments,
+  doctors,
   notificationOutbox,
   patients,
   whatsappNumbers,
 } from '@/lib/db/schema';
+import { cleanDoctorName } from '@/lib/domain/booking';
 import { messageRatio, shouldSuppressNonCriticalMessages } from '@/lib/domain/pricing';
 import type { Locale } from '@/lib/i18n/patient';
 import { ProviderError } from './errors';
@@ -109,10 +111,12 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
         tokenNumber: appointments.tokenNumber,
         publicToken: appointments.publicToken,
         phoneNumberId: whatsappNumbers.phoneNumberId,
+        doctorName: doctors.name,
       })
       .from(notificationOutbox)
       .innerJoin(patients, eq(patients.id, notificationOutbox.patientId))
       .innerJoin(appointments, eq(appointments.id, notificationOutbox.appointmentId))
+      .leftJoin(doctors, eq(doctors.id, appointments.doctorId))
       // Left join: a hospital without a number configured still has its
       // messages queued, they simply cannot be sent yet.
       .leftJoin(whatsappNumbers, eq(whatsappNumbers.hospitalId, notificationOutbox.hospitalId))
@@ -142,11 +146,29 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
 
     const locale = (row.locale ?? row.patientLocale ?? 'en') as Locale;
     const payload = (row.payload ?? {}) as Record<string, unknown>;
+    const cleanDoc = cleanDoctorName(String(payload.doctorName ?? row.doctorName ?? ''));
 
-    const variables =
-      templateCode === 'queue_link'
-        ? [String(row.tokenNumber), String(payload.doctorName ?? '')]
-        : [String(payload.patientsAhead ?? ''), String(payload.doctorName ?? '')];
+    let variables: string[];
+    if (templateCode === 'queue_link') {
+      variables = [String(row.tokenNumber), cleanDoc];
+    } else if (templateCode === 'slot_reminder') {
+      variables = [cleanDoc, String(payload.appointmentTime ?? payload.slotTime ?? '')];
+    } else if (templateCode === 'owner_monthly_report') {
+      variables = [
+        String(payload.month ?? ''),
+        String(payload.patientsSeen ?? ''),
+        String(payload.medianWait ?? ''),
+        String(payload.noShows ?? ''),
+      ];
+    } else {
+      // queue_milestone
+      variables = [
+        String(row.tokenNumber ?? payload.tokenNumber ?? payload.token ?? ''),
+        cleanDoc,
+        String(payload.patientsAhead ?? ''),
+        String(payload.waitMinutes ?? ''),
+      ];
+    }
 
     // Only the token travels; the domain is fixed in the approved template.
     const urlButtonParam =

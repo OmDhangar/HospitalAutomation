@@ -79,7 +79,10 @@ export const TEMPLATES: Record<TemplateCode, TemplateDefinition> = {
  * us; a patient who misses a "you are nearly next" nudge has merely lost a
  * convenience. Only the second may be dropped to protect margin.
  */
-export const CRITICAL_TEMPLATES: ReadonlySet<TemplateCode> = new Set(['queue_link']);
+export const CRITICAL_TEMPLATES: ReadonlySet<TemplateCode> = new Set([
+  'queue_link',
+  'slot_reminder',
+]);
 
 export const isCritical = (code: TemplateCode): boolean => CRITICAL_TEMPLATES.has(code);
 

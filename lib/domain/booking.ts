@@ -416,3 +416,24 @@ export function fitListTitle(title: string): string {
   return `${[...trimmed].slice(0, LIST_ROW_TITLE_LIMIT - 1).join('')}…`;
 }
 
+/**
+ * Strips doctor prefixes (e.g. "Dr.", "Dr ", "डॉ.", "डॉ ") to avoid accidental
+ * double titles like "Dr. Dr Rohan" when rendering templates or freeform text.
+ */
+export function cleanDoctorName(name: string): string {
+  if (!name) return '';
+  return name.trim().replace(/^(?:(?:dr\.?|डॉ\.?)\s*)+/i, '').trim();
+}
+
+/**
+ * Formats a doctor's display name cleanly with the appropriate localized title prefix.
+ */
+export function formatDoctorName(name: string, locale: Locale = 'en'): string {
+  const cleaned = cleanDoctorName(name);
+  if (!cleaned) return '';
+  if (locale === 'mr' || locale === 'hi') {
+    return `डॉ. ${cleaned}`;
+  }
+  return `Dr. ${cleaned}`;
+}
+

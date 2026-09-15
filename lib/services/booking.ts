@@ -9,7 +9,9 @@ import {
   whatsappConversations,
 } from '@/lib/db/schema';
 import {
+  cleanDoctorName,
   fitListTitle,
+  formatDoctorName,
   nextBookingStep,
   shouldSendPrompt,
   type ActiveAppointmentInfo,
@@ -22,6 +24,8 @@ import { LOCALE_NAMES, LOCALES, t, type Locale } from '@/lib/i18n/patient';
 import { getProvider, type InteractiveButton, type ListRow } from '@/lib/notify/provider';
 import { listDoctors } from './hospital';
 import { createWalkIn, getQueueSnapshot } from './queue';
+import { getDoctorSlotsForDate } from './scheduling';
+import { bookScheduledSlot } from './web-booking';
 
 export type InboundWhatsApp = {
   phoneNumberId: string;
@@ -69,19 +73,19 @@ const QUEUE_BRANCH_PROMPTS: Record<
 > = {
   mr: {
     body: (doctorName) =>
-      `डॉ. ${doctorName} साठी तुम्ही आज थेट रांगेत सामील होऊ शकता किंवा भविष्यातील वेळ स्लॉट बुक करू शकता.`,
+      `${formatDoctorName(doctorName, 'mr')} साठी तुम्ही आज थेट रांगेत सामील होऊ शकता किंवा भविष्यातील वेळ स्लॉट बुक करू शकता.`,
     joinTitle: 'आज थेट रांग',
     slotTitle: 'वेळ स्लॉट निवडा',
   },
   hi: {
     body: (doctorName) =>
-      `डॉ. ${doctorName} के लिए आप आज लाइव कतार में शामिल हो सकते हैं या आगामी समय स्लॉट बुक कर सकते हैं।`,
+      `${formatDoctorName(doctorName, 'hi')} के लिए आप आज लाइव कतार में शामिल हो सकते हैं या आगामी समय स्लॉट बुक कर सकते हैं।`,
     joinTitle: 'आज लाइव कतार',
     slotTitle: 'समय स्लॉट चुनें',
   },
   en: {
     body: (doctorName) =>
-      `For Dr. ${doctorName}, would you like to join today's live queue or book a scheduled appointment time slot?`,
+      `For ${formatDoctorName(doctorName, 'en')}, would you like to join today's live queue or book a scheduled appointment time slot?`,
     joinTitle: 'Join Live Queue',
     slotTitle: 'Book Time Slot',
   },
@@ -96,7 +100,7 @@ const QUEUE_WAIT_TIME_PROMPTS: Record<
 > = {
   mr: {
     body: (doctorName, serving, ahead, wait) =>
-      `डॉ. ${doctorName} — थेट रांग माहिती:
+      `${formatDoctorName(doctorName, 'mr')} — थेट रांग माहिती:
 
 सध्या तपासणी सुरू: ${serving}
 तुमच्या आधी रुग्ण: ${ahead}
@@ -107,7 +111,7 @@ const QUEUE_WAIT_TIME_PROMPTS: Record<
   },
   hi: {
     body: (doctorName, serving, ahead, wait) =>
-      `डॉ. ${doctorName} — लाइव कतार स्थिति:
+      `${formatDoctorName(doctorName, 'hi')} — लाइव कतार स्थिति:
 
 वर्तमान में सेवारत: ${serving}
 आपसे पहले मरीज़: ${ahead}
@@ -118,7 +122,7 @@ const QUEUE_WAIT_TIME_PROMPTS: Record<
   },
   en: {
     body: (doctorName, serving, ahead, wait) =>
-      `Dr. ${doctorName} — Live Queue Status:
+      `${formatDoctorName(doctorName, 'en')} — Live Queue Status:
 
 Currently serving: ${serving}
 Patients ahead: ${ahead}
@@ -163,7 +167,7 @@ const QUEUE_CONFIRMATION: Record<
   (token: number, doctor: string, patient: string, serving: number | string, wait: number, url: string) => string
 > = {
   mr: (token, doctor, patient, serving, wait, url) =>
-    `तुम्ही डॉ. ${doctor} यांच्या रांगेत सामील झाला आहात.
+    `तुम्ही ${formatDoctorName(doctor, 'mr')} यांच्या रांगेत सामील झाला आहात.
 
 रुग्ण: ${patient}
 तुमचा टोकन क्रमांक: ${token}
@@ -174,7 +178,7 @@ const QUEUE_CONFIRMATION: Record<
 
 तुम्ही बाहेर थांबू शकता — तुमचा नंबर जवळ आल्यावर आम्ही कळवू.`,
   hi: (token, doctor, patient, serving, wait, url) =>
-    `आप डॉ. ${doctor} की कतार में शामिल हो गए हैं।
+    `आप ${formatDoctorName(doctor, 'hi')} की कतार में शामिल हो गए हैं।
 
 मरीज़: ${patient}
 आपका टोकन नंबर: ${token}
@@ -185,7 +189,7 @@ const QUEUE_CONFIRMATION: Record<
 
 आप बाहर इंतज़ार कर सकते हैं — आपकी बारी पास आने पर हम सूचित करेंगे।`,
   en: (token, doctor, patient, serving, wait, url) =>
-    `You're in the queue for Dr. ${doctor}.
+    `You're in the queue for ${formatDoctorName(doctor, 'en')}.
 
 Patient: ${patient}
 Your token number: ${token}
@@ -197,31 +201,43 @@ Track position: ${url}
 You don't need to wait inside — we'll message you when your token is close.`,
 };
 
-const SLOT_CONFIRMATION: Record<Locale, (doctor: string, patient: string, datetime: string) => string> = {
-  mr: (doctor, patient, datetime) =>
+const SLOT_CONFIRMATION: Record<
+  Locale,
+  (doctor: string, patient: string, datetime: string, token: number, url: string) => string
+> = {
+  mr: (doctor, patient, datetime, token, url) =>
     `तुमची अपॉइंटमेंट निश्चित झाली आहे.
 
 रुग्ण: ${patient}
-डॉक्टर: डॉ. ${doctor}
+डॉक्टर: ${formatDoctorName(doctor, 'mr')}
 तारीख व वेळ: ${datetime}
+टोकन क्रमांक: ${token}
 
-आम्ही अपॉइंटमेंटपूर्वी तुम्हाला स्मरणपत्र पाठवू.`,
-  hi: (doctor, patient, datetime) =>
+रांगेतील स्थिती पाहा: ${url}
+
+आम्ही अपॉइंटमेंटच्या 15 मिनिटे आधी तुम्हाला स्मरणपत्र पाठवू.`,
+  hi: (doctor, patient, datetime, token, url) =>
     `आपकी अपॉइंटमेंट की पुष्टि हो गई है।
 
 मरीज़: ${patient}
-डॉक्टर: डॉ. ${doctor}
+डॉक्टर: ${formatDoctorName(doctor, 'hi')}
 दिनांक और समय: ${datetime}
+टोकन नंबर: ${token}
 
-हम आपकी अपॉइंटमेंट से पहले आपको स्मरण पत्र भेजेंगे।`,
-  en: (doctor, patient, datetime) =>
+कतार स्थिति देखें: ${url}
+
+हम आपकी अपॉइंटमेंट से 15 मिनट पहले आपको स्मरण पत्र भेजेंगे।`,
+  en: (doctor, patient, datetime, token, url) =>
     `Your appointment is confirmed.
 
 Patient: ${patient}
-Doctor: Dr. ${doctor}
+Doctor: ${formatDoctorName(doctor, 'en')}
 Date & time: ${datetime}
+Token number: ${token}
 
-We'll send you a reminder before your appointment.`,
+Track position: ${url}
+
+We'll send you a reminder 15 minutes before your appointment.`,
 };
 
 const ACTIVE_CHOICE_PROMPTS: Record<
@@ -239,7 +255,7 @@ const ACTIVE_CHOICE_PROMPTS: Record<
       `तुमची एक अपॉइंटमेंट आधीच नोंदवलेली आहे!
 
 टोकन क्रमांक: ${token}
-डॉक्टर: डॉ. ${doctor}
+डॉक्टर: ${formatDoctorName(doctor, 'mr')}
 
 रांगेतील सद्यस्थिती इथे पाहा:
 ${url}
@@ -255,7 +271,7 @@ ${url}
       `आपका एक टोकन पहले से सक्रिय है!
 
 टोकन नंबर: ${token}
-डॉक्टर: डॉ. ${doctor}
+डॉक्टर: ${formatDoctorName(doctor, 'hi')}
 
 कतार में अपनी स्थिति यहाँ देखें:
 ${url}
@@ -271,7 +287,7 @@ ${url}
       `You already have an active appointment booked!
 
 Token number: ${token}
-Doctor: Dr. ${doctor}
+Doctor: ${formatDoctorName(doctor, 'en')}
 
 Track your position in the queue here:
 ${url}
@@ -292,7 +308,7 @@ const SHOW_ACTIVE_PROMPTS: Record<
     `तुमच्या सद्य अपॉइंटमेंटची माहिती खालीलप्रमाणे आहे:
 
 टोकन क्रमांक: ${token}
-डॉक्टर: डॉ. ${doctor}
+डॉक्टर: ${formatDoctorName(doctor, 'mr')}
 
 रांगेतील सद्यस्थिती इथे पाहा:
 ${url}`,
@@ -300,7 +316,7 @@ ${url}`,
     `आपकी वर्तमान अपॉइंटमेंट का विवरण:
 
 टोकन नंबर: ${token}
-डॉक्टर: डॉ. ${doctor}
+डॉक्टर: ${formatDoctorName(doctor, 'hi')}
 
 कतार में अपनी स्थिति यहाँ देखें:
 ${url}`,
@@ -308,7 +324,7 @@ ${url}`,
     `Here are your active appointment details:
 
 Token number: ${token}
-Doctor: Dr. ${doctor}
+Doctor: ${formatDoctorName(doctor, 'en')}
 
 Track your position in the queue here:
 ${url}`,
@@ -316,19 +332,19 @@ ${url}`,
 
 const REDIRECT_WEB: Record<Locale, (doctor: string, url: string) => string> = {
   mr: (doctor, url) =>
-    `डॉ. ${doctor} यांच्याकडे अपॉइंटमेंटची वेळ निवडण्यासाठी, कृपया आमच्या वेबसाईटवर उपलब्ध स्लॉट निवडा:
+    `${formatDoctorName(doctor, 'mr')} यांच्याकडे अपॉइंटमेंटची वेळ निवडण्यासाठी, कृपया उपलब्ध वेळ निवडा:
 
 ${url}
 
 आम्ही अपॉइंटमेंटपूर्वी तुम्हाला स्मरणपत्र पाठवू.`,
   hi: (doctor, url) =>
-    `डॉ. ${doctor} के साथ अपॉइंटमेंट का समय चुनने के लिए, कृपया हमारी वेबसाइट पर उपलब्ध स्लॉट चुनें:
+    `${formatDoctorName(doctor, 'hi')} के साथ अपॉइंटमेंट का समय चुनने के लिए, कृपया उपलब्ध स्लॉट चुनें:
 
 ${url}
 
 हम आपकी अपॉइंटमेंट से पहले आपको स्मरण पत्र भेजेंगे।`,
   en: (doctor, url) =>
-    `To choose your appointment time for Dr. ${doctor}, please select an available slot on our website:
+    `To choose your appointment time for ${formatDoctorName(doctor, 'en')}, please select an available slot on our website:
 
 ${url}
 
@@ -629,7 +645,7 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
           const desc = doctor.specialty ? `${doctor.specialty} (${modeTag})` : `(${modeTag})`;
           return {
             id: `doc:${doctor.id}`,
-            title: fitListTitle(doctor.name),
+            title: fitListTitle(formatDoctorName(doctor.name, locale)),
             description: fitListTitle(desc),
           };
         }),
@@ -749,15 +765,84 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
 
     case 'ask_slot': {
       const doctor = doctors.find((d) => d.id === step.doctorId);
-      const doctorName = doctor?.name ?? '';
+      if (!doctor) break;
+      const doctorDisplayName = formatDoctorName(doctor.name, locale);
+
+      const scheduleResult = await getDoctorSlotsForDate({
+        hospitalId,
+        doctorId: doctor.id,
+        serviceDate: today,
+      });
+      const availableSlots = scheduleResult.slots.filter((s) => s.available);
+
+      const baseUrl = process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000';
+      const bookUrl = `${baseUrl}/book?doctor=${doctor.id}&phone=${encodeURIComponent(phoneE164)}&hospital=${hospitalId}&locale=${locale}`;
+
+      if (availableSlots.length === 0) {
+        const sent = await provider.sendText({
+          phoneNumberId: inbound.phoneNumberId,
+          toPhoneE164: phoneE164,
+          body: REDIRECT_WEB[locale](doctor.name, bookUrl),
+        });
+        await withTenant(hospitalId, (tx) =>
+          tx.insert(notificationOutbox).values({
+            hospitalId,
+            milestone: 'conversation:redirect_web_slot',
+            templateCode: 'conversation',
+            locale,
+            payload: { doctorId: doctor.id, url: bookUrl },
+            status: 'sent',
+            providerMessageId: sent.providerMessageId,
+            sentAt: new Date(),
+          }),
+        );
+        break;
+      }
+
       const promptBody =
         locale === 'mr'
-          ? `डॉ. ${doctorName} वेळेनुसार अपॉइंटमेंट घेतात. उपलब्ध वेळ निवडा:`
+          ? `${doctorDisplayName} वेळेनुसार अपॉइंटमेंट घेतात. उपलब्ध वेळ निवडा:`
           : locale === 'hi'
-            ? `डॉ. ${doctorName} निर्धारित अपॉइंटमेंट लेते हैं। उपलब्ध समय चुनें:`
-            : `Dr. ${doctorName} takes scheduled appointments. Choose an available time:`;
+            ? `${doctorDisplayName} निर्धारित अपॉइंटमेंट लेते हैं। उपलब्ध समय चुनें:`
+            : `${doctorDisplayName} takes scheduled appointments. Choose an available time:`;
 
-      await sendList(promptBody, SLOT_ROWS[locale], 'conversation:slot');
+      const firstSlot = availableSlots[0];
+      const nowTitle =
+        locale === 'mr'
+          ? `आताचा वेळ (${firstSlot.timeStr})`
+          : locale === 'hi'
+            ? `अभी का समय (${firstSlot.timeStr})`
+            : `Coming now (${firstSlot.timeStr})`;
+
+      const laterTitle =
+        locale === 'mr'
+          ? 'वेबसाईटवर वेळ निवडा'
+          : locale === 'hi'
+            ? 'वेबसाइट पर समय चुनें'
+            : 'Select slot on web';
+
+      const rows: ListRow[] = [
+        {
+          id: 'slot:now',
+          title: fitListTitle(nowTitle),
+          description: fitListTitle(firstSlot.timeStr),
+        },
+      ];
+
+      for (const slot of availableSlots.slice(1, 6)) {
+        rows.push({
+          id: `slot:${slot.datetimeIso}`,
+          title: fitListTitle(slot.timeStr),
+        });
+      }
+
+      rows.push({
+        id: 'slot:later',
+        title: fitListTitle(laterTitle),
+        description: fitListTitle('More dates & times'),
+      });
+
+      await sendList(promptBody, rows, 'conversation:slot');
       break;
     }
 
@@ -772,24 +857,95 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
       const pAge = step.patientAge ?? transition.context.patientAge;
       const patientDisplay = pAge ? `${pName} (${pAge} yrs)` : pName;
 
-      const timeString = step.slot === 'now' ? 'Today (Next Available Slot)' : 'Today (Scheduled)';
+      let slotIso: string | undefined;
+      let slotDisplayTime: string | undefined;
+
+      if (step.slot === 'now') {
+        const scheduleResult = await getDoctorSlotsForDate({
+          hospitalId,
+          doctorId: doctor.id,
+          serviceDate: today,
+        });
+        const availableSlots = scheduleResult.slots.filter((s) => s.available);
+        if (availableSlots.length > 0) {
+          slotIso = availableSlots[0].datetimeIso;
+          slotDisplayTime = availableSlots[0].timeStr;
+        }
+      } else {
+        const slotDate = new Date(step.slot);
+        if (!isNaN(slotDate.getTime())) {
+          slotIso = step.slot;
+        }
+      }
+
+      const baseUrl = process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000';
+
+      if (!slotIso) {
+        const bookUrl = `${baseUrl}/book?doctor=${doctor.id}&phone=${encodeURIComponent(phoneE164)}&hospital=${hospitalId}&locale=${locale}`;
+        const sent = await provider.sendText({
+          phoneNumberId: inbound.phoneNumberId,
+          toPhoneE164: phoneE164,
+          body: REDIRECT_WEB[locale](doctor.name, bookUrl),
+        });
+        await withTenant(hospitalId, (tx) =>
+          tx.insert(notificationOutbox).values({
+            hospitalId,
+            milestone: 'conversation:redirect_web_slot',
+            templateCode: 'conversation',
+            locale,
+            payload: { doctorId: doctor.id, url: bookUrl },
+            status: 'sent',
+            providerMessageId: sent.providerMessageId,
+            sentAt: new Date(),
+          }),
+        );
+        break;
+      }
+
+      const booked = await bookScheduledSlot({
+        hospitalId,
+        doctorId: doctor.id,
+        patientName: pName,
+        patientAge: pAge,
+        phoneE164,
+        slotDatetimeIso: slotIso,
+        locale,
+      });
+
+      const formattedTime = slotDisplayTime ?? booked.slotTimeFormatted;
+      const timeString =
+        locale === 'mr'
+          ? `आज ${formattedTime} वाजता`
+          : locale === 'hi'
+            ? `आज ${formattedTime} बजे`
+            : `Today at ${formattedTime}`;
+
       const sent = await provider.sendText({
         phoneNumberId: inbound.phoneNumberId,
         toPhoneE164: phoneE164,
-        body: SLOT_CONFIRMATION[locale](doctor.name, patientDisplay, timeString),
+        body: SLOT_CONFIRMATION[locale](
+          doctor.name,
+          patientDisplay,
+          timeString,
+          booked.tokenNumber,
+          `${baseUrl}/q/${booked.publicToken}`,
+        ),
       });
 
       await withTenant(hospitalId, (tx) =>
-        tx.insert(notificationOutbox).values({
-          hospitalId,
-          milestone: 'conversation:confirm_slot',
-          templateCode: 'conversation',
-          locale,
-          payload: { doctorId: doctor.id, slot: step.slot },
-          status: 'sent',
-          providerMessageId: sent.providerMessageId,
-          sentAt: new Date(),
-        }),
+        tx
+          .update(notificationOutbox)
+          .set({
+            status: 'sent',
+            providerMessageId: sent.providerMessageId,
+            sentAt: new Date(),
+          })
+          .where(
+            and(
+              eq(notificationOutbox.appointmentId, booked.appointment.id),
+              eq(notificationOutbox.milestone, 'queue_link'),
+            ),
+          ),
       );
       break;
     }
