@@ -37,12 +37,16 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
   const session = await requireSession();
   const params = await searchParams;
   const now = new Date();
+  const requestId = `page_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+
+  console.log(`[PERF:dashboard:page] req=${requestId} render at ${now.toISOString()} params=${JSON.stringify(params)}`);
 
   const isOwner = session.role === 'owner';
 
   // Single consolidated loader — one transaction, parallel queries
   const { branches, doctors, snapshot, usage, tiers } = await loadDashboardData({
     hospitalId: session.hospitalId,
+    requestId,
     branchId:
       (typeof params.branch === 'string' ? params.branch : null) ??
       session.branchId ??

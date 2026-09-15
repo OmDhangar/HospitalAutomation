@@ -49,19 +49,34 @@ export async function getSubscriptionHistory(
   );
 }
 
+// In-memory cache for active tiers (60s TTL)
+type TierCacheEntry = { data: Tier[]; expiresAt: number };
+let tierCache: TierCacheEntry | null = null;
+const TIER_CACHE_TTL = 60_000;
+
+export function clearTierCache() {
+  tierCache = null;
+}
+
 /**
  * The published rate card, ordered as it should be displayed.
  *
- * Read from the database on every request rather than from the seed constants,
- * so a negotiated price or a deactivated tier is reflected everywhere without a
- * deploy. Nothing in the UI may hardcode these figures.
+ * Read from the database and cached for 60s, so changes reflect quickly
+ * without hitting the admin DB on every dashboard load.
  */
 export async function listActiveTiers(): Promise<Tier[]> {
-  return getAdminDb()
+  if (tierCache && tierCache.expiresAt > Date.now()) {
+    return tierCache.data;
+  }
+
+  const tiers = await getAdminDb()
     .select()
     .from(planTiers)
     .where(eq(planTiers.active, true))
     .orderBy(planTiers.sortOrder);
+
+  tierCache = { data: tiers, expiresAt: Date.now() + TIER_CACHE_TTL };
+  return tiers;
 }
 
 async function tierOrThrow(code: string): Promise<Tier> {

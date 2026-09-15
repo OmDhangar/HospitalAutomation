@@ -16,6 +16,13 @@ export function getDb() {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) throw new Error('DATABASE_URL is not set');
 
+    try {
+      const url = new URL(connectionString);
+      console.log(`[DB:init] host=${url.host} | vercel_region=${process.env.VERCEL_REGION ?? 'local'}`);
+    } catch {
+      // ignore URL parsing error if connectionString is custom format
+    }
+
     cachedClient = postgres(connectionString, {
       max: 10,
       prepare: false,

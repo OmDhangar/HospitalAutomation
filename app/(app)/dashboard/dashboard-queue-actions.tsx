@@ -83,7 +83,6 @@ export function AddWalkInForm({
   doctorId: string;
   branchId: string;
 }) {
-  const router = useRouter();
   const toast = useToast();
 
   const [name, setName] = useState('');
@@ -123,7 +122,6 @@ export function AddWalkInForm({
         setName('');
         setAge('');
         setPhone('');
-        router.refresh();
       } else {
         toast.error('Could not add patient', res.error);
       }
@@ -207,7 +205,6 @@ export function CallNextButton({
   doctorId: string;
   disabled: boolean;
 }) {
-  const router = useRouter();
   const toast = useToast();
   const [isPending, startTransition] = useTransition();
 
@@ -216,7 +213,6 @@ export function CallNextButton({
       const res = await advanceQueueDynamic({ doctorId });
       if (res.ok) {
         toast.success('Next Patient Called', 'Queue advanced to next patient.');
-        router.refresh();
       } else {
         toast.error('Failed to call next patient', res.error);
       }
@@ -252,7 +248,6 @@ export function QueueActionButton({
   size?: 'sm' | 'md' | 'lg' | 'xl';
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
 }) {
-  const router = useRouter();
   const toast = useToast();
   const [isPending, startTransition] = useTransition();
 
@@ -261,7 +256,6 @@ export function QueueActionButton({
       const res = await queueActionDynamic({ doctorId, appointmentId, action });
       if (res.ok) {
         toast.info(`Status Updated: ${label}`);
-        router.refresh();
       } else {
         toast.error(`Failed: ${label}`, res.error);
       }
@@ -288,7 +282,6 @@ export function PriorityButton({
   doctorId: string;
   appointmentId: string;
 }) {
-  const router = useRouter();
   const toast = useToast();
   const [isPending, startTransition] = useTransition();
 
@@ -297,7 +290,6 @@ export function PriorityButton({
       const res = await setPriorityDynamic({ doctorId, appointmentId, priority: 10 });
       if (res.ok) {
         toast.success('Moved to Front', 'Patient assigned priority status.');
-        router.refresh();
       } else {
         toast.error('Priority update failed', res.error);
       }
@@ -324,7 +316,6 @@ export function TogglePauseButton({
   doctorId: string;
   paused: boolean;
 }) {
-  const router = useRouter();
   const toast = useToast();
   const [isPending, startTransition] = useTransition();
 
@@ -333,7 +324,6 @@ export function TogglePauseButton({
       const res = await togglePauseDynamic({ doctorId, paused: !paused });
       if (res.ok) {
         toast.info(paused ? 'Queue Resumed' : 'Queue Paused');
-        router.refresh();
       } else {
         toast.error('Pause operation failed', res.error);
       }

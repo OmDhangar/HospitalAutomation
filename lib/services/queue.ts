@@ -753,26 +753,54 @@ export async function getQueueSnapshotInTx(
     fullHistoryDurations?: boolean;
   },
 ): Promise<QueueSnapshot | null> {
-  // All 4 queries are completely independent — run in parallel in 1 network roundtrip
-  const [doctorRows, dayRows, rows, durations] = await Promise.all([
-    tx
-      .select({ id: doctors.id, name: doctors.name })
-      .from(doctors)
-      .where(eq(doctors.id, args.doctorId)),
-    tx
-      .select()
-      .from(doctorDayStates)
-      .where(
-        and(
-          eq(doctorDayStates.doctorId, args.doctorId),
-          eq(doctorDayStates.serviceDate, args.serviceDate),
-        ),
-      ),
-    loadDayAppointments(tx, { doctorId: args.doctorId, serviceDate: args.serviceDate }),
-    args.fullHistoryDurations
-      ? loadConsultDurations(tx, args.doctorId)
-      : loadConsultDurationsForDate(tx, args.doctorId, args.serviceDate),
+  const t0 = performance.now();
+  // All 4 queries run concurrently over the transaction connection
+  const [
+    { data: doctorRows, duration: tDoc },
+    { data: dayRows, duration: tDay },
+    { data: rows, duration: tAppts },
+    { data: durations, duration: tDurs },
+  ] = await Promise.all([
+    (async () => {
+      const s = performance.now();
+      const res = await tx
+        .select({ id: doctors.id, name: doctors.name })
+        .from(doctors)
+        .where(eq(doctors.id, args.doctorId));
+      return { data: res, duration: performance.now() - s };
+    })(),
+    (async () => {
+      const s = performance.now();
+      const res = await tx
+        .select()
+        .from(doctorDayStates)
+        .where(
+          and(
+            eq(doctorDayStates.doctorId, args.doctorId),
+            eq(doctorDayStates.serviceDate, args.serviceDate),
+          ),
+        );
+      return { data: res, duration: performance.now() - s };
+    })(),
+    (async () => {
+      const s = performance.now();
+      const res = await loadDayAppointments(tx, { doctorId: args.doctorId, serviceDate: args.serviceDate });
+      return { data: res, duration: performance.now() - s };
+    })(),
+    (async () => {
+      const s = performance.now();
+      const res = await (args.fullHistoryDurations
+        ? loadConsultDurations(tx, args.doctorId)
+        : loadConsultDurationsForDate(tx, args.doctorId, args.serviceDate));
+      return { data: res, duration: performance.now() - s };
+    })(),
   ]);
+
+  const tSnapshot = performance.now() - t0;
+  console.log(
+    `[PERF:queue:snapshot] doctor: ${tDoc.toFixed(1)}ms | dayState: ${tDay.toFixed(1)}ms | ` +
+    `appts: ${tAppts.toFixed(1)}ms | durations: ${tDurs.toFixed(1)}ms | total: ${tSnapshot.toFixed(1)}ms`
+  );
 
   const doctor = doctorRows[0];
   if (!doctor) return null;
