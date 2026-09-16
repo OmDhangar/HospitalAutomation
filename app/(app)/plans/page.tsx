@@ -5,7 +5,7 @@ import { requireSession } from '@/lib/auth/session';
 import { canConfigureHospital } from '@/lib/services/auth';
 import { getCurrentSubscription, listActiveTiers } from '@/lib/services/subscriptions';
 
-export const metadata = { title: 'Plans · QueueCare' };
+export const metadata = { title: 'Plans · Qurio' };
 
 export default async function PlansPage() {
   const session = await requireSession();

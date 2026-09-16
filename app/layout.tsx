@@ -20,8 +20,8 @@ const devanagari = Noto_Sans_Devanagari({
 });
 
 export const metadata: Metadata = {
-  title: 'OPD Queue',
-  description: 'Live OPD queue and patient flow',
+  title: 'Qurio — Live OPD Queue & WhatsApp Booking',
+  description: 'Live OPD queue and patient flow management for hospitals and clinics',
 };
 
 export const viewport: Viewport = {

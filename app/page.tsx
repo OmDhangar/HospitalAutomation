@@ -15,7 +15,7 @@ import {
 
 
 export const metadata = {
-  title: 'QueueCare — OPD Queue Management for Hospitals & Clinics',
+  title: 'Qurio — OPD Queue Management for Hospitals & Clinics',
   description:
     'Turn crowded hospital corridors into an orderly digital queue. WhatsApp booking, live queue links, and one-click reception calling.',
 };
@@ -30,7 +30,7 @@ export default function HomePage() {
             <span className="flex size-9 items-center justify-center rounded-xl bg-brand-600 font-bold text-white shadow-sm">
               Q
             </span>
-            <span className="text-lg font-bold tracking-tight text-ink-900">QueueCare</span>
+            <span className="text-lg font-bold tracking-tight text-ink-900">Qurio</span>
           </Link>
 
           <nav className="hidden items-center gap-7 text-xs font-semibold text-ink-600 md:flex">
@@ -149,7 +149,7 @@ export default function HomePage() {
               The Complete Flow
             </span>
             <h2 className="mt-1 text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">
-              How QueueCare runs your physical OPD smoothly
+              How Qurio runs your physical OPD smoothly
             </h2>
             <p className="mt-2 text-sm text-ink-600">
               A patient arrives digitally before arriving physically. Here is what happens from tap
@@ -239,7 +239,7 @@ export default function HomePage() {
               </span>
               <h3 className="text-base font-bold text-ink-900">Automated WhatsApp Nudge</h3>
               <p className="mt-1 mb-4 text-xs text-ink-600 max-w-xs">
-                When only two patients remain ahead, QueueCare messages them automatically to return.
+                When only two patients remain ahead, Qurio messages them automatically to return.
               </p>
               <div className="w-full mt-auto">
                 <MockNudge />
@@ -383,7 +383,7 @@ export default function HomePage() {
               For Solo Practitioners & Small Clinics
             </span>
             <h2 className="mt-2 text-2xl font-bold tracking-tight text-white sm:text-3xl">
-              No receptionist? QueueCare runs straight from your phone.
+              No receptionist? Qurio runs straight from your phone.
             </h2>
             <p className="mt-3 text-sm text-ink-300 leading-relaxed">
               If you practice solo or operate an evening clinic without staff, patients still book
@@ -425,7 +425,7 @@ export default function HomePage() {
               },
               {
                 q: 'What happens when internet connection drops?',
-                a: 'QueueCare is resilient. If your local internet drops, the queue numbers already issued remain valid, and reception can continue via paper fallback or offline queue sync.',
+                a: 'Qurio is resilient. If your local internet drops, the queue numbers already issued remain valid, and reception can continue via paper fallback or offline queue sync.',
               },
               {
                 q: 'What patient data is stored?',
@@ -433,11 +433,11 @@ export default function HomePage() {
               },
               {
                 q: 'Does it replace our existing hospital software?',
-                a: 'No. QueueCare is a dedicated queue tool that sits alongside your existing HMIS, billing, or paper registers without disrupting your clinical workflows.',
+                a: 'No. Qurio is a dedicated queue tool that sits alongside your existing HMIS, billing, or paper registers without disrupting your clinical workflows.',
               },
               {
                 q: 'How long does staff training take?',
-                a: 'Fifteen minutes. The reception interface consists of essentially one primary button: Call Next. If staff know how to use a phone, they can operate QueueCare immediately.',
+                a: 'Fifteen minutes. The reception interface consists of essentially one primary button: Call Next. If staff know how to use a phone, they can operate Qurio immediately.',
               },
             ].map((faq) => (
               <div
@@ -460,7 +460,7 @@ export default function HomePage() {
               Get Started
             </span>
             <h2 className="mt-1 text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">
-              See QueueCare in action
+              See Qurio in action
             </h2>
             <p className="mt-2 text-xs sm:text-sm text-ink-600">
               Fill out this 1-minute form. We will call you to schedule a quick 10-minute demo for
@@ -479,18 +479,21 @@ export default function HomePage() {
         <div className="mx-auto max-w-6xl px-4 sm:px-6">
           <div className="flex flex-col items-center justify-between gap-6 sm:flex-row">
             <div>
-              <p className="text-sm font-bold text-white">QueueCare</p>
+              <p className="text-sm font-bold text-white">Qurio</p>
               <p className="text-xs text-ink-400 mt-0.5">
                 OPD queue and patient flow management for Indian hospitals.
               </p>
             </div>
 
-            <div className="flex items-center gap-6 text-xs">
+            <div className="flex flex-wrap items-center gap-6 text-xs">
               <Link href="/login" className="hover:text-white transition-colors">
                 Hospital Sign In
               </Link>
               <Link href="/book" className="hover:text-white transition-colors">
                 Patient Slot Booking
+              </Link>
+              <Link href="/privacy" className="hover:text-white transition-colors">
+                Privacy Policy
               </Link>
               <a href="#demo" className="hover:text-white transition-colors">
                 Request Demo
@@ -499,7 +502,7 @@ export default function HomePage() {
           </div>
 
           <div className="mt-8 border-t border-ink-800 pt-6 text-center text-[11px] text-ink-500">
-            © {new Date().getFullYear()} QueueCare. All rights reserved. Privacy by design.
+            © {new Date().getFullYear()} Qurio. All rights reserved. Privacy by design.
           </div>
         </div>
       </footer>

@@ -3,7 +3,7 @@ import { Alert, Button, Field, Input } from '@/components/ui';
 import { getSession, setSessionCookie } from '@/lib/auth/session';
 import { login } from '@/lib/services/auth';
 
-export const metadata = { title: 'Sign in · OPD Queue' };
+export const metadata = { title: 'Sign in · Qurio' };
 
 async function signIn(formData: FormData) {
   'use server';
@@ -32,7 +32,7 @@ export default async function LoginPage({
           <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-xl bg-brand-600 text-xl font-bold text-white">
             Q
           </div>
-          <h1 className="text-xl font-semibold text-ink-900">OPD Queue</h1>
+          <h1 className="text-xl font-semibold text-ink-900">Qurio</h1>
           <p className="mt-1 text-sm text-ink-500">Sign in to your hospital dashboard</p>
         </div>
 

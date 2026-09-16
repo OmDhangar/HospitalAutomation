@@ -196,7 +196,7 @@ export function SubscriptionCard({
       <Card>
         <CardHeader title="Subscription" hint="No plan assigned yet" />
         <div className="px-5 py-6 text-sm text-ink-600">
-          This hospital has not been placed on a plan. Ask your QueueCare contact
+          This hospital has not been placed on a plan. Ask your Qurio contact
           to set one up — the queue works in the meantime.
         </div>
       </Card>

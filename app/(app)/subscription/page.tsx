@@ -17,7 +17,7 @@ import {
 } from '@/lib/services/subscriptions';
 import { getHospitalUsage, getMessageBreakdown } from '@/lib/services/usage';
 
-export const metadata = { title: 'Subscription · QueueCare' };
+export const metadata = { title: 'Subscription · Qurio' };
 
 export default async function SubscriptionPage() {
   const session = await requireSession();
@@ -47,7 +47,7 @@ export default async function SubscriptionPage() {
       <Card>
         <EmptyState
           title="No plan assigned yet"
-          hint="Your queue works normally. Ask your QueueCare contact to set up a plan."
+          hint="Your queue works normally. Ask your Qurio contact to set up a plan."
         />
       </Card>
     );
@@ -194,7 +194,7 @@ export default async function SubscriptionPage() {
               ) : null}
             </dl>
             <p className="border-t border-ink-200 px-5 py-3 text-xs leading-relaxed text-ink-500">
-              To change plan, billing cycle or renewal, contact your QueueCare
+              To change plan, billing cycle or renewal, contact your Qurio
               representative. Online payment is not available yet.
             </p>
           </Card>

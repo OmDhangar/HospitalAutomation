@@ -18,7 +18,7 @@ export function DemoForm() {
         <h3 className="text-xl font-bold text-ink-900">Demo Request Received</h3>
         <p className="mt-2 text-sm text-ink-600 leading-relaxed max-w-md mx-auto">
           Thank you! We will call you on your mobile number today to schedule a brief 10-minute
-          walkthrough of QueueCare for your hospital or clinic.
+          walkthrough of Qurio for your hospital or clinic.
         </p>
       </div>
     );
