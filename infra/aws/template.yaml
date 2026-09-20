@@ -1,0 +1,248 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Drains the QueueCare notification outbox on a schedule.
+
+  Vercel's Hobby plan caps cron at one run per day, fired anywhere inside the
+  scheduled hour. Slot reminders are due fifteen minutes before an appointment
+  and web-booking queue links are scheduled for immediately, so neither can be
+  delivered on that cadence. This runs every minute instead.
+
+  Everything here sits inside AWS's permanent free tiers at this volume
+  (~43,200 runs/month): EventBridge Scheduler allows 14M invocations/month and
+  Lambda allows 1M requests plus 400,000 GB-seconds, neither limited to twelve
+  months. It should cost nothing indefinitely.
+
+Parameters:
+  TickUrl:
+    Type: String
+    Description: Full URL of the tick endpoint, e.g. https://your-app.vercel.app/api/internal/tick
+    AllowedPattern: '^https://.+'
+    ConstraintDescription: Must be an https URL.
+
+  SecretParameterName:
+    Type: String
+    Default: /queuecare/tick-secret
+    Description: >
+      Name of the SSM SecureString parameter holding INTERNAL_TICK_SECRET.
+      Created separately so the secret never appears in this template, in the
+      CloudFormation console, or in stack events.
+
+  ScheduleExpression:
+    Type: String
+    Default: rate(1 minute)
+    Description: >
+      How often to drain. One minute bounds worst-case lateness at 60s for both
+      the immediate queue link and the 15-minute slot reminder.
+
+  AlertEmail:
+    Type: String
+    Default: ''
+    Description: >
+      Optional. An address to notify when the tick fails repeatedly. Worth
+      setting: a stopped scheduler breaks reminders silently, and the rest of
+      the product goes on looking healthy.
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
+
+Resources:
+  # Retention set explicitly. The default is "never expire", which slowly turns
+  # a free log group into a billed one.
+  TickLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-tick'
+      RetentionInDays: 14
+
+  TickFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: tick-permissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt TickLogGroup.Arn
+              # Scoped to the one parameter. A wildcard here would let this
+              # function read every secret in the account.
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SecretParameterName}'
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:alias/aws/ssm'
+
+  TickFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: TickLogGroup
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-tick'
+      Runtime: nodejs22.x
+      Handler: index.handler
+      Role: !GetAtt TickFunctionRole.Arn
+      # 128MB is the floor and ample: this waits on one HTTPS call and does no
+      # work of its own. Raising it would only consume the GB-second allowance
+      # faster for no benefit.
+      MemorySize: 128
+      # Longer than the endpoint's own worst case. A cold Vercel function plus
+      # a full outbox batch can take several seconds; 90s means a slow drain is
+      # never truncated halfway through sending.
+      Timeout: 90
+      Environment:
+        Variables:
+          TICK_URL: !Ref TickUrl
+          SECRET_PARAMETER_NAME: !Ref SecretParameterName
+      Code:
+        # Inline, so deploying needs no S3 bucket and no build step. The AWS
+        # SDK v3 is present in the managed Node runtime, so there is nothing to
+        # bundle. Keep this under 4096 characters or CloudFormation rejects it.
+        ZipFile: |
+          const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
+
+          const ssm = new SSMClient({});
+          let cachedSecret;
+
+          /**
+           * Fetched once per container and reused across invocations. At one
+           * run a minute this turns thousands of SSM calls a month into a
+           * handful, and SSM has its own throttling limits worth respecting.
+           */
+          async function getSecret() {
+            if (cachedSecret) return cachedSecret;
+            const result = await ssm.send(new GetParameterCommand({
+              Name: process.env.SECRET_PARAMETER_NAME,
+              WithDecryption: true,
+            }));
+            cachedSecret = result.Parameter.Value;
+            return cachedSecret;
+          }
+
+          exports.handler = async () => {
+            const secret = await getSecret();
+
+            const response = await fetch(process.env.TICK_URL, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${secret}`,
+                'Content-Length': '0',
+              },
+              signal: AbortSignal.timeout(80000),
+            });
+
+            const body = await response.text();
+
+            if (!response.ok) {
+              // Drop the cache on an auth failure so a rotated secret is picked
+              // up on the next run rather than failing until the container is
+              // recycled. The body is truncated and the token never logged.
+              if (response.status === 401 || response.status === 403) {
+                cachedSecret = undefined;
+              }
+              throw new Error(`tick failed: HTTP ${response.status} ${body.slice(0, 200)}`);
+            }
+
+            console.log('tick ok', body.slice(0, 200));
+            return { statusCode: response.status };
+          };
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              # Stops this role being assumed on behalf of another account.
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: invoke-tick
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt TickFunction.Arn
+
+  TickSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub '${AWS::StackName}-every-minute'
+      Description: Drains the QueueCare notification outbox
+      ScheduleExpression: !Ref ScheduleExpression
+      # Off: the window exists to spread load by delaying runs, which is the
+      # opposite of what a reminder needs.
+      FlexibleTimeWindow: { Mode: 'OFF' }
+      State: ENABLED
+      Target:
+        Arn: !GetAtt TickFunction.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        RetryPolicy:
+          # The outbox is drained again in sixty seconds anyway, so a long retry
+          # chain would only stack duplicate work behind a failure.
+          MaximumRetryAttempts: 2
+          MaximumEventAgeInSeconds: 120
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlertEmail
+    Properties:
+      DisplayName: QueueCare tick alerts
+      Subscription:
+        - Endpoint: !Ref AlertEmail
+          Protocol: email
+
+  # Fires on sustained failure, not on a single blip: one failed minute is
+  # invisible to patients because the next run picks the same rows back up.
+  # Five consecutive failures means something is actually broken.
+  TickFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlertEmail
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-tick-failing'
+      AlarmDescription: >
+        The outbox tick has failed five minutes running. Appointment reminders
+        and queue links are not being delivered.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref TickFunction
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 5
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+Outputs:
+  FunctionName:
+    Description: Lambda function name, for logs and manual invocation
+    Value: !Ref TickFunction
+
+  ScheduleName:
+    Description: EventBridge schedule name
+    Value: !Ref TickSchedule
+
+  LogsCommand:
+    Description: Tail the tick logs
+    Value: !Sub 'aws logs tail /aws/lambda/${AWS::StackName}-tick --follow'
+
+  InvokeCommand:
+    Description: Run one drain by hand
+    Value: !Sub 'aws lambda invoke --function-name ${AWS::StackName}-tick /dev/stdout'

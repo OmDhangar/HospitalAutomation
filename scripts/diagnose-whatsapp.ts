@@ -431,6 +431,38 @@ async function main() {
     } else console.log(ok(line));
   }
 
+  /**
+   * Is anything actually draining the queue?
+   *
+   * A row whose scheduled_for passed several minutes ago and is still pending
+   * means no scheduler is calling /api/internal/tick. Nothing errors when that
+   * happens — the outbox simply fills up in silence, and every reminder and
+   * queue link stops arriving while the rest of the product looks healthy.
+   * That is the single easiest failure in this system to miss, so it is checked
+   * explicitly rather than inferred from a status count.
+   */
+  const [stale] = await sql<{ n: number; oldest_minutes: number | null }[]>`
+    select
+      count(*)::int as n,
+      max(extract(epoch from (now() - scheduled_for)) / 60)::int as oldest_minutes
+    from notification_outbox
+    where status = 'pending' and scheduled_for < now() - interval '5 minutes'
+  `;
+
+  if (stale.n > 0) {
+    console.log(
+      bad(
+        `\n  ${stale.n} message(s) overdue by up to ${stale.oldest_minutes} minutes.\n` +
+          '  Nothing is draining the outbox. Reminders and queue links are NOT\n' +
+          '  being delivered. Set up a scheduler to POST /api/internal/tick,\n' +
+          '  or run: npm run worker:tick',
+      ),
+    );
+    blocking += 1;
+  } else {
+    console.log(ok('no overdue messages — the outbox is being drained'));
+  }
+
   const failures = await sql<
     { template_code: string; failed_reason: string | null; attempts: number; n: number }[]
   >`
