@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Button, Card, CardHeader, EmptyState, Stat } from '@/components/ui';
+import { Alert, Button, Card, CardHeader, EmptyState, Stat } from '@/components/ui';
 import {
   SubscriptionStatusPill,
   UsageBar,
@@ -8,19 +8,26 @@ import {
   rupees,
 } from '@/components/subscription';
 import { requireSession } from '@/lib/auth/session';
+import { computeCharge, formatRupees } from '@/lib/domain/billing';
 import { MESSAGE_CATEGORY_LABELS } from '@/lib/domain/message-category';
+import { isRazorpayConfigured, isTestMode } from '@/lib/payments/razorpay';
 import { canConfigureHospital } from '@/lib/services/auth';
+import { listPayments, paymentErrorMessage, type PaymentError } from '@/lib/services/payments';
 import {
   getCurrentSubscription,
   getSubscriptionHistory,
   listActiveTiers,
 } from '@/lib/services/subscriptions';
 import { getHospitalUsage, getMessageBreakdown } from '@/lib/services/usage';
+import { checkPaymentStatus, renewPlan } from './actions';
 
 export const metadata = { title: 'Subscription · Qurio' };
 
-export default async function SubscriptionPage() {
+export default async function SubscriptionPage({
+  searchParams,
+}: PageProps<'/subscription'>) {
   const session = await requireSession();
+  const params = await searchParams;
 
   // Billing is the owner's business, not reception's. Enforced here on the
   // server rather than by hiding a nav link.
@@ -54,12 +61,37 @@ export default async function SubscriptionPage() {
   }
 
   const tier = tiers.find((t) => t.code === subscription.planTierCode);
-  const breakdown = await getMessageBreakdown({
-    hospitalId: session.hospitalId,
-    from: usage.period.start,
-    to: usage.period.end,
-  });
+  const paymentsEnabled = isRazorpayConfigured();
+  const testMode = isTestMode();
+
+  /**
+   * Payment history is only read when payments are actually switched on.
+   *
+   * Not merely an optimisation. Plan and usage are the reason an owner opens
+   * this page, and neither depends on a payment ever having existed — so a
+   * hospital that has never used online payment should not have that page fail
+   * because of a table it does not use. It also keeps the page working on a
+   * deployment where the code shipped ahead of the migration.
+   */
+  const [breakdown, recentPayments] = await Promise.all([
+    getMessageBreakdown({
+      hospitalId: session.hospitalId,
+      from: usage.period.start,
+      to: usage.period.end,
+    }),
+    paymentsEnabled ? listPayments(session.hospitalId) : Promise.resolve([]),
+  ]);
   const totalMessages = breakdown.reduce((sum, row) => sum + row.messages, 0);
+
+  // Shown before the owner commits, so the amount on the Razorpay page is
+  // never a surprise. Computed from the same function that creates the charge.
+  const charge = computeCharge(subscription.pricePaise);
+
+  // A link already waiting to be paid. Surfaced rather than silently reused, so
+  // an owner who lost the tab can find their way back to it.
+  const openPayment = recentPayments.find(
+    (payment) => payment.status === 'created' && payment.shortUrl,
+  );
 
   return (
     <div className="space-y-5">
@@ -72,6 +104,8 @@ export default async function SubscriptionPage() {
           <Button>Compare plans</Button>
         </Link>
       </div>
+
+      <PaymentNotice params={params} />
 
       <UsageNotice usage={usage} />
 
@@ -193,10 +227,67 @@ export default async function SubscriptionPage() {
                 </div>
               ) : null}
             </dl>
-            <p className="border-t border-ink-200 px-5 py-3 text-xs leading-relaxed text-ink-500">
-              To change plan, billing cycle or renewal, contact your Qurio
-              representative. Online payment is not available yet.
-            </p>
+            <div className="space-y-3 border-t border-ink-200 px-5 py-4">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-sm text-ink-600">Renewal amount</span>
+                <span className="numeric text-sm font-semibold text-ink-900">
+                  {formatRupees(charge.totalPaise)}
+                </span>
+              </div>
+              {charge.taxPaise > 0 ? (
+                <p className="text-xs text-ink-500">
+                  {formatRupees(charge.amountPaise)} + {charge.gstPercent}% GST (
+                  {formatRupees(charge.taxPaise)})
+                </p>
+              ) : null}
+
+              {paymentsEnabled ? (
+                <>
+                  <form action={renewPlan}>
+                    <Button type="submit" variant="primary" className="w-full">
+                      {usage.expiry.bucket === 'expired' ? 'Renew now' : 'Renew plan'}
+                    </Button>
+                  </form>
+                  <p className="text-xs leading-relaxed text-ink-500">
+                    Opens a secure Razorpay page. UPI, card and net banking accepted.
+                    {testMode ? ' TEST MODE — no real money moves.' : ''}
+                  </p>
+                </>
+              ) : (
+                <p className="text-xs leading-relaxed text-ink-500">
+                  To renew or change plan, contact your Qurio representative. Online
+                  payment is not enabled for this hospital yet.
+                </p>
+              )}
+
+              {openPayment?.shortUrl ? (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-xs leading-relaxed text-amber-900">
+                    A payment link for {formatRupees(openPayment.totalPaise)} is already
+                    open.
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <a
+                      href={openPayment.shortUrl}
+                      className="text-xs font-semibold text-amber-900 underline underline-offset-2"
+                    >
+                      Open payment page
+                    </a>
+                    {/* For the case where the webhook never arrived: paying is
+                        not the same as us having heard about it. */}
+                    <form action={checkPaymentStatus}>
+                      <input type="hidden" name="paymentId" value={openPayment.id} />
+                      <button
+                        type="submit"
+                        className="text-xs font-semibold text-amber-900 underline underline-offset-2"
+                      >
+                        I have already paid
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </Card>
 
           {history.length > 1 ? (
@@ -225,5 +316,56 @@ export default async function SubscriptionPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The outcome of a payment attempt.
+ *
+ * Error codes are matched against the known set rather than printed, so a
+ * crafted query string cannot put arbitrary text on a billing page — the one
+ * place a hospital is most likely to believe what it reads.
+ *
+ * "done" deliberately does not claim success. Razorpay's callback fires when
+ * the customer is redirected, which is not the same as the payment having
+ * settled; the webhook is what confirms it. Saying "paid" here and being wrong
+ * is worse than saying "confirming".
+ */
+function PaymentNotice({
+  params,
+}: {
+  params: Record<string, string | string[] | undefined>;
+}) {
+  const error = typeof params.error === 'string' ? params.error : null;
+  const payment = typeof params.payment === 'string' ? params.payment : null;
+
+  const KNOWN: PaymentError['code'][] = [
+    'NOT_CONFIGURED',
+    'NO_SUBSCRIPTION',
+    'NOT_PERMITTED',
+    'GATEWAY_UNAVAILABLE',
+    'ALREADY_PAID',
+  ];
+  const known = KNOWN.find((code) => code === error);
+
+  return (
+    <>
+      {payment === 'done' ? (
+        <Alert tone="warn">
+          Thanks — confirming your payment with the bank. Your plan updates
+          automatically, usually within a minute.
+        </Alert>
+      ) : null}
+      {payment === 'confirmed' ? (
+        <Alert tone="warn">Payment confirmed. Your plan has been extended.</Alert>
+      ) : null}
+      {payment === 'pending' ? (
+        <Alert tone="warn">
+          We have not received this payment yet. If you have just paid, wait a
+          minute and check again.
+        </Alert>
+      ) : null}
+      {known ? <Alert tone="error">{paymentErrorMessage(known)}</Alert> : null}
+    </>
   );
 }

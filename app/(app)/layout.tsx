@@ -1,8 +1,11 @@
 import Link from 'next/link';
 import { Suspense } from 'react';
 import { ToastProvider } from '@/components/toast';
+import { ExpiryBanner } from '@/components/expiry-banner';
 import { MobileNav, type NavItem } from '@/components/mobile-nav';
-import { requireSession } from '@/lib/auth/session';
+import { getSession, requireSession } from '@/lib/auth/session';
+import { daysUntilExpiry, expiryBucket } from '@/lib/domain/subscription';
+import { getCurrentSubscription } from '@/lib/services/subscriptions';
 import { signOutAction } from './dashboard/actions';
 
 /**
@@ -84,6 +87,31 @@ async function AppHeader() {
   );
 }
 
+/**
+ * Reads the current subscription and renders the expiry strip.
+ *
+ * Its own component so the query lives inside the Suspense boundary above and
+ * cannot delay the page shell. Returns nothing at all when the renewal is more
+ * than thirty days out, which is the common case.
+ */
+async function PlanExpiryNotice() {
+  const session = await getSession();
+  if (!session) return null;
+
+  const subscription = await getCurrentSubscription(session.hospitalId);
+  if (!subscription) return null;
+
+  const now = new Date();
+
+  return (
+    <ExpiryBanner
+      bucket={expiryBucket(subscription.endsAt, now)}
+      daysRemaining={daysUntilExpiry(subscription.endsAt, now)}
+      canRenew={session.role === 'owner'}
+    />
+  );
+}
+
 /** Lightweight placeholder while the session resolves. */
 function HeaderSkeleton() {
   return (
@@ -136,7 +164,19 @@ export default function AppLayout({ children }: LayoutProps<'/'>) {
          * below the fold — and the waiting list is the one thing reception
          * needs without scrolling.
          */}
-        <main className="mx-auto max-w-[1600px] px-4 py-4 sm:px-6 lg:py-6">{children}</main>
+        <main className="mx-auto max-w-[1600px] px-4 py-4 sm:px-6 lg:py-6">
+          {/**
+           * Streamed rather than awaited. The banner needs a subscription
+           * lookup, and blocking every page in the app on a billing query to
+           * render a strip that is usually absent would be a poor trade — the
+           * queue has to appear fast. Suspense with no fallback means the page
+           * renders immediately and the banner slots in when it resolves.
+           */}
+          <Suspense fallback={null}>
+            <PlanExpiryNotice />
+          </Suspense>
+          {children}
+        </main>
       </div>
     </ToastProvider>
   );
