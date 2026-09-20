@@ -75,6 +75,71 @@ async function checkToken(phoneNumberId: string, token: string): Promise<TokenCh
   }
 }
 
+type TokenIdentity = {
+  type: string;
+  expiresAt: number;
+  dataAccessExpiresAt: number;
+  isValid: boolean;
+  appId: string;
+  scopes: string[];
+};
+
+/**
+ * Asks Meta what kind of token this is and when it dies.
+ *
+ * Worth doing explicitly, because the three kinds are indistinguishable by
+ * looking at them — all are long opaque strings beginning EAA — and they differ
+ * by three orders of magnitude in lifetime:
+ *
+ *   Graph API Explorer  → USER token,        ~1 hour
+ *   WhatsApp API Setup  → USER token,        24 hours
+ *   System User         → SYSTEM_USER token, never, if set to never
+ *
+ * A production integration wants the third. Discovering you have the first only
+ * when messages stop is the expensive way to find out.
+ */
+async function describeToken(token: string): Promise<TokenIdentity | null> {
+  // debug_token wants an app token. Falling back to the token inspecting
+  // itself keeps this working without META_APP_ID configured.
+  const appId = process.env.META_APP_ID?.trim();
+  const appSecret = process.env.WHATSAPP_APP_SECRET?.trim();
+  const inspector = appId && appSecret ? `${appId}|${appSecret}` : token;
+
+  try {
+    const response = await fetch(
+      `https://graph.facebook.com/v23.0/debug_token` +
+        `?input_token=${encodeURIComponent(token)}` +
+        `&access_token=${encodeURIComponent(inspector)}`,
+      { signal: AbortSignal.timeout(10_000) },
+    );
+
+    const body = (await response.json()) as {
+      data?: {
+        type?: string;
+        expires_at?: number;
+        data_access_expires_at?: number;
+        is_valid?: boolean;
+        app_id?: string;
+        scopes?: string[];
+      };
+    };
+
+    if (!response.ok || !body.data) return null;
+
+    return {
+      type: body.data.type ?? 'UNKNOWN',
+      // Meta reports 0 for "never expires".
+      expiresAt: body.data.expires_at ?? 0,
+      dataAccessExpiresAt: body.data.data_access_expires_at ?? 0,
+      isValid: body.data.is_valid ?? false,
+      appId: body.data.app_id ?? '?',
+      scopes: body.data.scopes ?? [],
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Normalises the way lib/domain/phone.ts does, so lookups match stored rows. */
 function toE164(raw: string): string {
   const digits = raw.replace(/\D/g, '');
@@ -107,6 +172,82 @@ async function main() {
     else {
       console.log(bad(`${name} is NOT set — ${consequence}`));
       blocking += 1;
+    }
+  }
+
+  /* --------------------------------------------- what kind of token is it */
+
+  const token = process.env.WHATSAPP_ACCESS_TOKEN?.trim();
+  if (token) {
+    const identity = await describeToken(token);
+
+    if (!identity) {
+      console.log(warn('Could not introspect the token (set META_APP_ID for a reliable read)'));
+    } else if (!identity.isValid) {
+      console.log(bad('Token is INVALID or already expired — generate a new one'));
+      blocking += 1;
+    } else {
+      const never = identity.expiresAt === 0;
+      const secondsLeft = never ? Infinity : identity.expiresAt * 1000 - Date.now();
+      const hoursLeft = never ? Infinity : Math.round(secondsLeft / 3_600_000);
+
+      console.log(`  token type: ${identity.type}, app ${identity.appId}`);
+
+      if (identity.type === 'SYSTEM_USER' && never) {
+        console.log(ok('Permanent System User token — the right kind for production'));
+      } else if (never) {
+        console.log(ok(`Non-expiring ${identity.type} token`));
+      } else if (hoursLeft <= 2) {
+        /**
+         * A one-to-two hour lifetime means this came from the Graph API
+         * Explorer, which only ever issues short-lived user tokens. No amount
+         * of re-generating it there will produce a lasting one.
+         */
+        console.log(
+          bad(
+            `SHORT-LIVED ${identity.type} token — expires in ~${
+              hoursLeft <= 0 ? 'under an hour' : `${hoursLeft}h`
+            }.`,
+          ),
+        );
+        console.log(
+          '      This is a Graph API Explorer token. It cannot be made to last.\n' +
+            '      Generate a System User token instead: Business Settings →\n' +
+            '      Users → System Users → Add → Generate New Token → expiry Never,\n' +
+            '      with whatsapp_business_messaging + whatsapp_business_management.',
+        );
+        blocking += 1;
+      } else if (hoursLeft <= 24) {
+        console.log(
+          bad(
+            `TEMPORARY ${identity.type} token — expires in ~${hoursLeft}h. This is the\n` +
+              '      24-hour token from WhatsApp → API Setup. Replace it with a\n' +
+              '      permanent System User token before going live.',
+          ),
+        );
+        blocking += 1;
+      } else {
+        const days = Math.round(hoursLeft / 24);
+        console.log(warn(`${identity.type} token expires in ~${days} days — set it to Never`));
+      }
+
+      // Separate from the token's own expiry and easy to miss: data access can
+      // lapse while the token itself is still technically valid.
+      if (identity.dataAccessExpiresAt > 0) {
+        const days = Math.round(
+          (identity.dataAccessExpiresAt * 1000 - Date.now()) / 86_400_000,
+        );
+        if (days < 30) {
+          console.log(warn(`Data access expires in ${days} days`));
+        }
+      }
+
+      const required = ['whatsapp_business_messaging', 'whatsapp_business_management'];
+      const missing = required.filter((scope) => !identity.scopes.includes(scope));
+      if (identity.scopes.length > 0 && missing.length > 0) {
+        console.log(bad(`Missing permission(s): ${missing.join(', ')}`));
+        blocking += 1;
+      }
     }
   }
 
