@@ -141,6 +141,13 @@
       "when": 1789220000000,
       "tag": "0019_whatsapp_integrations",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1789260000000,
+      "tag": "0020_payments",
+      "breakpoints": true
     }
   ]
 }

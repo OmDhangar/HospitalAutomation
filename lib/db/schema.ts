@@ -54,6 +54,29 @@ export const whatsappNumberStatus = pgEnum('whatsapp_number_status', [
 ]);
 
 /**
+ * One attempt to collect money, and how it ended.
+ *
+ * `created` is a link that exists and has not been paid — the normal resting
+ * state of an unpaid renewal, and distinct from `failed`, which means someone
+ * tried and the payment did not go through.
+ */
+export const paymentStatus = pgEnum('payment_status', [
+  'created',
+  'paid',
+  'failed',
+  'cancelled',
+  'expired',
+  'refunded',
+]);
+
+export const paymentPurpose = pgEnum('payment_purpose', [
+  'renewal',
+  'upgrade',
+  'setup_fee',
+  'other',
+]);
+
+/**
  * Whether QueueCare can talk to this hospital's WhatsApp provider at all.
  *
  * Deliberately not the same thing as `whatsappNumberStatus`, which says whether
@@ -906,5 +929,66 @@ export const auditLogs = pgTable(
   (t) => [
     index('audit_logs_hospital_idx').on(t.hospitalId, t.createdAt),
     index('audit_logs_actor_idx').on(t.actorUserId, t.createdAt),
+  ],
+);
+
+/**
+ * One attempt to collect money from a hospital.
+ *
+ * Deliberately not folded into `subscriptions`. A subscription row is the
+ * agreement — tier, price, term. A payment is an attempt to collect against
+ * it, and the two are not one-to-one in either direction: a renewal may be
+ * attempted three times before a card works, and a link may be created and
+ * never paid. Merging them would make "active" mean two different things and
+ * discard every failed attempt — which is precisely the history needed when a
+ * hospital says they paid and their plan lapsed anyway.
+ *
+ * Amount and tax are copied onto the row rather than read through to the
+ * subscription, for the same reason `subscriptions` copies price: a September
+ * invoice must stay reproducible after October's repricing.
+ */
+export const payments = pgTable(
+  'payments',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    /** Null once that term is superseded; the payment still happened. */
+    subscriptionId: uuid('subscription_id').references(() => subscriptions.id, {
+      onDelete: 'set null',
+    }),
+    provider: text('provider').notNull().default('razorpay'),
+    purpose: paymentPurpose('purpose').notNull().default('renewal'),
+    status: paymentStatus('status').notNull().default('created'),
+
+    /** Base amount, excluding tax. */
+    amountPaise: integer('amount_paise').notNull(),
+    /** Held apart so an invoice shows it as its own line. Zero until GST registered. */
+    taxPaise: integer('tax_paise').notNull().default(0),
+    currency: text('currency').notNull().default('INR'),
+
+    providerLinkId: text('provider_link_id'),
+    /** Only exists once someone actually pays. Unique — the idempotency key. */
+    providerPaymentId: text('provider_payment_id'),
+    shortUrl: text('short_url'),
+
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    paidAt: timestamp('paid_at', { withTimezone: true }),
+    /** A category, never a raw gateway message. */
+    failureReason: text('failure_reason'),
+    notes: jsonb('notes').$type<Record<string, unknown>>(),
+
+    updatedAt: updatedAt(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('payments_provider_payment_id')
+      .on(t.providerPaymentId)
+      .where(sql`provider_payment_id is not null`),
+    uniqueIndex('payments_provider_link_id')
+      .on(t.providerLinkId)
+      .where(sql`provider_link_id is not null`),
+    index('payments_hospital_idx').on(t.hospitalId, t.createdAt),
   ],
 );
