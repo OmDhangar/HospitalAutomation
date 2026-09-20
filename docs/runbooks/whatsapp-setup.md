@@ -152,16 +152,30 @@ point at localhost and be dead on the patient's phone.
 6. **Submit the 9 templates** — `npm run whatsapp:templates -- --submit`. All
    UTILITY, never MARKETING: utility is far cheaper and is the correct category
    since every message is triggered by an action, not a promotion.
-7. **Record the number** under that hospital's `/settings/whatsapp`, including the
-   display name, then mark it registered.
+7. **Assign the number** to the hospital from `/admin` → **WhatsApp onboarding**.
+   Paste the phone number id and pick the hospital. Before anything is written,
+   Meta is asked whether that number is actually held in our WABA — a number
+   that is not comes back refused, which is what makes it impossible to hand one
+   hospital another's sender by mistyping an id. Display name, quality rating
+   and tier are read from Meta rather than typed.
 8. **Point the webhook** at the production URL and subscribe to `messages`.
 9. **Send a test** to your own phone before letting a patient near it.
+
+Note that registration status is never set by hand. `/settings/whatsapp` →
+**Check connection** asks Meta, and only a number Meta reports as `VERIFIED`
+becomes `registered` — which is the single condition `resolve_whatsapp_number`
+uses to route inbound messages. There is deliberately no way to assert it from
+the application.
 
 ## Once it is running
 
 - `/admin` → **Sender numbers** shows each hospital's number, status, quality
   rating and tier. A rating dropping to YELLOW is an early warning worth acting
-  on before it becomes RED.
+  on before it becomes RED. **Refresh** pulls the current rating from Meta;
+  **Release** returns a number to unassigned inventory when a hospital leaves.
+- `/admin` → **WhatsApp onboarding** lists hospitals paying for WhatsApp that
+  have no sender number yet. That list should be empty; anything sitting on it
+  is a customer who cannot use what they are being billed for.
 - Record Meta's monthly invoice in `provider_invoices`. The platform dashboard
   then reports real cost per message instead of the planning estimate — and
   since Meta's utility rate falls with volume, the estimate will understate your

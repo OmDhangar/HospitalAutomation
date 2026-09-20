@@ -7,10 +7,29 @@ describe('Meta error classification', () => {
     expect(isRetryableMetaError({ code: 131026, httpStatus: 400 })).toBe(false);
   });
 
-  it('does not retry template problems, which are our mistake to fix', () => {
-    for (const code of [132000, 132001, 132007, 132016]) {
+  it('does not retry template problems that are our mistake to fix', () => {
+    // A wrong parameter count, a format mismatch or a disabled template are
+    // facts about what we submitted. The fifth attempt sends the same thing.
+    for (const code of [132000, 132007, 132012, 132016]) {
       expect(isRetryableMetaError({ code, httpStatus: 400 })).toBe(false);
     }
+  });
+
+  it('DOES retry a template Meta is still reviewing', () => {
+    /**
+     * 132001 was previously classified as permanent alongside the others, and
+     * that was wrong in one specific and expensive case: editing an approved
+     * template returns it to review, and every send fails with this code until
+     * the review finishes — minutes usually, occasionally an hour or more.
+     *
+     * Treating it as permanent meant a routine wording change silently killed
+     * every reminder queued during the review window. The message is still
+     * valid and still wanted; it just has to wait.
+     *
+     * 132015 is the same shape: a quality pause lifts on its own.
+     */
+    expect(isRetryableMetaError({ code: 132001, httpStatus: 400 })).toBe(true);
+    expect(isRetryableMetaError({ code: 132015, httpStatus: 400 })).toBe(true);
   });
 
   it('does not retry an invalid access token', () => {

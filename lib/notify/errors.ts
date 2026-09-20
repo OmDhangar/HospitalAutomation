@@ -30,15 +30,38 @@ const PERMANENT_CODES = new Set([
   131047, // outside the 24-hour window and no template used
   131051, // unsupported message type
   132000, // template parameter count does not match the approved template
-  132001, // template does not exist in this language
   132005, // template text exceeds the approved length
   132007, // template format mismatch
   132012, // template parameter format is invalid
-  132015, // template is paused for quality reasons
   132016, // template is disabled
   133010, // phone number is not registered
   190, //    access token is invalid or expired — configuration, not weather
 ]);
+
+/**
+ * Template errors that look permanent but resolve on their own.
+ *
+ * Editing an approved template puts it back into Meta's review queue, and
+ * sends against it fail for as long as that takes — typically minutes, but up
+ * to a couple of hours. Treating those as permanent means every message queued
+ * during the review window is killed rather than delivered late, so a routine
+ * wording change silently drops a morning of appointment reminders.
+ *
+ * The backoff caps at an hour, which is the right shape for a wait of unknown
+ * length: retries get cheap and sparse rather than giving up.
+ *
+ * 132015 (paused for quality) is here for the same reason — a pause lifts once
+ * quality recovers, and the message is still worth delivering when it does.
+ */
+const TEMPLATE_PENDING_CODES = new Set([
+  132001, // template does not exist in this language — or is mid-review
+  132015, // template paused for quality reasons
+]);
+
+/** True when the failure is a template Meta is still reviewing. */
+export function isTemplateUnderReview(code?: number): boolean {
+  return code !== undefined && TEMPLATE_PENDING_CODES.has(code);
+}
 
 /**
  * Transient failures. These are worth another attempt after a delay.
@@ -59,6 +82,9 @@ export function isRetryableMetaError(args: {
   httpStatus?: number;
 }): boolean {
   if (args.code !== undefined) {
+    // Checked before PERMANENT_CODES: a template under review is the one
+    // "template error" that waiting actually fixes.
+    if (TEMPLATE_PENDING_CODES.has(args.code)) return true;
     if (PERMANENT_CODES.has(args.code)) return false;
     if (RETRYABLE_CODES.has(args.code)) return true;
   }

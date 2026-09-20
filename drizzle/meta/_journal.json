@@ -134,6 +134,13 @@
       "when": 1789180000000,
       "tag": "0018_doctor_schedule_mode_both",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789220000000,
+      "tag": "0019_whatsapp_integrations",
+      "breakpoints": true
     }
   ]
 }

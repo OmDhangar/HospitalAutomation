@@ -14,7 +14,10 @@ receptionist present, not over the phone.
       worthless if every action says "reception"
 - [ ] WhatsApp number registered and all twelve templates approved
       (four kinds × mr/hi/en). Start this two weeks ahead.
-- [ ] `whatsapp_phone_number_id` set on the hospital record
+- [ ] Number assigned to the hospital from `/admin` → **WhatsApp onboarding**,
+      and `/settings/whatsapp` showing **Healthy**. The owner's part of this is
+      one button and approving the sender name their patients will see — if
+      anyone is asking them for a phone number id, something has gone wrong.
 
 ## On site
 

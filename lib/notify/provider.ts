@@ -289,6 +289,21 @@ export class ConsoleProvider implements NotificationProvider {
 
 let cached: NotificationProvider | undefined;
 
+/**
+ * The provider for platform-owned integrations, which today is all of them.
+ *
+ * Cached as a singleton because there is one credential: we hold the Meta
+ * Business Manager and every hospital's number sits under our WABA, so the
+ * token does not vary per hospital and looking one up per message would be a
+ * database read bought for nothing.
+ *
+ * When a hospital-owned integration arrives, this is the seam. The credential
+ * for a given hospital already resolves through `resolveCredential()` in
+ * lib/services/whatsapp-integration.ts — which returns this same environment
+ * token for platform-owned rows and an unsealed per-hospital token otherwise.
+ * Constructing a `MetaCloudProvider` from it per hospital is the whole change;
+ * nothing above this interface has to know it happened.
+ */
 export function getProvider(): NotificationProvider {
   if (cached) return cached;
 

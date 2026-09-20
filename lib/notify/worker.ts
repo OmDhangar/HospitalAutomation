@@ -10,12 +10,18 @@ import {
 import { cleanDoctorName } from '@/lib/domain/booking';
 import { messageRatio, shouldSuppressNonCriticalMessages } from '@/lib/domain/pricing';
 import type { Locale } from '@/lib/i18n/patient';
-import { ProviderError } from './errors';
+import { isTemplateUnderReview, ProviderError } from './errors';
 import { getProvider } from './provider';
 import { isCritical, type TemplateCode } from './templates';
 
 const BATCH_SIZE = 25;
 const MAX_ATTEMPTS = 5;
+/**
+ * Attempts allowed when the only thing wrong is that Meta is re-reviewing a
+ * template. With the capped backoff this spans roughly six hours, which
+ * comfortably outlasts a review that normally finishes in minutes.
+ */
+const TEMPLATE_REVIEW_MAX_ATTEMPTS = 10;
 /** A send that has been in flight longer than this is presumed dead. */
 const STUCK_AFTER_MINUTES = 5;
 
@@ -203,7 +209,22 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
        * the real reason under repeated noise, and every retry is billable.
        */
       const permanent = error instanceof ProviderError && !error.retryable;
-      const giveUp = permanent || attempts >= MAX_ATTEMPTS;
+
+      /**
+       * A template Meta is still reviewing gets a longer rope.
+       *
+       * Editing an approved template returns it to review, and sends against it
+       * fail until that finishes — usually minutes, sometimes an hour or more.
+       * Five attempts over fifteen minutes expires well before the review does,
+       * so an ordinary wording change would quietly fail every reminder queued
+       * that morning. These retry for roughly six hours instead, which outlasts
+       * the review without ever becoming a retry storm: the backoff is already
+       * capped at one hour per attempt.
+       */
+      const underReview =
+        error instanceof ProviderError && isTemplateUnderReview(error.code);
+      const limit = underReview ? TEMPLATE_REVIEW_MAX_ATTEMPTS : MAX_ATTEMPTS;
+      const giveUp = permanent || attempts >= limit;
 
       await db
         .update(notificationOutbox)
@@ -215,7 +236,20 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
         })
         .where(eq(notificationOutbox.id, id));
 
-      if (giveUp) result.failed += 1;
+      if (giveUp) {
+        result.failed += 1;
+      } else if (underReview) {
+        console.warn(
+          '[whatsapp:template_under_review]',
+          JSON.stringify({
+            outbox_id: id,
+            template_code: row.templateCode,
+            hospital_id: row.hospitalId,
+            attempt: attempts,
+            retry_in_seconds: backoffSeconds(attempts),
+          }),
+        );
+      }
     }
   }
 

@@ -53,6 +53,41 @@ export const whatsappNumberStatus = pgEnum('whatsapp_number_status', [
   'released',
 ]);
 
+/**
+ * Whether QueueCare can talk to this hospital's WhatsApp provider at all.
+ *
+ * Deliberately not the same thing as `whatsappNumberStatus`, which says whether
+ * a particular sender is live. An integration can be `connected` while its
+ * number is still `pending` — that is precisely the state a hospital sits in
+ * between credentials working and Meta finishing number registration, and
+ * collapsing the two into one column would make that state unrepresentable.
+ */
+export const whatsappIntegrationStatus = pgEnum('whatsapp_integration_status', [
+  'not_configured',
+  'pending',
+  'validating',
+  'connected',
+  'error',
+  'disconnected',
+]);
+
+/**
+ * Who holds the Meta business assets behind this integration.
+ *
+ * 'platform' is the default and today the only one in use: we own the Business
+ * Manager, the verification and the WABA, and the hospital never signs in to
+ * Meta. 'hospital' is here so that a customer who already owns a verified WABA
+ * can keep it without the platform needing a second architecture.
+ */
+export const whatsappOwnership = pgEnum('whatsapp_ownership', ['platform', 'hospital']);
+
+/** How the credential was obtained. Only 'manual' is implemented today. */
+export const whatsappOnboardingMethod = pgEnum('whatsapp_onboarding_method', [
+  'manual',
+  'embedded_signup',
+  'bsp',
+]);
+
 export const conversationState = pgEnum('conversation_state', [
   'idle',
   'awaiting_language',
@@ -566,6 +601,71 @@ export const whatsappNumbers = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index('whatsapp_numbers_hospital_idx').on(t.hospitalId)],
+);
+
+/**
+ * How QueueCare authenticates with one hospital's WhatsApp provider.
+ *
+ * The split from `whatsappNumbers` is the whole point of this table. A number
+ * answers "which sender can this hospital use, and is it live"; an integration
+ * answers "can we reach the provider at all, and as whom". They fail
+ * independently — a valid credential with an unregistered number, or a
+ * suspended number under a perfectly good credential — and a single table
+ * cannot express either without lying about the other.
+ *
+ * Related by `hospitalId` rather than by a foreign key from `whatsappNumbers`,
+ * because there is exactly one integration per hospital and adding
+ * `integration_id` to the numbers table would duplicate a link that already
+ * exists. The day a hospital needs two WABAs, the unique index below comes off
+ * and that column goes on — a migration, made deliberately, not a shape carried
+ * speculatively for years.
+ *
+ * Credentials are sealed, never stored plain, and are NULL for every
+ * platform-owned row. A database check constraint enforces that rather than
+ * this comment.
+ */
+export const whatsappIntegrations = pgTable(
+  'whatsapp_integrations',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    provider: text('provider').notNull().default('meta'),
+    ownership: whatsappOwnership('ownership').notNull().default('platform'),
+    onboardingMethod: whatsappOnboardingMethod('onboarding_method')
+      .notNull()
+      .default('manual'),
+    status: whatsappIntegrationStatus('status').notNull().default('not_configured'),
+
+    /** Meta business id, informational under platform ownership. */
+    businessId: text('business_id'),
+    /** The WABA this integration's numbers must belong to. */
+    wabaId: text('waba_id'),
+
+    /**
+     * AES-256-GCM parts of the sealed access token, or all NULL.
+     *
+     * Split into columns rather than one blob so a key rotation reads the
+     * version, re-seals, and writes back — without a format migration. Never
+     * selected by any read that feeds the UI; see `lib/services/whatsapp-integration.ts`,
+     * where the safe projection is the only exported shape.
+     */
+    credentialCiphertext: text('credential_ciphertext'),
+    credentialIv: text('credential_iv'),
+    credentialAuthTag: text('credential_auth_tag'),
+    credentialKeyVersion: smallint('credential_key_version'),
+
+    connectedAt: timestamp('connected_at', { withTimezone: true }),
+    lastValidatedAt: timestamp('last_validated_at', { withTimezone: true }),
+    /** A category, never a provider message — those quote the token back. */
+    lastErrorCode: text('last_error_code'),
+    lastErrorAt: timestamp('last_error_at', { withTimezone: true }),
+
+    updatedAt: updatedAt(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('whatsapp_integrations_one_per_hospital').on(t.hospitalId)],
 );
 
 /**

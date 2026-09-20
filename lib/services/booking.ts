@@ -401,6 +401,31 @@ export async function getActiveAppointment(
 }
 
 /**
+ * Records a message that produced no reply, and why.
+ *
+ * Every early return below looks identical from the patient's side: a blue
+ * tick and silence. The read receipt is sent by the webhook route before this
+ * function runs, so "delivered, read, no answer" is the signature of all six
+ * of them at once — which makes them indistinguishable in production unless
+ * each one says which it was.
+ */
+function dropped(
+  inbound: InboundWhatsApp,
+  reason: string,
+  fields: Record<string, unknown> = {},
+): void {
+  console.warn(
+    '[whatsapp:inbound.dropped]',
+    JSON.stringify({
+      reason,
+      phone_number_id: inbound.phoneNumberId,
+      message_id: inbound.messageId,
+      ...fields,
+    }),
+  );
+}
+
+/**
  * Handles one inbound WhatsApp message.
  */
 export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<void> {
@@ -410,10 +435,16 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
     sql`select public.resolve_whatsapp_number(${inbound.phoneNumberId}) as hospital_id`,
   );
   const hospitalId = resolved?.hospital_id;
-  if (!hospitalId) return;
+  if (!hospitalId) {
+    return dropped(inbound, 'unroutable_number', {
+      hint: 'whatsapp_numbers row must be status=registered on an active hospital',
+    });
+  }
 
   const phoneE164 = normalizeIndianPhone(inbound.fromPhone);
-  if (!phoneE164) return;
+  if (!phoneE164) {
+    return dropped(inbound, 'unparseable_sender', { from: inbound.fromPhone });
+  }
 
   const claimed = await withTenant(hospitalId, async (tx) => {
     const rows = await tx
@@ -428,13 +459,22 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
       .returning({ id: idempotencyKeys.id });
     return rows.length > 0;
   });
-  if (!claimed) return;
+  if (!claimed) {
+    // Meta redelivered a message we already claimed. Normally that means the
+    // first attempt succeeded — but if it crashed after claiming and before
+    // replying, this message is now permanently unanswerable.
+    return dropped(inbound, 'already_processed', {
+      hint: 'redelivery, or a crash after the idempotency claim',
+    });
+  }
 
   const now = new Date();
   const today = serviceDateIn('Asia/Kolkata', now);
 
   const doctors = await listDoctors({ hospitalId, serviceDate: today });
-  if (doctors.length === 0) return;
+  if (doctors.length === 0) {
+    return dropped(inbound, 'no_active_doctors', { hospitalId });
+  }
 
   const conversation = await loadConversation(hospitalId, phoneE164);
   const { state, context, knownLocale } = conversation;
@@ -471,6 +511,18 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
   });
 
   let promptsSent = promptsToday;
+
+  if (!decision.send) {
+    // Deliberate silence, not a failure: either the patient already has this
+    // exact prompt on screen (120s cooldown) or the number has spent its daily
+    // budget. Logged because during testing it is indistinguishable from a
+    // broken bot, and that costs hours.
+    dropped(inbound, `suppressed:${decision.reason}`, {
+      step: transition.step.kind,
+      last_prompt_step: conversation.lastPromptStep,
+      prompts_today: promptsToday,
+    });
+  }
 
   const sendText = async (bodyText: string, milestone: string) => {
     if (!decision.send) return;

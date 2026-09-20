@@ -1,4 +1,14 @@
-import { Card, CardHeader, EmptyState, Stat, cn } from '@/components/ui';
+import {
+  Alert,
+  Button,
+  Card,
+  CardHeader,
+  EmptyState,
+  Field,
+  Input,
+  Stat,
+  cn,
+} from '@/components/ui';
 import { requireSession } from '@/lib/auth/session';
 import {
   MESSAGE_RATIO_ALERT,
@@ -7,11 +17,21 @@ import {
   type RatioStatus,
 } from '@/lib/domain/pricing';
 import {
+  INTEGRATION_ERROR_CODES,
+  integrationErrorMessage,
+  type IntegrationErrorCode,
+} from '@/lib/domain/whatsapp-integration';
+import {
   getPortfolioHealth,
   getRecentFailures,
   resolvePaisePerMessage,
 } from '@/lib/services/platform';
-import { listAllNumbers } from '@/lib/services/whatsapp-numbers';
+import {
+  listAllNumbers,
+  listHospitalsAwaitingNumber,
+  listUnassignedNumbers,
+} from '@/lib/services/whatsapp-numbers';
+import { assignNumber, refreshHealth, releaseNumber } from './actions';
 
 export const metadata = { title: 'Platform · OPD Queue' };
 
@@ -25,8 +45,9 @@ const RATIO_STYLES: Record<RatioStatus, string> = {
   breach: 'bg-rose-50 text-rose-800 ring-rose-200',
 };
 
-export default async function AdminPage() {
+export default async function AdminPage({ searchParams }: PageProps<'/admin'>) {
   const session = await requireSession();
+  const params = await searchParams;
 
   if (!session.isPlatformAdmin) {
     return (
@@ -39,11 +60,13 @@ export default async function AdminPage() {
     );
   }
 
-  const [portfolio, failures, numbers, rate] = await Promise.all([
+  const [portfolio, failures, numbers, rate, awaiting, inventory] = await Promise.all([
     getPortfolioHealth(),
     getRecentFailures(),
     listAllNumbers(),
     resolvePaisePerMessage(),
+    listHospitalsAwaitingNumber(),
+    listUnassignedNumbers(),
   ]);
 
   const totals = portfolio.reduce(
@@ -68,6 +91,72 @@ export default async function AdminPage() {
           month
         </p>
       </div>
+
+      <AdminNotices params={params} />
+
+      <Card>
+        <CardHeader
+          title="WhatsApp onboarding"
+          hint="Hospitals paying for WhatsApp that cannot yet send anything"
+        />
+        {awaiting.length === 0 ? (
+          <EmptyState
+            title="Every hospital has a number"
+            hint="Nothing is waiting on onboarding."
+          />
+        ) : (
+          <>
+            <ul className="divide-y divide-ink-200">
+              {awaiting.map((hospital) => (
+                <li key={hospital.id} className="px-5 py-3">
+                  <p className="text-sm font-medium text-ink-900">{hospital.name}</p>
+                  <p className="mt-0.5 text-xs text-ink-500">
+                    No sender number assigned
+                  </p>
+                </li>
+              ))}
+            </ul>
+
+            <form
+              action={assignNumber}
+              className="space-y-4 border-t border-ink-200 bg-ink-50 p-5"
+            >
+              <Field
+                label="Hospital"
+                hint="The number is verified against our WABA before it is attached."
+              >
+                <select
+                  name="hospitalId"
+                  required
+                  className="w-full rounded-lg border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900"
+                >
+                  <option value="">Select a hospital…</option>
+                  {awaiting.map((hospital) => (
+                    <option key={hospital.id} value={hospital.id}>
+                      {hospital.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field
+                label="Phone number id"
+                hint={
+                  inventory.length > 0
+                    ? `Unassigned inventory: ${inventory
+                        .map((n) => n.displayPhoneNumber ?? n.phoneNumberId)
+                        .join(', ')}`
+                    : 'Meta’s numeric id for the number, from WhatsApp → API Setup.'
+                }
+              >
+                <Input name="phoneNumberId" placeholder="123456789012345" required />
+              </Field>
+              <Button type="submit" variant="primary">
+                Assign number
+              </Button>
+            </form>
+          </>
+        )}
+      </Card>
 
       <Card>
         <CardHeader
@@ -203,6 +292,7 @@ export default async function AdminPage() {
                   <th className="px-5 py-2.5 font-medium">Status</th>
                   <th className="px-5 py-2.5 font-medium">Quality</th>
                   <th className="px-5 py-2.5 font-medium">Tier</th>
+                  <th className="px-5 py-2.5 text-right font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-200">
@@ -252,6 +342,48 @@ export default async function AdminPage() {
                     <td className="px-5 py-3 text-xs text-ink-500">
                       {number.messagingTier ?? '—'}
                     </td>
+                    <td className="px-5 py-3">
+                      <div className="flex items-center justify-end gap-3">
+                        <form action={refreshHealth}>
+                          <input
+                            type="hidden"
+                            name="phoneNumberId"
+                            value={number.phoneNumberId}
+                          />
+                          <button
+                            type="submit"
+                            className="text-xs font-medium text-ink-600 underline-offset-2 hover:underline"
+                            title="Ask Meta for the current quality rating and tier"
+                          >
+                            Refresh
+                          </button>
+                        </form>
+                        {number.hospitalId ? (
+                          <form action={releaseNumber} className="flex items-center gap-1.5">
+                            <input
+                              type="hidden"
+                              name="phoneNumberId"
+                              value={number.phoneNumberId}
+                            />
+                            <input
+                              name="confirm"
+                              placeholder="RELEASE"
+                              autoComplete="off"
+                              aria-label={`Type RELEASE to return ${
+                                number.displayPhoneNumber ?? number.phoneNumberId
+                              } to inventory`}
+                              className="w-24 rounded border border-ink-300 px-1.5 py-0.5 text-xs"
+                            />
+                            <button
+                              type="submit"
+                              className="text-xs font-medium text-rose-700 underline-offset-2 hover:underline"
+                            >
+                              Release
+                            </button>
+                          </form>
+                        ) : null}
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -295,5 +427,45 @@ export default async function AdminPage() {
         )}
       </Card>
     </div>
+  );
+}
+
+/**
+ * Outcomes from the platform actions.
+ *
+ * Error codes are matched against the known list rather than printed, so a
+ * crafted query string cannot render arbitrary text on an admin page.
+ */
+function AdminNotices({
+  params,
+}: {
+  params: Record<string, string | string[] | undefined>;
+}) {
+  const error = typeof params.error === 'string' ? params.error : null;
+  const known = INTEGRATION_ERROR_CODES.find((code) => code === error);
+
+  return (
+    <>
+      {params.assigned ? (
+        <Alert tone="warn">Number assigned and verified against our WABA.</Alert>
+      ) : null}
+      {params.refreshed ? <Alert tone="warn">Health refreshed from Meta.</Alert> : null}
+      {params.released ? (
+        <Alert tone="warn">Number returned to unassigned inventory.</Alert>
+      ) : null}
+      {known ? (
+        <Alert tone="error">
+          {integrationErrorMessage(known as IntegrationErrorCode)}
+        </Alert>
+      ) : null}
+      {error === 'CONFIRM' ? (
+        <Alert tone="error">
+          Type RELEASE exactly to confirm. Nothing has been changed.
+        </Alert>
+      ) : null}
+      {error === 'PERMISSION_DENIED' && !known ? (
+        <Alert tone="error">Not permitted.</Alert>
+      ) : null}
+    </>
   );
 }
