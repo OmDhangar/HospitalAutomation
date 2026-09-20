@@ -26,6 +26,55 @@ function arg(name: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
+type TokenCheck = {
+  okay: boolean;
+  expired: boolean;
+  detail: string;
+  verifiedName?: string;
+};
+
+/**
+ * Asks Meta whether the token can actually read this number.
+ *
+ * A read, never a send: it proves the credential without costing a message or
+ * bothering a patient. The token itself is never printed, and Meta's own error
+ * text is discarded because it quotes the token back inside the message.
+ */
+async function checkToken(phoneNumberId: string, token: string): Promise<TokenCheck> {
+  try {
+    const response = await fetch(
+      `https://graph.facebook.com/v23.0/${encodeURIComponent(phoneNumberId)}` +
+        '?fields=id,verified_name,quality_rating',
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+
+    const body = (await response.json()) as {
+      verified_name?: string;
+      error?: { code?: number; type?: string };
+    };
+
+    if (response.ok) {
+      return { okay: true, expired: false, detail: 'ok', verifiedName: body.verified_name };
+    }
+
+    const code = body.error?.code;
+    return {
+      okay: false,
+      expired: code === 190,
+      detail: `http ${response.status}, code ${code ?? '?'}`,
+    };
+  } catch (error) {
+    return {
+      okay: false,
+      expired: false,
+      detail: error instanceof Error ? error.name : 'network error',
+    };
+  }
+}
+
 /** Normalises the way lib/domain/phone.ts does, so lookups match stored rows. */
 function toE164(raw: string): string {
   const digits = raw.replace(/\D/g, '');
@@ -143,6 +192,36 @@ async function main() {
 
     if (resolved?.hospital_id) {
       console.log(ok(`${label} — resolves, status=${n.status}, id=${n.phone_number_id}`));
+
+      /**
+       * Routing being correct proves nothing about whether we can reply.
+       *
+       * A token that is merely present passes every check that does not call
+       * Meta, and an expired one fails the reply *and* the read receipt — which
+       * is wrapped in .catch(() => {}) and so disappears without trace. The
+       * visible result is a message that arrives with no blue tick and no
+       * answer, which looks like a webhook problem and is not one. Only a real
+       * request settles it.
+       */
+      const token = process.env.WHATSAPP_ACCESS_TOKEN;
+      if (token) {
+        const live = await checkToken(n.phone_number_id, token);
+        if (live.okay) {
+          console.log(ok(`      token works — Meta returned '${live.verifiedName}'`));
+        } else {
+          console.log(bad(`      TOKEN REJECTED BY META (${live.detail})`));
+          if (live.expired) {
+            console.log(
+              '      Error 190 means the token is expired or revoked. A token\n' +
+                '      copied from the App Dashboard lasts 24 hours. Generate a\n' +
+                '      permanent one: Business Settings → System Users → Add →\n' +
+                '      Admin → Generate token, with whatsapp_business_messaging\n' +
+                '      and whatsapp_business_management.',
+            );
+          }
+          blocking += 1;
+        }
+      }
     } else {
       console.log(bad(`${label} — DOES NOT RESOLVE. Inbound is dropped silently.`));
       if (n.status !== 'registered') {

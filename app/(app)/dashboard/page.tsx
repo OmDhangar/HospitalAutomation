@@ -157,17 +157,28 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
               }
             />
 
-            <div className="p-6">
+            {/**
+             * Padding and token size step up with the viewport rather than
+             * being fixed.
+             *
+             * At a fixed size-28 badge with p-6, this card plus the header and
+             * the action bar consumed close to 300px — which on a 768px laptop
+             * pushed the waiting list, the thing reception reads continuously,
+             * below the fold. The large token still earns its space on a desk
+             * monitor, so it is kept there and shrunk where the room is not
+             * available.
+             */}
+            <div className="p-4 sm:p-6">
               {serving ? (
-                <div className="flex flex-wrap items-center gap-6">
+                <div className="flex flex-wrap items-center gap-4 sm:gap-6">
                   <div
                     className={cn(
-                      'flex size-28 shrink-0 items-center justify-center rounded-2xl',
+                      'flex size-20 shrink-0 items-center justify-center rounded-2xl sm:size-28',
                       'bg-brand-600 text-white',
                       serving.status === 'CALLED' && 'pulse-ring',
                     )}
                   >
-                    <span className="numeric text-5xl font-bold">
+                    <span className="numeric text-4xl font-bold sm:text-5xl">
                       {serving.tokenNumber}
                     </span>
                   </div>
@@ -191,9 +202,9 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                   </div>
                 </div>
               ) : (
-                <div className="flex items-center gap-6 py-2">
-                  <div className="flex size-28 shrink-0 items-center justify-center rounded-2xl bg-ink-100 text-ink-300">
-                    <span className="numeric text-5xl font-bold">–</span>
+                <div className="flex items-center gap-4 py-2 sm:gap-6">
+                  <div className="flex size-20 shrink-0 items-center justify-center rounded-2xl bg-ink-100 text-ink-300 sm:size-28">
+                    <span className="numeric text-4xl font-bold sm:text-5xl">–</span>
                   </div>
                   <div>
                     <p className="text-lg font-medium text-ink-700">

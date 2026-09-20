@@ -19,7 +19,9 @@
     "report:monthly": "tsx scripts/monthly-report.ts",
     "worker:tick": "tsx scripts/tick.ts",
     "whatsapp:templates": "tsx scripts/whatsapp-templates.ts",
-    "whatsapp:simulate": "tsx scripts/simulate-inbound.ts"
+    "whatsapp:simulate": "tsx scripts/simulate-inbound.ts",
+    "whatsapp:bootstrap": "tsx scripts/bootstrap-whatsapp.ts",
+    "whatsapp:diagnose": "tsx scripts/diagnose-whatsapp.ts"
   },
   "dependencies": {
     "date-fns": "^4.4.0",

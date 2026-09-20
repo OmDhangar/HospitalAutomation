@@ -33,7 +33,7 @@ async function AppHeader() {
 
   return (
     <header className="sticky top-0 z-40 border-b border-ink-200 bg-white">
-      <div className="mx-auto flex h-14 max-w-7xl items-center gap-4 px-4 sm:px-6">
+      <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-4 px-4 sm:px-6">
         <Link href="/dashboard" className="flex items-center gap-2.5">
           <span className="flex size-8 items-center justify-center rounded-lg bg-brand-600 text-sm font-bold text-white">
             Q
@@ -88,7 +88,7 @@ async function AppHeader() {
 function HeaderSkeleton() {
   return (
     <header className="sticky top-0 z-40 border-b border-ink-200 bg-white">
-      <div className="mx-auto flex h-14 max-w-7xl items-center gap-4 px-4 sm:px-6">
+      <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-4 px-4 sm:px-6">
         <div className="flex items-center gap-2.5">
           <span className="flex size-8 items-center justify-center rounded-lg bg-brand-600 text-sm font-bold text-white">
             Q
@@ -122,7 +122,21 @@ export default function AppLayout({ children }: LayoutProps<'/'>) {
           <AppHeader />
         </Suspense>
 
-        <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6">{children}</main>
+        {/**
+         * max-w-[1600px], not max-w-7xl.
+         *
+         * 7xl is 1280px, which on the 1920px monitors reception desks actually
+         * use leaves roughly a third of the screen empty while the queue table
+         * scrolls horizontally inside it. The queue is a wide, dense table read
+         * at a glance all day; giving it the width is worth more than the
+         * tidier measure a narrower column would produce.
+         *
+         * Vertical padding is tighter on small viewports. On a 768px laptop the
+         * sticky header, browser chrome and py-6 together push the waiting list
+         * below the fold — and the waiting list is the one thing reception
+         * needs without scrolling.
+         */}
+        <main className="mx-auto max-w-[1600px] px-4 py-4 sm:px-6 lg:py-6">{children}</main>
       </div>
     </ToastProvider>
   );

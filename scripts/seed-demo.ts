@@ -82,7 +82,14 @@ const ALL_PATIENTS = [...ADULT_PATIENTS, ...PEDIATRIC_PATIENTS];
 
 async function main() {
   console.log('🚀 Starting rich mock data seeding for Doctor Dashboard showcase...');
-  const admin = postgres(process.env.DATABASE_ADMIN_URL!, { max: 4 });
+  // Generous timeouts: this runs against a managed Postgres in another region
+  // and inserts thousands of rows, which is exactly the shape of workload a
+  // default 30s idle timeout cuts off midway.
+  const admin = postgres(process.env.DATABASE_ADMIN_URL!, {
+    max: 4,
+    idle_timeout: 120,
+    connect_timeout: 30,
+  });
 
   // 1. Ensure Rate Card / Plan Tiers exist
   console.log('  → Ensuring plan_tiers rate card is present...');
@@ -379,9 +386,21 @@ async function main() {
     }
   }
 
-  // Insert historical appointments in chunks of 400
+  // Insert historical appointments in chunks
   console.log(`  → Bulk inserting ${historicalAppointments.length} historical appointments...`);
-  const chunkSize = 400;
+  /**
+   * 400-row inserts reset the connection against a remote Neon instance.
+   *
+   * Each appointment row carries a dozen columns including timestamps and a
+   * public token, so a 400-row batch builds a single statement of a few hundred
+   * kilobytes. Over TLS to another region that reliably trips ECONNRESET partway
+   * through the historical backfill — which then leaves the demo hospital
+   * created but empty, and the dashboard and reports with nothing to draw.
+   *
+   * 100 keeps each statement comfortably small. The extra round trips cost a
+   * few seconds on a script that is run by hand.
+   */
+  const chunkSize = 100;
   const insertedApts: any[] = [];
 
   for (let i = 0; i < historicalAppointments.length; i += chunkSize) {

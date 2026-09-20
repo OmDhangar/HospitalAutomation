@@ -195,3 +195,116 @@ export async function getDoctorDayStats(args: {
     }));
   });
 }
+
+/* ------------------------------------------------------------ trends */
+
+export type DailyTrendPoint = {
+  serviceDate: string;
+  completed: number;
+  noShows: number;
+  medianWaitMinutes: number | null;
+};
+
+/**
+ * Daily volume and waiting time over a window of days.
+ *
+ * The reports page had no query like this, which is the real reason it read as
+ * a data dump rather than a report: a single day's numbers cannot answer any
+ * question worth asking. "Forty-two patients today" means nothing without last
+ * Tuesday to compare it against, and a median wait of eighteen minutes is only
+ * alarming or fine relative to where it has been.
+ *
+ * Generated from a date series rather than from the appointments themselves, so
+ * a day with no OPD appears as a zero instead of vanishing — a gap in a trend
+ * line is read as "nothing happened", and a missing day is read as nothing at
+ * all.
+ */
+export async function getDailyTrend(args: {
+  hospitalId: string;
+  days?: number;
+  endDate: string;
+}): Promise<DailyTrendPoint[]> {
+  const days = args.days ?? 30;
+
+  return withTenant(args.hospitalId, async (tx) => {
+    const rows = await tx.execute<{
+      service_date: string;
+      completed: number;
+      no_shows: number;
+      median_wait: number | null;
+    }>(sql`
+      with span as (
+        select generate_series(
+          ${args.endDate}::date - ${days - 1}::int,
+          ${args.endDate}::date,
+          '1 day'::interval
+        )::date as service_date
+      )
+      select
+        span.service_date::text as service_date,
+        count(a.id) filter (where a.status = 'COMPLETED')::int as completed,
+        count(a.id) filter (where a.status = 'NO_SHOW')::int as no_shows,
+        percentile_cont(0.5) within group (
+          order by extract(epoch from (a.called_at - a.enqueued_at)) / 60
+        ) filter (where a.called_at is not null and a.enqueued_at is not null)
+          as median_wait
+      from span
+      left join appointments a on a.service_date = span.service_date
+      group by span.service_date
+      order by span.service_date
+    `);
+
+    return rows.map((row) => ({
+      serviceDate: row.service_date,
+      completed: Number(row.completed ?? 0),
+      noShows: Number(row.no_shows ?? 0),
+      medianWaitMinutes:
+        row.median_wait === null ? null : Math.round(Number(row.median_wait)),
+    }));
+  });
+}
+
+export type HourlyLoadPoint = { hour: number; arrivals: number };
+
+/**
+ * When patients actually turn up, by hour of the clinic's own day.
+ *
+ * The most directly actionable number the platform holds. A clinic that sees
+ * its arrivals pile into one hour can move a doctor's start time or open slot
+ * bookings across the shoulder hours, and the waiting room empties — without
+ * buying anything or hiring anyone.
+ *
+ * Bucketed in the hospital's timezone rather than UTC. At IST's +5:30 offset a
+ * UTC bucket would smear every hour across two, which would make the busiest
+ * hour of an Indian OPD land in the middle of the night.
+ */
+export async function getHourlyLoad(args: {
+  hospitalId: string;
+  timezone: string;
+  days?: number;
+  endDate: string;
+}): Promise<HourlyLoadPoint[]> {
+  const days = args.days ?? 30;
+
+  return withTenant(args.hospitalId, async (tx) => {
+    const rows = await tx.execute<{ hour: number; arrivals: number }>(sql`
+      select
+        extract(hour from (a.enqueued_at at time zone ${args.timezone}))::int as hour,
+        count(*)::int as arrivals
+      from appointments a
+      where a.enqueued_at is not null
+        and a.service_date > ${args.endDate}::date - ${days}::int
+        and a.service_date <= ${args.endDate}::date
+      group by 1
+      order by 1
+    `);
+
+    // Zero-fill so the shape of the clinic day is visible, including the hours
+    // nobody arrives in — an absent bar and a zero bar mean different things.
+    const byHour = new Map(rows.map((r) => [Number(r.hour), Number(r.arrivals)]));
+    return Array.from({ length: 24 }, (_, hour) => ({
+      hour,
+      arrivals: byHour.get(hour) ?? 0,
+    }));
+  });
+}
