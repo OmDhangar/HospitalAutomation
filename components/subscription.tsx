@@ -264,7 +264,7 @@ export function SubscriptionCard({
           Subscription details
         </Link>
         <Link
-          href="/plans"
+          href="/pricing"
           className="text-sm font-medium text-brand-700 hover:text-brand-800"
         >
           Compare plans

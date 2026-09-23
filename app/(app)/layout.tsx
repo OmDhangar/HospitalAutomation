@@ -25,6 +25,7 @@ async function AppHeader() {
   if (session.role === 'owner') {
     navItems.push(
       { label: 'Subscription', href: '/subscription' },
+      { label: 'Pricing', href: '/pricing' },
       { label: 'Activity', href: '/audit' },
       { label: 'Settings', href: '/settings' },
     );

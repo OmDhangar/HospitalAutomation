@@ -43,6 +43,9 @@ export default function HomePage() {
             <a href="#benefits" className="hover:text-ink-900 transition-colors">
               Benefits
             </a>
+            <Link href="/pricing" className="hover:text-ink-900 transition-colors">
+              Pricing
+            </Link>
             <a href="#faq" className="hover:text-ink-900 transition-colors">
               Questions
             </a>
@@ -486,6 +489,9 @@ export default function HomePage() {
             </div>
 
             <div className="flex flex-wrap items-center gap-6 text-xs">
+              <Link href="/pricing" className="hover:text-white transition-colors">
+                Pricing
+              </Link>
               <Link href="/login" className="hover:text-white transition-colors">
                 Hospital Sign In
               </Link>

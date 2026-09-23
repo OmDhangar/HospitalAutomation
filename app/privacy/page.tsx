@@ -48,6 +48,12 @@ export default function PrivacyPolicyPage() {
               <span>Back to Home</span>
             </Link>
             <Link
+              href="/pricing"
+              className="rounded-lg px-3 py-1.5 text-xs font-semibold text-ink-600 hover:bg-ink-100 hover:text-ink-900 transition-colors"
+            >
+              Pricing
+            </Link>
+            <Link
               href="/login"
               className="rounded-lg bg-brand-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-brand-700 active:bg-brand-800 transition-colors"
             >
@@ -668,6 +674,9 @@ export default function PrivacyPolicyPage() {
             <div className="flex flex-wrap items-center gap-6 text-xs">
               <Link href="/" className="hover:text-white transition-colors">
                 Home
+              </Link>
+              <Link href="/pricing" className="hover:text-white transition-colors">
+                Pricing
               </Link>
               <Link href="/login" className="hover:text-white transition-colors">
                 Hospital Sign In

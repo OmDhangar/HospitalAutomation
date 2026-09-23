@@ -100,7 +100,7 @@ export default async function SubscriptionPage({
           <h1 className="text-lg font-semibold text-ink-900">Subscription</h1>
           <p className="mt-0.5 text-sm text-ink-500">{session.hospitalName}</p>
         </div>
-        <Link href="/plans">
+        <Link href="/pricing">
           <Button>Compare plans</Button>
         </Link>
       </div>
