@@ -221,14 +221,14 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
             </div>
 
             {/* One primary action. Interactive SPA controls */}
-            <div className="flex flex-wrap items-center gap-3 border-t border-ink-200 bg-ink-50 px-6 py-4">
+            <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-ink-200 bg-ink-50 p-4 sm:px-6 sm:py-4">
               <CallNextButton
                 doctorId={selectedId ?? ''}
                 disabled={waiting.length === 0 && !serving}
               />
 
               {serving ? (
-                <>
+                <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 sm:gap-2.5 w-full sm:w-auto">
                   <QueueActionButton
                     doctorId={selectedId!}
                     appointmentId={serving.appointmentId}
@@ -242,14 +242,17 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                     label="Hold"
                   />
                   {serving.status === 'CALLED' ? (
-                    <QueueActionButton
-                      doctorId={selectedId!}
-                      appointmentId={serving.appointmentId}
-                      action="start_consultation"
-                      label="Start consultation"
-                    />
+                    <div className="col-span-2 sm:col-auto">
+                      <QueueActionButton
+                        doctorId={selectedId!}
+                        appointmentId={serving.appointmentId}
+                        action="start_consultation"
+                        label="Start consultation"
+                        className="w-full sm:w-auto"
+                      />
+                    </div>
                   ) : null}
-                </>
+                </div>
               ) : null}
             </div>
           </Card>
@@ -314,28 +317,34 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
             ) : (
               <ul className="divide-y divide-ink-200">
                 {snapshot!.parked.map((row) => (
-                  <li key={row.appointmentId} className="flex items-center gap-3 px-5 py-3">
-                    <span className="numeric w-9 shrink-0 text-lg font-semibold text-ink-500">
-                      {row.tokenNumber}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-ink-800">
-                        {row.patientName}
-                        {row.patientAge ? (
-                          <span className="ml-1.5 text-xs text-ink-500 font-normal">
-                            ({row.patientAge}y)
-                          </span>
-                        ) : null}
-                      </p>
-                      <StatusPill status={row.status} />
+                  <li key={row.appointmentId} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 sm:px-5 sm:py-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="numeric w-9 shrink-0 text-lg font-bold text-ink-600 bg-ink-100 rounded-lg size-9 flex items-center justify-center">
+                        {row.tokenNumber}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-bold text-ink-900">
+                          {row.patientName}
+                          {row.patientAge ? (
+                            <span className="ml-1.5 text-xs text-ink-500 font-normal">
+                              ({row.patientAge}y)
+                            </span>
+                          ) : null}
+                        </p>
+                        <div className="mt-0.5">
+                          <StatusPill status={row.status} />
+                        </div>
+                      </div>
                     </div>
-                    <QueueActionButton
-                      doctorId={selectedId!}
-                      appointmentId={row.appointmentId}
-                      action={row.status === 'SKIPPED' ? 'recall' : 'resume'}
-                      label={row.status === 'SKIPPED' ? 'Recall' : 'Resume'}
-                      size="sm"
-                    />
+                    <div className="self-end sm:self-auto">
+                      <QueueActionButton
+                        doctorId={selectedId!}
+                        appointmentId={row.appointmentId}
+                        action={row.status === 'SKIPPED' ? 'recall' : 'resume'}
+                        label={row.status === 'SKIPPED' ? 'Recall' : 'Resume'}
+                        size="sm"
+                      />
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -369,34 +378,36 @@ function WaitingRow({
   timezone: string;
 }) {
   return (
-    <li className="flex flex-wrap items-center gap-3 px-5 py-3">
-      <span className="numeric w-10 shrink-0 text-xl font-semibold text-ink-900">
-        {row.tokenNumber}
-      </span>
+    <li className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 sm:px-5 sm:py-3.5 hover:bg-ink-50/50 transition-colors">
+      <div className="flex items-start sm:items-center gap-3 min-w-0">
+        <span className="numeric shrink-0 size-9 rounded-xl bg-brand-50 border border-brand-200 text-brand-800 text-base font-bold flex items-center justify-center">
+          {row.tokenNumber}
+        </span>
 
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <p className="truncate text-sm font-medium text-ink-900">
-            {row.patientName}
-            {row.patientAge ? (
-              <span className="ml-1.5 text-xs text-ink-500 font-normal">
-                ({row.patientAge}y)
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+            <p className="truncate text-sm font-bold text-ink-900">
+              {row.patientName}
+              {row.patientAge ? (
+                <span className="ml-1 text-xs text-ink-500 font-normal">
+                  ({row.patientAge}y)
+                </span>
+              ) : null}
+            </p>
+            {row.scheduledSlotAt ? (
+              <span className="inline-flex items-center gap-1 rounded bg-brand-100 px-1.5 py-0.5 text-[10px] font-bold text-brand-900">
+                🕒 {formatTimeIn(timezone, row.scheduledSlotAt)}
               </span>
             ) : null}
+          </div>
+          <p className="text-xs text-ink-500 mt-0.5">
+            #{position} in line · waiting {waitedFor(row.enqueuedAt, now)}
+            {row.priority > 0 ? ' · ⚡ priority' : ''}
           </p>
-          {row.scheduledSlotAt ? (
-            <span className="inline-flex items-center gap-1 rounded bg-brand-100 px-1.5 py-0.5 text-[10px] font-semibold text-brand-900">
-              🕒 {formatTimeIn(timezone, row.scheduledSlotAt)}
-            </span>
-          ) : null}
         </div>
-        <p className="text-xs text-ink-500">
-          #{position} in line · waiting {waitedFor(row.enqueuedAt, now)}
-          {row.priority > 0 ? ' · priority' : ''}
-        </p>
       </div>
 
-      <div className="flex shrink-0 items-center gap-1.5">
+      <div className="flex items-center gap-1.5 self-end sm:self-auto shrink-0 pt-1 sm:pt-0">
         {row.priority === 0 ? (
           <PriorityButton doctorId={doctorId} appointmentId={row.appointmentId} />
         ) : null}

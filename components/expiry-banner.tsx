@@ -90,18 +90,16 @@ export function ExpiryBanner({
 
   return (
     <div
-      // polite, not assertive: this must not interrupt a receptionist
-      // mid-action on a screen reader every time a page loads.
       role="status"
       aria-live="polite"
       className={cn(
-        'mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3',
+        'mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border p-3.5 sm:px-4 sm:py-3 shadow-xs',
         TONE_STYLES[tone],
       )}
     >
       <div className="flex min-w-0 items-center gap-2.5">
-        <span className={cn('size-2 shrink-0 rounded-full', DOT_STYLES[tone])} />
-        <p className="min-w-0 text-sm font-medium">
+        <span className={cn('size-2.5 shrink-0 rounded-full', DOT_STYLES[tone])} />
+        <p className="min-w-0 text-sm font-medium leading-tight">
           {message(bucket, daysRemaining)}
         </p>
       </div>
@@ -109,7 +107,7 @@ export function ExpiryBanner({
       <Link
         href="/subscription"
         className={cn(
-          'shrink-0 rounded-lg px-3.5 py-1.5 text-sm font-semibold transition-colors',
+          'w-full sm:w-auto text-center shrink-0 rounded-lg px-3.5 py-2 sm:py-1.5 text-sm font-semibold transition-colors shadow-xs',
           'focus-visible:outline-2 focus-visible:outline-offset-2',
           BUTTON_STYLES[tone],
         )}

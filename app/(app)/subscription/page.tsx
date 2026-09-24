@@ -94,14 +94,14 @@ export default async function SubscriptionPage({
   );
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+    <div className="space-y-5 sm:space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-ink-900">Subscription</h1>
-          <p className="mt-0.5 text-sm text-ink-500">{session.hospitalName}</p>
+          <h1 className="text-xl font-bold text-ink-900">Subscription & Billing</h1>
+          <p className="mt-0.5 text-xs sm:text-sm text-ink-500">{session.hospitalName}</p>
         </div>
-        <Link href="/pricing">
-          <Button>Compare plans</Button>
+        <Link href="/pricing" className="w-full sm:w-auto">
+          <Button className="w-full sm:w-auto justify-center">Compare plans</Button>
         </Link>
       </div>
 

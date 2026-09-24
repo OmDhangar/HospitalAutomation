@@ -87,17 +87,19 @@ export default async function ReportsPage() {
   const hasHistory = trend.some((point) => point.completed + point.noShows > 0);
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+    <div className="space-y-5 sm:space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-ink-900">Reports</h1>
-          <p className="mt-0.5 text-sm text-ink-500">
+          <h1 className="text-xl font-bold text-ink-900">Reports & Analytics</h1>
+          <p className="mt-0.5 text-xs sm:text-sm text-ink-500">
             Last {WINDOW_DAYS} days · to {today}
           </p>
         </div>
         {branches[0] ? (
-          <Link href={`/display/${branches[0].id}`} target="_blank">
-            <Button>Open waiting-room display</Button>
+          <Link href={`/display/${branches[0].id}`} target="_blank" className="w-full sm:w-auto">
+            <Button className="w-full sm:w-auto justify-center gap-2">
+              <span>📺</span> Open waiting-room display
+            </Button>
           </Link>
         ) : null}
       </div>
@@ -157,7 +159,7 @@ export default async function ReportsPage() {
                     />
                   }
                 />
-                <div className="p-5">
+                <div className="p-3.5 sm:p-5">
                   <VolumeTrend data={trend} />
                 </div>
               </Card>
@@ -165,7 +167,7 @@ export default async function ReportsPage() {
 
             <Card>
               <CardHeader title="When patients arrive" hint="Across the period" />
-              <div className="p-5">
+              <div className="p-3.5 sm:p-5">
                 <HourlyLoad data={hourly} />
               </div>
             </Card>
@@ -176,64 +178,122 @@ export default async function ReportsPage() {
       <div className="grid items-start gap-5 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <Card>
-            <CardHeader title="By doctor" hint="Today" />
+            <CardHeader title="By doctor" hint="Today's performance & consultation metrics" />
             {dayStats.length === 0 ? (
               <EmptyState title="No doctors yet" />
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-ink-200 text-left text-xs uppercase tracking-wide text-ink-500">
-                      <th className="px-5 py-2.5 font-medium">Doctor</th>
-                      <th className="px-5 py-2.5 text-right font-medium">Seen</th>
-                      <th className="px-5 py-2.5 text-right font-medium">No shows</th>
-                      <th className="px-5 py-2.5 text-right font-medium">Med. wait</th>
-                      <th className="px-5 py-2.5 text-right font-medium">Med. consult</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-ink-200">
-                    {dayStats.map((row) => {
-                      const seen = row.completed;
-                      const busiest = Math.max(...dayStats.map((d) => d.completed), 1);
-                      return (
-                        <tr key={row.doctorId}>
-                          <td className="px-5 py-3 font-medium text-ink-900">
-                            {row.doctorName}
-                          </td>
-                          <td className="px-5 py-3 text-right">
-                            {/* An inline bar turns a column of numbers into a
-                                comparison the eye makes without arithmetic. */}
-                            <div className="flex items-center justify-end gap-2">
-                              <span
-                                className="h-1.5 rounded-full bg-brand-600/70"
-                                style={{ width: `${(seen / busiest) * 48}px` }}
-                              />
-                              <span className="numeric w-6 text-ink-900">{seen}</span>
-                            </div>
-                          </td>
-                          <td
-                            className={cn(
-                              'numeric px-5 py-3 text-right',
-                              row.noShows > 0 ? 'text-rose-700' : 'text-ink-400',
-                            )}
-                          >
-                            {row.noShows}
-                          </td>
-                          <td className="numeric px-5 py-3 text-right text-ink-700">
-                            {row.medianWaitMinutes === null
-                              ? '—'
-                              : `${row.medianWaitMinutes}m`}
-                          </td>
-                          <td className="numeric px-5 py-3 text-right text-ink-700">
-                            {row.medianConsultMinutes === null
-                              ? '—'
-                              : `${row.medianConsultMinutes}m`}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div>
+                {/* Mobile View: High-density readable cards for small screens */}
+                <div className="sm:hidden divide-y divide-ink-200">
+                  {dayStats.map((row) => {
+                    const seen = row.completed;
+                    const busiest = Math.max(...dayStats.map((d) => d.completed), 1);
+                    return (
+                      <div key={row.doctorId} className="p-4 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-base">🩺</span>
+                            <span className="font-bold text-sm text-ink-900">{row.doctorName}</span>
+                          </div>
+                          {row.noShows > 0 ? (
+                            <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-800">
+                              {row.noShows} no-show{row.noShows === 1 ? '' : 's'}
+                            </span>
+                          ) : (
+                            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
+                              0 no-shows
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Progress visual */}
+                        <div>
+                          <div className="flex items-center justify-between text-xs mb-1">
+                            <span className="text-ink-500 font-medium">Patients Completed</span>
+                            <span className="numeric font-bold text-ink-900">{seen} seen</span>
+                          </div>
+                          <div className="h-2 w-full rounded-full bg-ink-100 overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-brand-600 transition-all"
+                              style={{ width: `${Math.max(8, (seen / busiest) * 100)}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Metric pills */}
+                        <div className="grid grid-cols-2 gap-2 pt-1 text-xs">
+                          <div className="rounded-lg bg-ink-50 p-2 border border-ink-200/60">
+                            <span className="text-ink-500 block text-[10px] uppercase font-semibold">Median Wait</span>
+                            <span className="numeric font-bold text-ink-900 text-sm">
+                              {row.medianWaitMinutes === null ? '—' : `${row.medianWaitMinutes} mins`}
+                            </span>
+                          </div>
+                          <div className="rounded-lg bg-ink-50 p-2 border border-ink-200/60">
+                            <span className="text-ink-500 block text-[10px] uppercase font-semibold">Median Consult</span>
+                            <span className="numeric font-bold text-ink-900 text-sm">
+                              {row.medianConsultMinutes === null ? '—' : `${row.medianConsultMinutes} mins`}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Desktop View: Full Data Table for tablet & desktop */}
+                <div className="hidden sm:block overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-ink-200 text-left text-xs uppercase tracking-wide text-ink-500">
+                        <th className="px-5 py-3 font-medium">Doctor</th>
+                        <th className="px-5 py-3 text-right font-medium">Seen</th>
+                        <th className="px-5 py-3 text-right font-medium">No shows</th>
+                        <th className="px-5 py-3 text-right font-medium">Med. wait</th>
+                        <th className="px-5 py-3 text-right font-medium">Med. consult</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-ink-200">
+                      {dayStats.map((row) => {
+                        const seen = row.completed;
+                        const busiest = Math.max(...dayStats.map((d) => d.completed), 1);
+                        return (
+                          <tr key={row.doctorId} className="hover:bg-ink-50/50 transition-colors">
+                            <td className="px-5 py-3.5 font-semibold text-ink-900">
+                              {row.doctorName}
+                            </td>
+                            <td className="px-5 py-3.5 text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <span
+                                  className="h-1.5 rounded-full bg-brand-600/70"
+                                  style={{ width: `${(seen / busiest) * 48}px` }}
+                                />
+                                <span className="numeric w-6 font-bold text-ink-900">{seen}</span>
+                              </div>
+                            </td>
+                            <td
+                              className={cn(
+                                'numeric px-5 py-3.5 text-right font-semibold',
+                                row.noShows > 0 ? 'text-rose-700' : 'text-ink-400',
+                              )}
+                            >
+                              {row.noShows}
+                            </td>
+                            <td className="numeric px-5 py-3.5 text-right text-ink-700">
+                              {row.medianWaitMinutes === null
+                                ? '—'
+                                : `${row.medianWaitMinutes}m`}
+                            </td>
+                            <td className="numeric px-5 py-3.5 text-right text-ink-700">
+                              {row.medianConsultMinutes === null
+                                ? '—'
+                                : `${row.medianConsultMinutes}m`}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </Card>
@@ -241,11 +301,11 @@ export default async function ReportsPage() {
 
         <Card>
           <CardHeader title="This month" hint={usage.periodMonth} />
-          <div className="space-y-5 p-5">
+          <div className="space-y-5 p-4 sm:p-5">
             <div>
               <div className="flex items-baseline justify-between">
-                <span className="text-sm text-ink-600">Appointments</span>
-                <span className="numeric text-sm font-semibold text-ink-900">
+                <span className="text-sm font-medium text-ink-600">Appointments</span>
+                <span className="numeric text-sm font-bold text-ink-900">
                   {usage.completedAppointments.toLocaleString('en-IN')}
                   {quota ? ` / ${quota.toLocaleString('en-IN')}` : ''}
                 </span>
@@ -277,13 +337,13 @@ export default async function ReportsPage() {
               <div className="border-t border-ink-200 pt-4">
                 <div className="flex items-baseline justify-between">
                   <span className="text-sm text-ink-600">Plan</span>
-                  <span className="text-sm font-medium capitalize text-ink-900">
+                  <span className="text-sm font-semibold capitalize text-ink-900">
                     {usage.bill.planCode.replace('_', ' ')}
                   </span>
                 </div>
                 <div className="mt-1.5 flex items-baseline justify-between">
                   <span className="text-sm text-ink-600">Monthly</span>
-                  <span className="numeric text-sm font-semibold text-ink-900">
+                  <span className="numeric text-sm font-bold text-ink-900">
                     {rupees(usage.bill.basePaise)}
                   </span>
                 </div>
