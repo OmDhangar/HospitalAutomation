@@ -8,6 +8,7 @@ import {
   patients,
   queueEvents,
 } from '@/lib/db/schema';
+import { isCancellableByPatient } from '@/lib/domain/disruption';
 import { estimateEta, type EtaEstimate } from '@/lib/domain/eta';
 import {
   applyAction,
@@ -1034,6 +1035,10 @@ export type PublicQueueView = {
   status: AppointmentStatus;
   tokenNumber: number;
   doctorName: string;
+  /** Set for a booked slot, null for a walk-in who simply joined the queue. */
+  scheduledSlotAt: Date | null;
+  /** Whether this appointment can still be cancelled by the patient. */
+  cancellable: boolean;
   patientFirstName: string;
   currentToken: number | null;
   patientsAhead: number | null;
@@ -1069,6 +1074,7 @@ export async function getPublicQueueView(
         tokenNumber: appointments.tokenNumber,
         doctorId: appointments.doctorId,
         serviceDate: appointments.serviceDate,
+        scheduledSlotAt: appointments.scheduledSlotAt,
         expiresAt: appointments.publicTokenExpiresAt,
         patientName: patients.name,
         patientLocale: patients.locale,
@@ -1110,6 +1116,8 @@ export async function getPublicQueueView(
       status: appointment.status,
       tokenNumber: appointment.tokenNumber,
       doctorName: appointment.doctorName,
+      scheduledSlotAt: appointment.scheduledSlotAt,
+      cancellable: !expired && isCancellableByPatient(appointment.status),
       // First name only: a forwarded link should not expose a full identity.
       patientFirstName: appointment.patientName.split(' ')[0] ?? '',
       currentToken: serving?.tokenNumber ?? null,
@@ -1166,3 +1174,127 @@ export async function getBranchSnapshots(args: {
 }
 
 export { isActive };
+
+export type PatientCancelResult =
+  | { outcome: 'cancelled'; tokenNumber: number }
+  | { outcome: 'already_cancelled' }
+  | { outcome: 'too_late' }
+  | { outcome: 'not_found' };
+
+/**
+ * Lets a patient call off their own appointment from the link they were sent.
+ *
+ * The public token is the whole credential, exactly as it is for viewing the
+ * page — anyone holding the link can cancel, which is the right trust model
+ * because the link went to the patient's own phone and forwarding it is their
+ * decision. No session exists here and none should: requiring a login to
+ * cancel is how you guarantee nobody does.
+ *
+ * Freeing the slot happens for free. `getDoctorSlotsForDate` already excludes
+ * CANCELLED, so the time becomes bookable again the moment this commits —
+ * which is the entire point. A cancellation ten minutes out is worth more to
+ * the hospital than a no-show, and making it awkward produces no-shows rather
+ * than attendance.
+ */
+export async function cancelByPublicToken(args: {
+  publicToken: string;
+  reason?: string | null;
+  now?: Date;
+}): Promise<PatientCancelResult> {
+  const now = args.now ?? new Date();
+
+  const [resolved] = await getDb().execute<{ hospital_id: string | null }>(
+    sql`select public.resolve_public_token(${args.publicToken}) as hospital_id`,
+  );
+  const hospitalId = resolved?.hospital_id;
+  if (!hospitalId) return { outcome: 'not_found' };
+
+  return withTenant(hospitalId, async (tx) => {
+    const [appointment] = await tx
+      .select({
+        id: appointments.id,
+        status: appointments.status,
+        tokenNumber: appointments.tokenNumber,
+        doctorId: appointments.doctorId,
+        serviceDate: appointments.serviceDate,
+        expiresAt: appointments.publicTokenExpiresAt,
+        patientId: appointments.patientId,
+      })
+      .from(appointments)
+      .where(eq(appointments.publicToken, args.publicToken));
+
+    if (!appointment) return { outcome: 'not_found' };
+
+    // Idempotent: a double-tapped button, or a link opened twice, reports the
+    // same thing rather than erroring at somebody who did nothing wrong.
+    if (appointment.status === 'CANCELLED') return { outcome: 'already_cancelled' };
+
+    if (
+      appointment.expiresAt.getTime() < now.getTime() ||
+      !isCancellableByPatient(appointment.status)
+    ) {
+      return { outcome: 'too_late' };
+    }
+
+    // Serialise against the dashboard: reception may be calling this very
+    // token as the patient taps cancel, and the lock decides which wins.
+    await lockDoctorDay(tx, {
+      hospitalId,
+      doctorId: appointment.doctorId,
+      serviceDate: appointment.serviceDate,
+    });
+
+    const [fresh] = await tx
+      .select({ status: appointments.status })
+      .from(appointments)
+      .where(eq(appointments.id, appointment.id));
+
+    // Re-checked under the lock. The status may have moved while we waited,
+    // and a patient must not cancel a consultation that has since started.
+    if (fresh.status === 'CANCELLED') return { outcome: 'already_cancelled' };
+    if (!isCancellableByPatient(fresh.status)) return { outcome: 'too_late' };
+
+    await tx
+      .update(appointments)
+      .set({ status: 'CANCELLED', updatedAt: now })
+      .where(eq(appointments.id, appointment.id));
+
+    await tx.insert(queueEvents).values({
+      hospitalId,
+      appointmentId: appointment.id,
+      doctorId: appointment.doctorId,
+      action: 'cancel',
+      fromStatus: fresh.status,
+      toStatus: 'CANCELLED',
+      // No staff member did this, and recording one would be a lie in the only
+      // record that answers "who cancelled my appointment".
+      actorUserId: null,
+      metadata: {
+        reason: 'patient_cancelled',
+        source: 'public_link',
+        ...(args.reason ? { patient_reason: args.reason } : {}),
+      },
+    });
+
+    /**
+     * No confirmation message is sent.
+     *
+     * The patient performed this action and is looking at the result on
+     * screen. Telling them what they just did would be a billable message
+     * spent on information they already have — and the whole reason
+     * cancellation is worth encouraging is that it is cheaper than a no-show.
+     */
+    console.log(
+      '[queue:patient_cancelled]',
+      JSON.stringify({
+        hospital_id: hospitalId,
+        appointment_id: appointment.id,
+        doctor_id: appointment.doctorId,
+        token_number: appointment.tokenNumber,
+        from_status: fresh.status,
+      }),
+    );
+
+    return { outcome: 'cancelled', tokenNumber: appointment.tokenNumber };
+  });
+}

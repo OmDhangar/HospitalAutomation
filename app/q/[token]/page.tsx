@@ -5,6 +5,7 @@ import { cn } from '@/components/ui';
 import { formatTimeIn, formatWindowIn } from '@/lib/domain/time';
 import { isLocale, LOCALE_NAMES, LOCALES, t, type Locale } from '@/lib/i18n/patient';
 import { getPublicQueueView } from '@/lib/services/queue';
+import { cancelAppointment } from './actions';
 
 export const metadata = { title: 'Your queue' };
 export const dynamic = 'force-dynamic';
@@ -38,9 +39,18 @@ export default async function PatientQueuePage({
   }
 
   if (view.status === 'CANCELLED' || view.status === 'NO_SHOW') {
+    // Acknowledges the patient's own action when they are the one who just
+    // took it, rather than telling them a token "has been cancelled" as if it
+    // were news.
+    const justCancelled = query.cancel === 'done';
     return (
       <Shell locale={locale} token={token}>
-        <Message title={s.cancelled} hint={s.expiredHint} tone="muted" />
+        <Message
+          title={justCancelled ? s.cancelDone : s.cancelled}
+          hint={justCancelled ? s.cancelDoneHint : s.expiredHint}
+          tone="muted"
+        />
+        <TokenCard label={s.yourToken} token={view.tokenNumber} muted />
       </Shell>
     );
   }
@@ -76,12 +86,30 @@ export default async function PatientQueuePage({
       <TokenCard label={s.yourToken} token={view.tokenNumber} />
 
       <dl className="grid grid-cols-2 gap-3">
-        <Tile
-          label={s.nowServing}
-          value={view.currentToken !== null ? String(view.currentToken) : '—'}
-        />
+        {/* A booked slot shows its time; a walk-in has none, and showing an
+            empty tile would imply one exists. */}
+        {view.scheduledSlotAt ? (
+          <Tile
+            label={s.appointmentTime}
+            value={formatTimeIn(view.timezone, view.scheduledSlotAt)}
+          />
+        ) : (
+          <Tile
+            label={s.nowServing}
+            value={view.currentToken !== null ? String(view.currentToken) : '—'}
+          />
+        )}
         <Tile label={s.doctor} value={view.doctorName} small />
       </dl>
+
+      {view.scheduledSlotAt ? (
+        <dl className="grid grid-cols-1 gap-3">
+          <Tile
+            label={s.nowServing}
+            value={view.currentToken !== null ? String(view.currentToken) : '—'}
+          />
+        </dl>
+      ) : null}
 
       {view.eta && !isTurn && !isInConsult && !view.paused ? (
         <div className="rounded-2xl border border-ink-200 bg-white p-5 text-center">
@@ -101,10 +129,97 @@ export default async function PatientQueuePage({
         </p>
       ) : null}
 
+      {query.cancel === 'late' ? (
+        <Message title={s.cancelTooLate} hint={s.cancelTooLateHint} tone="warn" />
+      ) : null}
+
+      {view.cancellable ? (
+        <CancelBlock
+          token={token}
+          locale={locale}
+          strings={s}
+          confirming={query.cancel === 'confirm'}
+        />
+      ) : null}
+
       <p className="pb-2 text-center text-sm text-ink-400">
         {s.updated} {formatTimeIn(view.timezone, view.lastUpdatedAt)}
       </p>
     </Shell>
+  );
+}
+
+/**
+ * The patient's own cancel control.
+ *
+ * Two steps, and the destructive one is never the first thing on screen. This
+ * page auto-refreshes every 45 seconds on a phone that is probably in a
+ * pocket, so a single red button sitting under a thumb would eventually be
+ * pressed by accident — and a cancelled appointment cannot be undone from
+ * here.
+ *
+ * The confirmation is a link, not JavaScript. The whole page is a server
+ * component precisely so it works on the cheap Android handsets this product
+ * is aimed at; adding a client bundle for one confirm dialog would be a poor
+ * trade, and `window.confirm` is not translatable.
+ */
+function CancelBlock({
+  token,
+  locale,
+  strings,
+  confirming,
+}: {
+  token: string;
+  locale: Locale;
+  strings: (typeof t)[Locale];
+  confirming: boolean;
+}) {
+  const langParam = `&lang=${locale}`;
+
+  if (!confirming) {
+    return (
+      <div className="rounded-2xl border border-ink-200 bg-white p-5 text-center">
+        <p className="text-base leading-relaxed text-ink-600">{strings.cancelPrompt}</p>
+        <Link
+          href={`/q/${token}?cancel=confirm${langParam}`}
+          // Outlined, not filled. At this step it is one option among the
+          // things on the page, and a solid red block would read as the
+          // primary action on a page whose purpose is to show a queue.
+          className="mt-4 inline-flex min-h-12 w-full items-center justify-center rounded-xl border-2 border-rose-300 bg-white px-5 text-base font-semibold text-rose-700 active:bg-rose-50"
+        >
+          {strings.cancelAction}
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border-2 border-rose-300 bg-rose-50 p-5 text-center">
+      <p className="text-lg font-semibold text-rose-900">{strings.cancelAction}?</p>
+      <p className="mt-2 text-base leading-relaxed text-rose-800">
+        {strings.cancelPrompt}
+      </p>
+
+      <form action={cancelAppointment} className="mt-4">
+        <input type="hidden" name="token" value={token} />
+        <input type="hidden" name="lang" value={locale} />
+        <button
+          type="submit"
+          // Solid red only once the patient has already said they mean it.
+          // Min height 48px: this is tapped with a thumb, often one-handed.
+          className="min-h-12 w-full rounded-xl bg-rose-600 px-5 text-base font-bold text-white active:bg-rose-800"
+        >
+          {strings.cancelConfirm}
+        </button>
+      </form>
+
+      <Link
+        href={`/q/${token}?lang=${locale}`}
+        className="mt-3 inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-white px-5 text-base font-semibold text-ink-700 active:bg-ink-100"
+      >
+        {strings.cancelKeep}
+      </Link>
+    </div>
   );
 }
 

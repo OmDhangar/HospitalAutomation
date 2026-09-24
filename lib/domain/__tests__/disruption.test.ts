@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isCancellableByPatient,
   disruptionActionFor,
   disruptionMessage,
   minutesOfDayIn,
@@ -151,5 +152,71 @@ describe('summarise and disruptionMessage', () => {
     expect(text).toContain('1 booking cancelled');
     expect(text).toContain('patient is already waiting');
     expect(text).not.toContain('bookings');
+  });
+});
+
+describe('isCancellableByPatient', () => {
+  it('allows cancelling right up to the consultation starting', () => {
+    /**
+     * Deliberately permissive. A patient who cancels ten minutes out is doing
+     * the hospital a favour — that slot becomes bookable again, where a
+     * no-show helps nobody. Making cancellation awkward does not produce
+     * attendance, it produces no-shows.
+     */
+    for (const status of [
+      'CREATED',
+      'CONFIRMED',
+      'ARRIVED',
+      'WAITING',
+      'HELD',
+      'SKIPPED',
+      'CALLED',
+    ] as const) {
+      expect(isCancellableByPatient(status), status).toBe(true);
+    }
+  });
+
+  it('stops once the appointment has actually happened', () => {
+    for (const status of ['IN_CONSULTATION', 'COMPLETED'] as const) {
+      expect(isCancellableByPatient(status), status).toBe(false);
+    }
+  });
+
+  it('refuses to re-cancel or resurrect a closed appointment', () => {
+    for (const status of ['CANCELLED', 'NO_SHOW', 'EXPIRED'] as const) {
+      expect(isCancellableByPatient(status), status).toBe(false);
+    }
+  });
+
+  it('has a decision for every status in the state machine', () => {
+    for (const status of APPOINTMENT_STATUSES) {
+      expect(typeof isCancellableByPatient(status)).toBe('boolean');
+    }
+  });
+
+  it('never offers cancellation on an appointment that is already closed', () => {
+    /**
+     * The real invariant, and the only one these two rules share.
+     *
+     * They are otherwise independent, because they answer questions about
+     * different actors. `disruptionActionFor` decides what the *system* may do
+     * on the doctor's behalf, and leaves CALLED alone because that patient may
+     * be standing at the consulting room door. `isCancellableByPatient` decides
+     * what the *patient* may do about their own appointment, and permits
+     * CALLED precisely because a patient who is cancelling is evidently not
+     * there. Requiring the two to agree would be wrong.
+     */
+    const TERMINAL = ['COMPLETED', 'CANCELLED', 'NO_SHOW', 'EXPIRED'] as const;
+
+    for (const status of APPOINTMENT_STATUSES) {
+      if (!isCancellableByPatient(status)) continue;
+      expect(TERMINAL, `${status} is offered as cancellable`).not.toContain(status);
+    }
+  });
+
+  it('differs from the doctor-unavailability rule at CALLED, on purpose', () => {
+    // Pinned so the divergence is a decision rather than a later accident.
+    expect(isCancellableByPatient('CALLED')).toBe(true);
+    expect(disruptionActionFor('CALLED')).toBe('leave_alone');
   });
 });

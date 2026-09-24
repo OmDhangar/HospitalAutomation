@@ -98,6 +98,40 @@ export function minutesOfDayIn(timezone: string, at: Date): number {
   return (hour % 24) * 60 + minute;
 }
 
+/**
+ * Whether the patient may still call off their own appointment.
+ *
+ * The permissive end is deliberate. A patient who cancels ten minutes before
+ * their slot is doing the hospital a favour — that slot can be offered to
+ * somebody else, and the alternative is a no-show that helps nobody and
+ * quietly inflates a metric the hospital is judged on. Making cancellation
+ * awkward does not produce attendance, it produces no-shows.
+ *
+ * CALLED is still allowed: the patient is plainly not there, and an explicit
+ * cancellation tells reception more, and sooner, than waiting for them to be
+ * skipped. IN_CONSULTATION is where it stops — by then the appointment has
+ * happened, and anything after that is a matter for the desk.
+ */
+export function isCancellableByPatient(status: AppointmentStatus): boolean {
+  switch (status) {
+    case 'CREATED':
+    case 'CONFIRMED':
+    case 'ARRIVED':
+    case 'WAITING':
+    case 'HELD':
+    case 'SKIPPED':
+    case 'CALLED':
+      return true;
+
+    case 'IN_CONSULTATION':
+    case 'COMPLETED':
+    case 'CANCELLED':
+    case 'NO_SHOW':
+    case 'EXPIRED':
+      return false;
+  }
+}
+
 export type DisruptionSummary = {
   cancelled: number;
   needsDeskAction: number;
