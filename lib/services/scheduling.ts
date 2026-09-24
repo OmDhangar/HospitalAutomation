@@ -252,6 +252,20 @@ export async function toggleSlotOverride(args: {
 /**
  * Add emergency or temporary unavailability interval block.
  */
+/**
+ * Blocks a window WITHOUT touching anyone already booked inside it.
+ *
+ * Almost never what you want. This stops new bookings landing in the window
+ * and does nothing else: patients already holding slots inside it keep a live
+ * appointment, are told nothing, and travel to the hospital for a doctor who
+ * has gone.
+ *
+ * Use `blockIntervalAndNotify` in lib/services/disruption.ts instead, which
+ * cancels those bookings, messages the patients to rebook, and hands the ones
+ * already in the waiting room to reception. This remains only for setting up
+ * a window on a day with no bookings yet — a planned absence entered in
+ * advance — where there is genuinely nobody to notify.
+ */
 export async function addIntervalBlock(args: {
   hospitalId: string;
   doctorId: string;

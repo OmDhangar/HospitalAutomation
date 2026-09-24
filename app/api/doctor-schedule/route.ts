@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { requireSession } from '@/lib/auth/session';
 import { serviceDateIn } from '@/lib/domain/time';
+import { blockIntervalAndNotify, previewDisruption } from '@/lib/services/disruption';
 import {
-  addIntervalBlock,
   getDoctorSlotsForDate,
   removeIntervalBlock,
   saveDoctorScheduleConfig,
@@ -72,20 +72,53 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, message: 'Slot status updated successfully' });
     }
 
+    /**
+     * How many people this would affect, without affecting them.
+     *
+     * Cancelling a morning of appointments is not undone by pressing the
+     * button again — the WhatsApp messages have already gone. The count is
+     * shown first so the decision is made with it in view.
+     */
+    if (action === 'preview_interval') {
+      const { serviceDate, startTime, endTime } = body;
+      const summary = await previewDisruption({
+        hospitalId: session.hospitalId,
+        doctorId,
+        serviceDate,
+        startTime,
+        endTime,
+      });
+      return NextResponse.json({ ok: true, summary });
+    }
+
     if (action === 'add_interval') {
       const { serviceDate, startTime, endTime, reason } = body;
-      const row = await addIntervalBlock({
+
+      /**
+       * Blocks the window AND deals with everyone already booked inside it.
+       *
+       * The previous implementation called addIntervalBlock, which only stops
+       * new bookings — patients already holding slots in the window kept a
+       * live appointment and were told nothing, then travelled to the hospital
+       * for a doctor who had gone.
+       */
+      const outcome = await blockIntervalAndNotify({
         hospitalId: session.hospitalId,
         doctorId,
         serviceDate,
         startTime,
         endTime,
         reason: reason || 'Emergency / Temporary Unavailability',
+        actorUserId: session.userId,
       });
+
       return NextResponse.json({
         ok: true,
-        message: 'Interval blocked successfully',
-        block: row,
+        message: outcome.message,
+        blockId: outcome.blockId,
+        summary: outcome.summary,
+        // Patients already in the waiting room, for reception to speak to.
+        needsDeskAction: outcome.needsDeskAction,
       });
     }
 

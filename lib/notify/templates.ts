@@ -1,6 +1,11 @@
 import type { Locale } from '@/lib/i18n/patient';
 
-export type TemplateCode = 'queue_link' | 'queue_milestone' | 'slot_reminder' | 'owner_monthly_report';
+export type TemplateCode =
+  | 'queue_link'
+  | 'queue_milestone'
+  | 'slot_reminder'
+  | 'slot_disrupted'
+  | 'owner_monthly_report';
 
 /**
  * Meta approves templates per name *and* per language. Submit them all at once.
@@ -59,6 +64,32 @@ export const TEMPLATES: Record<TemplateCode, TemplateDefinition> = {
     },
   },
   /**
+   * The doctor cannot keep an appointment that was already booked.
+   *
+   * Wording is constrained by more than Meta's classifier here. It opens on
+   * the appointment, states plainly that it cannot go ahead, and gives the
+   * patient the one action that fixes it — because the alternative is somebody
+   * travelling to a hospital for a doctor who is not there. It apologises
+   * once; a longer apology reads as evasion and pushes the instruction further
+   * down the message.
+   *
+   * The time and date are separate variables rather than one pre-formatted
+   * string so each renders in the patient's own locale conventions.
+   */
+  slot_disrupted: {
+    name: 'opd_slot_disrupted',
+    variables: ['doctorName', 'appointmentTime', 'appointmentDate'],
+    body: {
+      mr: 'डॉ. {{1}} यांच्यासोबत {{3}} रोजी {{2}} वाजता असलेली तुमची अपॉइंटमेंट होऊ शकणार नाही, कारण डॉक्टर त्या वेळेत उपलब्ध नाहीत. कृपया खालील लिंकवरून दुसरी वेळ निवडा. गैरसोयीबद्दल क्षमस्व.',
+      hi: 'डॉ. {{1}} के साथ {{3}} को {{2}} बजे आपकी अपॉइंटमेंट नहीं हो पाएगी, क्योंकि डॉक्टर उस समय उपलब्ध नहीं हैं। कृपया नीचे दिए गए लिंक से दूसरा समय चुनें। असुविधा के लिए खेद है।',
+      en: 'Your appointment with Dr. {{1}} at {{2}} on {{3}} cannot go ahead, as the doctor is unavailable at that time. Please choose another time using the link below. We are sorry for the inconvenience.',
+    },
+    urlButton: {
+      label: { mr: 'नवीन वेळ निवडा', hi: 'नया समय चुनें', en: 'Pick a new time' },
+      path: '/book?doctor={{1}}',
+    },
+  },
+  /**
    * Sent to the hospital owner, not a patient.
    */
   owner_monthly_report: {
@@ -82,6 +113,10 @@ export const TEMPLATES: Record<TemplateCode, TemplateDefinition> = {
 export const CRITICAL_TEMPLATES: ReadonlySet<TemplateCode> = new Set([
   'queue_link',
   'slot_reminder',
+  // Suppressing this one to save a fraction of a rupee means a patient travels
+  // to a hospital for a doctor who is not there. It is the least droppable
+  // message the platform sends.
+  'slot_disrupted',
 ]);
 
 export const isCritical = (code: TemplateCode): boolean => CRITICAL_TEMPLATES.has(code);
