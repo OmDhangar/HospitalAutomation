@@ -159,11 +159,28 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
       variables = [String(row.tokenNumber), cleanDoc];
     } else if (templateCode === 'slot_reminder') {
       variables = [cleanDoc, String(payload.appointmentTime ?? payload.slotTime ?? '')];
+    } else if (templateCode === 'appointment_confirmed') {
+      variables = [
+        cleanDoc,
+        String(payload.appointmentDate ?? ''),
+        String(payload.appointmentTime ?? ''),
+        String(row.tokenNumber ?? payload.tokenNumber ?? ''),
+      ];
     } else if (templateCode === 'slot_disrupted') {
       variables = [
         cleanDoc,
         String(payload.appointmentTime ?? ''),
         String(payload.appointmentDate ?? ''),
+      ];
+    } else if (templateCode === 'queue_skipped') {
+      variables = [String(row.tokenNumber ?? payload.tokenNumber ?? ''), cleanDoc];
+    } else if (templateCode === 'appointment_cancelled') {
+      variables = [cleanDoc, String(payload.appointmentDate ?? '')];
+    } else if (templateCode === 'doctor_delayed') {
+      variables = [
+        cleanDoc,
+        String(payload.delayMinutes ?? ''),
+        String(payload.newTime ?? ''),
       ];
     } else if (templateCode === 'owner_monthly_report') {
       variables = [
@@ -192,9 +209,9 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
      * rebooking turns into a phone call to reception.
      */
     const urlButtonParam =
-      templateCode === 'queue_link'
+      templateCode === 'queue_link' || templateCode === 'appointment_confirmed'
         ? (row.publicToken ?? undefined)
-        : templateCode === 'slot_disrupted'
+        : templateCode === 'slot_disrupted' || templateCode === 'appointment_cancelled'
           ? (String(payload.doctorId ?? '') || undefined)
           : undefined;
 

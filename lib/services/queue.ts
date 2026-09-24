@@ -20,9 +20,30 @@ import { currentDelayMinutes, serviceDateIn } from '@/lib/domain/time';
 import type { AppointmentStatus, QueueAction, QueueEntry } from '@/lib/domain/types';
 import { generatePublicToken } from '@/lib/security/tokens';
 
-/** Notify a patient once they are this close to the front. */
-export const MILESTONE_AHEAD = 4;
-const MILESTONE_KIND = `queue_ahead_${MILESTONE_AHEAD}`;
+/**
+ * How close to their turn a patient is nudged, in minutes of estimated wait.
+ *
+ * Time, not position. "Four patients ahead" is a different amount of warning
+ * for a dermatologist averaging four minutes and a cardiologist averaging
+ * twenty — forty minutes early in one case and fifteen in the other. Ten
+ * minutes is the same useful warning in both.
+ *
+ * Deliberately not a "your turn now" message. Almost every patient is already
+ * present or has cancelled by then, so it would be a message per appointment
+ * bought for nothing — and at roughly one rupee per patient across a
+ * portfolio, the cheapest message is the one not sent.
+ */
+export const MILESTONE_WAIT_MINUTES = 10;
+
+/**
+ * A floor on position regardless of the estimate.
+ *
+ * Early in a session there are no completed consultations to measure, so the
+ * estimate leans on a configured default that may be badly wrong. Whoever is
+ * next gets told regardless.
+ */
+export const MILESTONE_AHEAD = 1;
+const MILESTONE_KIND = 'queue_approaching';
 const CONSULT_SAMPLE_SIZE = 50;
 
 export type QueueRow = {
@@ -125,6 +146,8 @@ async function loadDayAppointments(
       patientName: patients.name,
       patientAge: patients.age,
       whatsappOptInAt: patients.whatsappOptInAt,
+      /** Needed so a nudge goes out in the language the patient chose. */
+      locale: patients.locale,
       scheduledSlotAt: appointments.scheduledSlotAt,
     })
     .from(appointments)
@@ -282,20 +305,35 @@ async function enqueueMilestones(
     entries: QueueEntry[];
     rows: Awaited<ReturnType<typeof loadDayAppointments>>;
     doctorName: string;
+    consultDurations: number[];
+    fallbackConsultMinutes?: number;
+    currentDelayMinutes?: number;
+    now: Date;
   },
 ) {
   const byId = new Map(args.rows.map((row) => [row.id, row]));
   const ordered = orderQueue(args.entries);
 
-  const due = ordered
-    .map((entry, index) => ({ entry, ahead: index }))
-    .filter(({ entry, ahead }) => entry.status === 'WAITING' && ahead <= MILESTONE_AHEAD);
+  for (const [index, entry] of ordered.entries()) {
+    if (entry.status !== 'WAITING') continue;
 
-  for (const { entry, ahead } of due) {
     const row = byId.get(entry.appointmentId);
     if (!row) continue;
     // Same consent rule as the token link.
     if (!row.whatsappOptInAt) continue;
+
+    const eta = estimateEta({
+      patientsAhead: index,
+      consultDurations: args.consultDurations,
+      currentDelayMinutes: args.currentDelayMinutes ?? 0,
+      fallbackConsultMinutes: args.fallbackConsultMinutes,
+      now: args.now,
+    });
+
+    // Position acts as a floor: with no measured durations yet the estimate is
+    // a guess, and whoever is next should hear from us either way.
+    const due = eta.waitMinutes <= MILESTONE_WAIT_MINUTES || index <= MILESTONE_AHEAD;
+    if (!due) continue;
 
     await tx
       .insert(notificationOutbox)
@@ -305,11 +343,17 @@ async function enqueueMilestones(
         patientId: row.patientId,
         milestone: MILESTONE_KIND,
         templateCode: 'queue_milestone',
-        locale: 'en',
+        // Was hardcoded to 'en', which sent Marathi and Hindi patients an
+        // English message regardless of the language they had chosen.
+        locale: row.locale ?? 'en',
         payload: {
-          patientsAhead: ahead,
+          patientsAhead: index,
           tokenNumber: entry.tokenNumber,
           doctorName: args.doctorName,
+          // The template's fourth variable. Omitting it rendered "Estimated
+          // wait: ~ min." — and an empty parameter is a send Meta can reject
+          // outright.
+          waitMinutes: eta.waitMinutes,
         },
       })
       .onConflictDoNothing();
@@ -569,7 +613,10 @@ export async function advanceQueue(args: {
   const serviceDate = serviceDateIn(args.timezone, now);
 
   return withTenant(args.hospitalId, async (tx) => {
-    await lockDoctorDay(tx, {
+    // Captured rather than discarded: the day row carries the scheduled and
+    // actual session start, which is how the nudge knows the doctor is running
+    // late and pushes its estimate out accordingly.
+    const day = await lockDoctorDay(tx, {
       hospitalId: args.hospitalId,
       doctorId: args.doctorId,
       serviceDate,
@@ -595,7 +642,10 @@ export async function advanceQueue(args: {
 
     if (transitions.length > 0) {
       const [doctor] = await tx
-        .select({ name: doctors.name })
+        .select({
+          name: doctors.name,
+          defaultConsultMinutes: doctors.defaultConsultMinutes,
+        })
         .from(doctors)
         .where(eq(doctors.id, args.doctorId));
 
@@ -604,11 +654,24 @@ export async function advanceQueue(args: {
         return transition ? { ...row, status: transition.to } : row;
       });
 
+      // The nudge is now time-based, so it needs the same evidence the
+      // patient-facing ETA uses: what this doctor's consultations have
+      // actually taken today, and how far behind the session is running.
+      const durations = await loadConsultDurationsForDate(tx, args.doctorId, serviceDate);
+
       await enqueueMilestones(tx, {
         hospitalId: args.hospitalId,
         entries: updated.map(toQueueEntry),
         rows: updated,
         doctorName: doctor?.name ?? '',
+        consultDurations: durations,
+        fallbackConsultMinutes: doctor?.defaultConsultMinutes,
+        currentDelayMinutes: currentDelayMinutes({
+          scheduledStartAt: day?.scheduledStartAt ?? null,
+          sessionStartedAt: day?.sessionStartedAt ?? null,
+          now,
+        }),
+        now,
       });
     }
 
@@ -667,8 +730,95 @@ export async function applyQueueAction(args: {
       now,
     });
 
+    await notifyOutcome(tx, {
+      hospitalId: args.hospitalId,
+      appointmentId: args.appointmentId,
+      doctorId: current.doctorId,
+      serviceDate: current.serviceDate,
+      action: args.action,
+      timezone: args.timezone,
+    });
+
     return { from: fresh.status, to };
   });
+}
+
+/**
+ * Tells the patient when an action of reception's changes their day.
+ *
+ * Until now every one of these was silent. A skipped patient waited
+ * indefinitely for a call that had already happened; a cancelled patient
+ * travelled to an appointment that no longer existed. Neither is visible from
+ * inside the product, which is exactly why both survived this long.
+ *
+ * Only the three outcomes a patient cannot otherwise discover are messaged.
+ * `hold`, `recall`, `resume` and `complete` are deliberately silent: a held
+ * patient is still in the queue and will be nudged when their turn nears, and
+ * telling somebody their consultation finished is a message they can see for
+ * themselves.
+ */
+async function notifyOutcome(
+  tx: Tx,
+  args: {
+    hospitalId: string;
+    appointmentId: string;
+    doctorId: string;
+    serviceDate: string;
+    action: QueueAction;
+    timezone: string;
+  },
+) {
+  const template =
+    args.action === 'skip'
+      ? 'queue_skipped'
+      : args.action === 'cancel' || args.action === 'mark_no_show'
+        ? 'appointment_cancelled'
+        : null;
+
+  if (!template) return;
+
+  const [row] = await tx
+    .select({
+      patientId: appointments.patientId,
+      tokenNumber: appointments.tokenNumber,
+      locale: patients.locale,
+      optInAt: patients.whatsappOptInAt,
+      doctorName: doctors.name,
+    })
+    .from(appointments)
+    .innerJoin(patients, eq(patients.id, appointments.patientId))
+    .innerJoin(doctors, eq(doctors.id, appointments.doctorId))
+    .where(eq(appointments.id, args.appointmentId));
+
+  // Same consent gate as every other patient message.
+  if (!row?.optInAt) return;
+
+  await tx
+    .insert(notificationOutbox)
+    .values({
+      hospitalId: args.hospitalId,
+      appointmentId: args.appointmentId,
+      patientId: row.patientId,
+      /**
+       * Keyed to the action, not just the template. A patient can legitimately
+       * be skipped and later cancelled, and both are worth telling them about;
+       * the dedup index still stops either being sent twice.
+       */
+      milestone: `outcome:${args.action}`,
+      templateCode: template,
+      locale: row.locale ?? 'en',
+      payload: {
+        tokenNumber: row.tokenNumber,
+        doctorName: row.doctorName,
+        doctorId: args.doctorId,
+        appointmentDate: new Intl.DateTimeFormat('en-IN', {
+          timeZone: args.timezone,
+          day: 'numeric',
+          month: 'short',
+        }).format(new Date(`${args.serviceDate}T12:00:00Z`)),
+      },
+    })
+    .onConflictDoNothing();
 }
 
 /** Explicit priority insert, so an out-of-order patient enters the model. */

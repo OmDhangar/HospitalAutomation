@@ -30,12 +30,54 @@ import { TEMPLATES, templateBaseUrl } from '@/lib/notify/templates';
 const GRAPH_VERSION = 'v23.0';
 
 /** Meta requires sample values for each {{n}} so reviewers can see the shape. */
+/**
+ * Sample values Meta shows its reviewer, one per {{n}} in body order.
+ *
+ * Not optional. A template with variables and no example is rejected, and a
+ * rejection means editing and resubmitting — which is the review window this
+ * whole exercise exists to avoid entering twice. Every template with variables
+ * must appear here; the assertion below enforces it rather than trusting that
+ * whoever adds the next one remembers.
+ */
 const EXAMPLES: Record<string, string[]> = {
   opd_queue_link: ['42', 'Dr Kulkarni'],
+  opd_appointment_confirmed: ['Mehta', '24 Sep', '10:30 AM', '42'],
   opd_queue_milestone: ['42', 'Dr Kulkarni', '3', '15'],
   opd_slot_reminder: ['Dr Mehta', '10:30 AM'],
+  opd_slot_disrupted: ['Mehta', '10:30 AM', '24 Sep'],
+  opd_queue_skipped: ['42', 'Kulkarni'],
+  opd_appointment_cancelled: ['Mehta', '24 Sep'],
+  opd_doctor_delayed: ['Mehta', '30', '11:15 AM'],
   opd_owner_monthly_report: ['2026-08', '4820', '18', '96'],
 };
+
+/**
+ * Every variable gets an example, and the counts match.
+ *
+ * Checked at build time rather than discovered as a rejection days later. A
+ * mismatch here is also how a template ends up approved with the wrong number
+ * of parameters, which then fails at send time with code 132000.
+ */
+function assertExamplesComplete() {
+  for (const definition of Object.values(TEMPLATES)) {
+    const expected = definition.variables.length;
+    if (expected === 0) continue;
+
+    const example = EXAMPLES[definition.name];
+    if (!example) {
+      throw new Error(
+        `${definition.name} has ${expected} variable(s) but no entry in EXAMPLES. ` +
+          'Meta rejects a template whose variables carry no sample values.',
+      );
+    }
+    if (example.length !== expected) {
+      throw new Error(
+        `${definition.name} declares ${expected} variable(s) but EXAMPLES supplies ` +
+          `${example.length}. These must match, or sends fail with code 132000.`,
+      );
+    }
+  }
+}
 
 type BodyComponent = {
   type: 'BODY';
@@ -43,14 +85,13 @@ type BodyComponent = {
   example?: { body_text: string[][] };
 };
 
+type UrlButton = { type: 'URL'; text: string; url: string; example: string[] };
+/** Quick replies carry no parameters — the label is the whole button. */
+type QuickReplyButton = { type: 'QUICK_REPLY'; text: string };
+
 type ButtonsComponent = {
   type: 'BUTTONS';
-  buttons: Array<{
-    type: 'URL';
-    text: string;
-    url: string;
-    example: string[];
-  }>;
+  buttons: Array<UrlButton | QuickReplyButton>;
 };
 
 type TemplatePayload = {
@@ -61,6 +102,7 @@ type TemplatePayload = {
 };
 
 function buildPayloads(): TemplatePayload[] {
+  assertExamplesComplete();
   const payloads: TemplatePayload[] = [];
 
   for (const definition of Object.values(TEMPLATES)) {
@@ -74,19 +116,31 @@ function buildPayloads(): TemplatePayload[] {
         },
       ];
 
+      /**
+       * Buttons are one component, not one per button.
+       *
+       * Meta accepts a single BUTTONS component per template, so a URL button
+       * and a quick reply on the same template have to be collected before
+       * being pushed. Sending two BUTTONS components is rejected.
+       */
+      const buttons: Array<UrlButton | QuickReplyButton> = [];
+
       if (definition.urlButton) {
         const url = templateBaseUrl() + definition.urlButton.path;
-        components.push({
-          type: 'BUTTONS',
-          buttons: [
-            {
-              type: 'URL',
-              text: definition.urlButton.label[locale],
-              url,
-              example: [url.replace('{{1}}', 'abc123XYZ')],
-            },
-          ],
+        buttons.push({
+          type: 'URL',
+          text: definition.urlButton.label[locale],
+          url,
+          example: [url.replace('{{1}}', 'abc123XYZ')],
         });
+      }
+
+      for (const reply of definition.quickReplies?.[locale] ?? []) {
+        buttons.push({ type: 'QUICK_REPLY', text: reply });
+      }
+
+      if (buttons.length > 0) {
+        components.push({ type: 'BUTTONS', buttons });
       }
 
       payloads.push({

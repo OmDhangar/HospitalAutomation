@@ -233,6 +233,63 @@ export function CallNextButton({
   );
 }
 
+/**
+ * Colour carries the meaning, because the word may not.
+ *
+ * Reception is often run by someone whose English is limited and who is
+ * working fast with a queue of people in front of them. Reading "Skip" and
+ * "Cancel" under pressure and picking correctly is a demand the interface can
+ * remove: the two are never confused when one is amber and the other is red.
+ *
+ * The scale is consequence, not category — how hard the action is to undo:
+ *
+ *   slate   start/resume   routine, reversible
+ *   amber   hold           paused, the patient keeps their place
+ *   blue    skip · recall  reorders the queue, fully reversible
+ *   rose    cancel         ends the appointment, messages the patient
+ *   red     no-show        ends it and records a permanent absence
+ *
+ * Colour is never the only signal: each button keeps its label, so nothing
+ * here depends on distinguishing red from amber. That matters for the roughly
+ * one in twelve Indian men with red-green colour blindness.
+ */
+const ACTION_TONES: Partial<Record<QueueAction, string>> = {
+  hold:
+    'bg-amber-50 text-amber-900 ring-1 ring-inset ring-amber-300 ' +
+    'hover:bg-amber-100 active:bg-amber-200 focus-visible:outline-amber-600',
+  resume:
+    'bg-emerald-50 text-emerald-900 ring-1 ring-inset ring-emerald-300 ' +
+    'hover:bg-emerald-100 active:bg-emerald-200 focus-visible:outline-emerald-600',
+  skip:
+    'bg-sky-50 text-sky-900 ring-1 ring-inset ring-sky-300 ' +
+    'hover:bg-sky-100 active:bg-sky-200 focus-visible:outline-sky-600',
+  recall:
+    'bg-sky-50 text-sky-900 ring-1 ring-inset ring-sky-300 ' +
+    'hover:bg-sky-100 active:bg-sky-200 focus-visible:outline-sky-600',
+  cancel:
+    'bg-rose-50 text-rose-800 ring-1 ring-inset ring-rose-300 ' +
+    'hover:bg-rose-100 active:bg-rose-200 focus-visible:outline-rose-600',
+  mark_no_show:
+    'bg-red-600 text-white ring-1 ring-inset ring-red-700 ' +
+    'hover:bg-red-700 active:bg-red-800 focus-visible:outline-red-700',
+};
+
+/**
+ * A shape for each action, for when colour alone will not do.
+ *
+ * Printed, photocopied, on a sun-bleached monitor, or read by someone who
+ * cannot separate the reds from the ambers — the glyph still distinguishes
+ * them. Chosen to be legible at a glance rather than decorative.
+ */
+const ACTION_GLYPHS: Partial<Record<QueueAction, string>> = {
+  hold: '⏸',
+  resume: '▶',
+  skip: '⤼',
+  recall: '↩',
+  cancel: '✕',
+  mark_no_show: '⊘',
+};
+
 export function QueueActionButton({
   doctorId,
   appointmentId,
@@ -240,6 +297,7 @@ export function QueueActionButton({
   label,
   size = 'lg',
   variant = 'secondary',
+  className,
 }: {
   doctorId: string;
   appointmentId: string;
@@ -247,6 +305,7 @@ export function QueueActionButton({
   label: string;
   size?: 'sm' | 'md' | 'lg' | 'xl';
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
+  className?: string;
 }) {
   const toast = useToast();
   const [isPending, startTransition] = useTransition();
@@ -262,14 +321,25 @@ export function QueueActionButton({
     });
   };
 
+  const tone = ACTION_TONES[action];
+  const glyph = ACTION_GLYPHS[action];
+
   return (
     <Button
       type="button"
       size={size}
-      variant={variant}
+      // A toned action supplies its own colours, so the base variant would
+      // otherwise fight them. Anything without a tone keeps the default.
+      variant={tone ? 'ghost' : variant}
       onClick={handleAction}
       isLoading={isPending}
+      className={cn(tone, className)}
     >
+      {glyph && !isPending ? (
+        <span aria-hidden="true" className="text-base leading-none">
+          {glyph}
+        </span>
+      ) : null}
       {label}
     </Button>
   );
