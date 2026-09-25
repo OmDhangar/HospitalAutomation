@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { drainOutbox } from '@/lib/notify/worker';
+import { runSweeps } from '@/lib/services/sweeps';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,5 +23,16 @@ export async function POST(request: Request) {
   }
 
   const result = await drainOutbox();
-  return NextResponse.json(result);
+
+  /**
+   * Housekeeping runs after the drain, and never blocks it.
+   *
+   * Expiring yesterday's stale rows is not worth delaying a token link a
+   * patient is waiting on, and runSweeps swallows its own failures for the
+   * same reason — a broken sweep must not turn a successful drain into a
+   * non-2xx that the scheduler then retries.
+   */
+  const sweeps = await runSweeps();
+
+  return NextResponse.json({ ...result, sweeps });
 }

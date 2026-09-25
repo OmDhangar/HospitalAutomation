@@ -45,9 +45,23 @@ export async function renewPlan() {
     throw error;
   }
 
-  // redirect() throws, so it must sit outside the try above or it would be
-  // caught as a failure and turned into an error page.
-  redirect(checkout.url);
+  /**
+   * Back to our own page, not out to the gateway.
+   *
+   * `redirect()` in a Server Action performs a client-side navigation when
+   * JavaScript is available, and a client-side navigation cannot cross
+   * origins — so redirecting straight to rzp.io did nothing visible while
+   * still creating the link. The button looked dead, and each later press
+   * found and reused the same unpaid link.
+   *
+   * The page then renders that link as a plain anchor, which is the one
+   * navigation a browser is guaranteed to perform.
+   *
+   * redirect() throws, so it sits outside the try above rather than being
+   * caught as a failure.
+   */
+  revalidatePath('/subscription');
+  redirect(`/subscription?pay=${checkout.paymentId}`);
 }
 
 /**

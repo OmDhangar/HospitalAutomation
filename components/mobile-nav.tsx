@@ -10,6 +10,16 @@ export type NavItem = {
   href: string;
 };
 
+const NAV_ICONS: Record<string, string> = {
+  '/dashboard': '🩺',
+  '/reports': '📊',
+  '/subscription': '💳',
+  '/pricing': '🏷️',
+  '/audit': '📜',
+  '/settings': '⚙️',
+  '/admin': '🛡️',
+};
+
 export function MobileNav({
   items,
   userName,
@@ -30,72 +40,86 @@ export function MobileNav({
     <div className="sm:hidden">
       {/* Hamburger Menu Toggle Button */}
       <button
+        type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="flex size-9 items-center justify-center rounded-lg border border-ink-200 text-ink-700 hover:bg-ink-100 focus:outline-none"
+        className="flex size-10 items-center justify-center rounded-xl border border-ink-200 bg-white text-ink-700 shadow-xs hover:bg-ink-50 active:bg-ink-100 focus:outline-none cursor-pointer"
         aria-label="Toggle navigation menu"
+        aria-expanded={isOpen}
       >
         <span className="text-xl leading-none">{isOpen ? '✕' : '☰'}</span>
       </button>
 
       {/* Slide-out Mobile Navigation Drawer */}
       {isOpen ? (
-        <div className="fixed inset-0 z-50 flex">
+        <div className="fixed inset-0 z-50 flex animate-fadeIn">
           {/* Backdrop */}
           <div
-            className="fixed inset-0 bg-ink-950/50 transition-opacity"
+            className="fixed inset-0 bg-ink-950/60 backdrop-blur-xs transition-opacity"
             onClick={() => setIsOpen(false)}
           />
 
           {/* Drawer Panel */}
-          <div className="relative ml-auto flex w-4/5 max-w-xs flex-col bg-white shadow-2xl transition-all">
-            <div className="flex items-center justify-between border-b border-ink-200 px-5 py-4">
-              <div className="flex items-center gap-2">
-                <span className="flex size-7 items-center justify-center rounded-lg bg-brand-600 text-xs font-bold text-white">
+          <div className="relative ml-auto flex w-[85%] max-w-xs flex-col bg-white shadow-2xl transition-transform duration-200">
+            <div className="flex items-center justify-between border-b border-ink-200 px-5 py-4 bg-ink-50/50">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-sm font-bold text-white shadow-xs">
                   Q
                 </span>
                 <span className="truncate text-sm font-bold text-ink-900">{hospitalName}</span>
               </div>
               <button
+                type="button"
                 onClick={() => setIsOpen(false)}
-                className="text-ink-500 hover:text-ink-900 p-1 font-bold"
+                className="size-8 flex items-center justify-center rounded-lg text-ink-500 hover:bg-ink-100 hover:text-ink-900 font-bold cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
             {/* Navigation Links */}
-            <nav className="flex-1 overflow-y-auto px-4 py-4 space-y-1">
+            <nav className="flex-1 overflow-y-auto px-3.5 py-4 space-y-1.5">
               {items.map((item) => {
                 const isActive = pathname === item.href;
+                const icon = NAV_ICONS[item.href] || '📌';
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
                     onClick={() => setIsOpen(false)}
                     className={cn(
-                      'flex items-center justify-between rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors',
+                      'flex items-center justify-between rounded-xl px-3.5 py-3 text-sm font-semibold transition-all',
                       isActive
-                        ? 'bg-brand-50 text-brand-700'
-                        : 'text-ink-700 hover:bg-ink-100 hover:text-ink-900',
+                        ? 'bg-brand-50 text-brand-700 shadow-xs border border-brand-200'
+                        : 'text-ink-700 hover:bg-ink-50 hover:text-ink-900 border border-transparent',
                     )}
                   >
-                    <span>{item.label}</span>
-                    {isActive ? <span className="text-xs text-brand-600 font-bold">●</span> : null}
+                    <div className="flex items-center gap-3">
+                      <span className="text-base">{icon}</span>
+                      <span>{item.label}</span>
+                    </div>
+                    {isActive ? (
+                      <span className="rounded-full bg-brand-600 size-2" />
+                    ) : null}
                   </Link>
                 );
               })}
             </nav>
 
             {/* User Profile & Sign Out Footer */}
-            <div className="border-t border-ink-200 p-4 bg-ink-50">
-              <div className="mb-3 px-1">
-                <p className="text-sm font-semibold text-ink-900">{userName}</p>
-                <p className="text-xs text-ink-500 capitalize">{userRole}</p>
+            <div className="border-t border-ink-200 p-4 bg-ink-50/80">
+              <div className="mb-3 px-1 flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-bold text-ink-900 truncate">{userName}</p>
+                  <p className="text-xs text-ink-500 capitalize">{userRole}</p>
+                </div>
+                <span className="rounded-full bg-brand-100 px-2 py-0.5 text-[10px] font-bold text-brand-800">
+                  Doctor / Staff
+                </span>
               </div>
               <form action={signOutAction}>
                 <button
                   type="submit"
-                  className="w-full rounded-lg bg-white border border-ink-200 py-2 px-3 text-center text-sm font-semibold text-rose-700 hover:bg-rose-50"
+                  className="w-full rounded-xl bg-white border border-ink-200 py-2.5 px-3 text-center text-sm font-semibold text-rose-700 shadow-xs hover:bg-rose-50 active:bg-rose-100 transition-colors cursor-pointer"
                 >
                   Sign out
                 </button>

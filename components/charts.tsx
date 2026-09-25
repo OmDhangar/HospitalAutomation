@@ -292,25 +292,25 @@ export function TrendStat({
   const good = changePercent !== null && changePercent > 0 === higherIsBetter;
 
   return (
-    <div className="px-5 py-4">
-      <p className="text-xs font-medium uppercase tracking-wide text-ink-500">{label}</p>
-      <p className="numeric mt-1 text-2xl font-semibold text-ink-900">
+    <div className="p-3.5 sm:px-5 sm:py-4">
+      <p className="text-[11px] sm:text-xs font-semibold uppercase tracking-wider text-ink-500">{label}</p>
+      <p className="numeric mt-1 text-xl sm:text-2xl font-bold text-ink-900">
         {value === null ? '—' : value.toLocaleString('en-IN')}
         {value !== null && suffix ? (
-          <span className="ml-0.5 text-base font-normal text-ink-500">{suffix}</span>
+          <span className="ml-0.5 text-sm sm:text-base font-normal text-ink-500">{suffix}</span>
         ) : null}
       </p>
       {changePercent !== null && material ? (
         <p
           className={cn(
-            'mt-1 text-xs font-medium',
+            'mt-1 text-[11px] sm:text-xs font-semibold truncate',
             good ? 'text-emerald-700' : 'text-rose-700',
           )}
         >
-          {changePercent > 0 ? '▲' : '▼'} {Math.abs(changePercent)}% vs previous period
+          {changePercent > 0 ? '▲' : '▼'} {Math.abs(changePercent)}% vs prev
         </p>
       ) : (
-        <p className="mt-1 text-xs text-ink-400">{hint ?? 'In line with previous period'}</p>
+        <p className="mt-1 text-[11px] sm:text-xs text-ink-400 truncate">{hint ?? 'In line with prev'}</p>
       )}
     </div>
   );

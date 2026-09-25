@@ -77,16 +77,16 @@ export default async function WhatsAppSettingsPage({
   const templateCount = Object.keys(TEMPLATES).length * LOCALES.length;
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+    <div className="space-y-5 sm:space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-ink-900">WhatsApp</h1>
-          <p className="mt-0.5 text-sm text-ink-500">
+          <h1 className="text-xl font-bold text-ink-900">WhatsApp Integration</h1>
+          <p className="mt-0.5 text-xs sm:text-sm text-ink-500">
             Booking and notifications for {session.hospitalName}
           </p>
         </div>
-        <Link href="/settings">
-          <Button>Back to settings</Button>
+        <Link href="/settings" className="w-full sm:w-auto">
+          <Button className="w-full sm:w-auto justify-center">← Back to settings</Button>
         </Link>
       </div>
 
@@ -103,12 +103,12 @@ export default async function WhatsAppSettingsPage({
           action={
             <span
               className={cn(
-                'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset',
+                'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset',
                 HEALTH_STYLES[integration.health],
               )}
             >
               <span
-                className={cn('size-1.5 rounded-full', HEALTH_DOTS[integration.health])}
+                className={cn('size-2 rounded-full', HEALTH_DOTS[integration.health])}
               />
               {HEALTH_LABELS[integration.health]}
             </span>
@@ -160,8 +160,8 @@ export default async function WhatsAppSettingsPage({
             </dl>
 
             {integration.lastError ? (
-              <div className="border-t border-ink-200 bg-rose-50 px-5 py-3">
-                <p className="text-sm leading-relaxed text-rose-900">
+              <div className="border-t border-ink-200 bg-rose-50 p-4 sm:px-5 sm:py-3">
+                <p className="text-xs sm:text-sm leading-relaxed text-rose-900">
                   {integration.lastError}
                 </p>
                 {integration.lastErrorAt ? (
@@ -173,8 +173,8 @@ export default async function WhatsAppSettingsPage({
             ) : null}
 
             {integration.verifiedName && integration.displayPhoneNumber ? (
-              <div className="border-t border-ink-200 bg-ink-50 px-5 py-3">
-                <p className="text-sm text-ink-600">
+              <div className="border-t border-ink-200 bg-ink-50 p-4 sm:px-5 sm:py-3">
+                <p className="text-xs sm:text-sm text-ink-600">
                   Patients see this sender as{' '}
                   <strong className="text-ink-900">{integration.verifiedName}</strong> (
                   {integration.displayPhoneNumber}).
@@ -182,13 +182,13 @@ export default async function WhatsAppSettingsPage({
               </div>
             ) : null}
 
-            <div className="flex flex-wrap gap-2 border-t border-ink-200 p-5">
-              <form action={validateWhatsAppConnection}>
-                <Button type="submit">Check connection</Button>
+            <div className="flex flex-col sm:flex-row gap-2 border-t border-ink-200 p-4 sm:p-5">
+              <form action={validateWhatsAppConnection} className="w-full sm:w-auto">
+                <Button type="submit" className="w-full sm:w-auto justify-center">Check connection</Button>
               </form>
               {integration.status === 'disconnected' ? (
-                <form action={requestWhatsAppSetup}>
-                  <Button type="submit" variant="primary">
+                <form action={requestWhatsAppSetup} className="w-full sm:w-auto">
+                  <Button type="submit" variant="primary" className="w-full sm:w-auto justify-center">
                     Reconnect
                   </Button>
                 </form>
@@ -205,7 +205,7 @@ export default async function WhatsAppSettingsPage({
             title="Disconnect WhatsApp"
             hint="Stops all patient notifications and WhatsApp booking"
           />
-          <div className="space-y-3 px-5 pt-4 text-sm leading-relaxed text-ink-600">
+          <div className="space-y-3 p-4 sm:px-5 sm:pt-4 text-xs sm:text-sm leading-relaxed text-ink-600">
             <p>
               This removes the WhatsApp integration from QueueCare. It does not
               delete any WhatsApp Business account, and it does not delete your
@@ -216,11 +216,11 @@ export default async function WhatsAppSettingsPage({
               immediately, and messages they send will go unanswered.
             </p>
           </div>
-          <form action={disconnectWhatsApp} className="space-y-4 p-5">
+          <form action={disconnectWhatsApp} className="space-y-4 p-4 sm:p-5">
             <Field label="Type DISCONNECT to confirm">
               <Input name="confirm" placeholder="DISCONNECT" autoComplete="off" />
             </Field>
-            <Button type="submit">Disconnect</Button>
+            <Button type="submit" className="w-full sm:w-auto justify-center">Disconnect</Button>
           </form>
         </Card>
       ) : null}
@@ -231,21 +231,21 @@ export default async function WhatsAppSettingsPage({
             title="Send a test message"
             hint="Confirms the approved templates work end to end"
           />
-          <form action={sendTestMessage} className="space-y-4 p-5">
+          <form action={sendTestMessage} className="space-y-4 p-4 sm:p-5">
             <Field
               label="Your own mobile number"
               hint="Uses the queue link template. Send only to a number you control."
             >
               <Input name="testPhone" placeholder="98765 43210" required />
             </Field>
-            <Button type="submit">Send test</Button>
+            <Button type="submit" className="w-full sm:w-auto justify-center">Send test</Button>
           </form>
         </Card>
       ) : null}
 
       <Card>
         <CardHeader title="Monthly summary" hint="One message a month, to you" />
-        <form action={saveOwnerPhone} className="space-y-4 p-5">
+        <form action={saveOwnerPhone} className="space-y-4 p-4 sm:p-5">
           <Field label="Owner’s mobile number" hint="Where the monthly summary goes.">
             <Input
               name="ownerPhone"
@@ -255,7 +255,7 @@ export default async function WhatsAppSettingsPage({
               placeholder="98765 43210"
             />
           </Field>
-          <Button type="submit" variant="primary">
+          <Button type="submit" variant="primary" className="w-full sm:w-auto justify-center">
             Save
           </Button>
         </form>
@@ -266,8 +266,8 @@ export default async function WhatsAppSettingsPage({
           title="Message templates"
           hint={`${templateCount} approved messages — ${Object.keys(TEMPLATES).length} kinds × ${LOCALES.length} languages`}
         />
-        <div className="px-5 py-4">
-          <p className="text-sm leading-relaxed text-ink-600">
+        <div className="p-4 sm:px-5 sm:py-4">
+          <p className="text-xs sm:text-sm leading-relaxed text-ink-600">
             These are the only messages QueueCare sends to your patients. Every one
             is triggered by something that happened — a booking, a token moving, a
             reminder — never by a promotion. Approval is handled for you.
@@ -276,26 +276,26 @@ export default async function WhatsAppSettingsPage({
 
         <div className="divide-y divide-ink-200 border-t border-ink-200">
           {Object.entries(TEMPLATES).map(([code, definition]) => (
-            <div key={code} className="px-5 py-4">
+            <div key={code} className="p-4 sm:px-5 sm:py-4">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <p className="font-mono text-sm font-medium text-ink-900">
+                <p className="font-mono text-xs sm:text-sm font-bold text-ink-900">
                   {definition.name}
                 </p>
-                <p className="text-xs text-ink-500">
+                <p className="text-[11px] sm:text-xs text-ink-500">
                   {definition.variables.length} variable
                   {definition.variables.length === 1 ? '' : 's'}:{' '}
                   {definition.variables.join(', ')}
                 </p>
               </div>
-              <dl className="mt-3 space-y-2">
+              <dl className="mt-3 space-y-2.5">
                 {LOCALES.map((locale) => (
-                  <div key={locale} className="flex gap-3">
-                    <dt className="w-16 shrink-0 text-xs font-medium text-ink-500">
+                  <div key={locale} className="flex flex-col sm:flex-row gap-1 sm:gap-3 bg-ink-50/50 p-2.5 rounded-lg">
+                    <dt className="w-20 shrink-0 text-xs font-bold text-brand-700">
                       {LOCALE_NAMES[locale]}
                     </dt>
                     <dd
                       className={cn(
-                        'min-w-0 flex-1 whitespace-pre-wrap text-sm leading-relaxed text-ink-700',
+                        'min-w-0 flex-1 whitespace-pre-wrap text-xs sm:text-sm leading-relaxed text-ink-800',
                         locale !== 'en' && 'font-deva',
                       )}
                     >
@@ -314,20 +314,15 @@ export default async function WhatsAppSettingsPage({
 
 /**
  * The not-connected state.
- *
- * Deliberately one button and no form fields. Under platform ownership the
- * hospital genuinely has nothing to supply — asking an owner for a Meta phone
- * number id would be asking them to go and find something they have no way of
- * knowing, and that is where onboarding stalls.
  */
 function NotConnected() {
   return (
-    <div className="space-y-4 p-5">
-      <p className="text-sm leading-relaxed text-ink-600">
+    <div className="space-y-4 p-4 sm:p-5">
+      <p className="text-xs sm:text-sm leading-relaxed text-ink-600">
         Connect WhatsApp so patients can book appointments by message and receive
         their token, queue position and reminders automatically.
       </p>
-      <ul className="space-y-2 text-sm text-ink-600">
+      <ul className="space-y-2 text-xs sm:text-sm text-ink-600">
         <Step n={1}>You ask for setup here.</Step>
         <Step n={2}>
           We arrange the WhatsApp Business number, the verification and the message
@@ -337,12 +332,12 @@ function NotConnected() {
           You approve the sender name your patients will see, and we switch it on.
         </Step>
       </ul>
-      <p className="text-sm text-ink-500">
+      <p className="text-xs text-ink-500">
         Typically takes a few working days. We will call you when the sender name
         needs approving.
       </p>
       <form action={requestWhatsAppSetup}>
-        <Button type="submit" variant="primary">
+        <Button type="submit" variant="primary" className="w-full sm:w-auto justify-center">
           Connect WhatsApp
         </Button>
       </form>
@@ -363,9 +358,9 @@ function Step({ n, children }: { n: number; children: React.ReactNode }) {
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 px-5 py-3">
-      <dt className="w-40 shrink-0 text-ink-500">{label}</dt>
-      <dd className="min-w-0 flex-1 text-ink-900">{children}</dd>
+    <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-4 p-3.5 sm:px-5 sm:py-3">
+      <dt className="text-xs sm:text-sm font-semibold text-ink-500 sm:w-40 shrink-0">{label}</dt>
+      <dd className="min-w-0 flex-1 text-xs sm:text-sm text-ink-900 font-medium">{children}</dd>
     </div>
   );
 }

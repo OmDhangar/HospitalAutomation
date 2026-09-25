@@ -277,9 +277,27 @@ export async function bookScheduledSlot(args: {
         appointmentId: appointment.id,
         patientId: patient.id,
         milestone: 'queue_link',
-        templateCode: 'queue_link',
+        /**
+         * A booked time is not a queue position.
+         *
+         * queue_link says "we will notify you when your turn is close" and
+         * never states a time — so a patient booking 3pm tomorrow was left
+         * without the one fact they needed. slotTime was already in this
+         * payload and simply unused by that template.
+         */
+        templateCode: 'appointment_confirmed',
         locale: patient.locale ?? 'en',
-        payload: { tokenNumber, publicToken, slotTime: slotTimeFormatted, doctorName: doctor.name },
+        payload: {
+          tokenNumber,
+          publicToken,
+          doctorName: doctor.name,
+          appointmentTime: slotTimeFormatted,
+          appointmentDate: new Intl.DateTimeFormat('en-IN', {
+            timeZone: timezone,
+            day: 'numeric',
+            month: 'short',
+          }).format(slotDate),
+        },
       })
       .onConflictDoNothing();
 

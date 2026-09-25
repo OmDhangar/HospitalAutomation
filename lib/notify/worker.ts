@@ -159,6 +159,29 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
       variables = [String(row.tokenNumber), cleanDoc];
     } else if (templateCode === 'slot_reminder') {
       variables = [cleanDoc, String(payload.appointmentTime ?? payload.slotTime ?? '')];
+    } else if (templateCode === 'appointment_confirmed') {
+      variables = [
+        cleanDoc,
+        String(payload.appointmentDate ?? ''),
+        String(payload.appointmentTime ?? ''),
+        String(row.tokenNumber ?? payload.tokenNumber ?? ''),
+      ];
+    } else if (templateCode === 'slot_disrupted') {
+      variables = [
+        cleanDoc,
+        String(payload.appointmentTime ?? ''),
+        String(payload.appointmentDate ?? ''),
+      ];
+    } else if (templateCode === 'queue_skipped') {
+      variables = [String(row.tokenNumber ?? payload.tokenNumber ?? ''), cleanDoc];
+    } else if (templateCode === 'appointment_cancelled') {
+      variables = [cleanDoc, String(payload.appointmentDate ?? '')];
+    } else if (templateCode === 'doctor_delayed') {
+      variables = [
+        cleanDoc,
+        String(payload.delayMinutes ?? ''),
+        String(payload.newTime ?? ''),
+      ];
     } else if (templateCode === 'owner_monthly_report') {
       variables = [
         String(payload.month ?? ''),
@@ -176,9 +199,21 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
       ];
     }
 
-    // Only the token travels; the domain is fixed in the approved template.
+    /**
+     * Only the suffix travels; the domain is fixed in the approved template.
+     *
+     * queue_link carries the public token so the patient lands on their own
+     * queue page. slot_disrupted carries the doctor id, so "Pick a new time"
+     * opens the booking page already filtered to the doctor they were seeing —
+     * a patient re-choosing from every doctor in the hospital is how a
+     * rebooking turns into a phone call to reception.
+     */
     const urlButtonParam =
-      templateCode === 'queue_link' ? (row.publicToken ?? undefined) : undefined;
+      templateCode === 'queue_link' || templateCode === 'appointment_confirmed'
+        ? (row.publicToken ?? undefined)
+        : templateCode === 'slot_disrupted' || templateCode === 'appointment_cancelled'
+          ? (String(payload.doctorId ?? '') || undefined)
+          : undefined;
 
     try {
       const sent = await provider.sendTemplate({

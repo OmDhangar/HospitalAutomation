@@ -42,6 +42,16 @@ type Strings = {
   refresh: string;
   waiting: string;
   leaveHint: string;
+  /** Appointment details and self-cancellation. */
+  appointmentTime: string;
+  cancelAction: string;
+  cancelPrompt: string;
+  cancelConfirm: string;
+  cancelKeep: string;
+  cancelDone: string;
+  cancelDoneHint: string;
+  cancelTooLate: string;
+  cancelTooLateHint: string;
 };
 
 export const t: Record<Locale, Strings> = {
@@ -69,6 +79,15 @@ export const t: Record<Locale, Strings> = {
     refresh: 'पुन्हा तपासा',
     waiting: 'रांगेत',
     leaveHint: 'तुम्ही बाहेर थांबू शकता. वेळ जवळ आल्यावर आम्ही कळवू.',
+    appointmentTime: 'अपॉइंटमेंटची वेळ',
+    cancelAction: 'अपॉइंटमेंट रद्द करा',
+    cancelPrompt: 'तुम्ही येऊ शकत नसाल, तर आत्ताच रद्द करा. ती वेळ दुसऱ्या रुग्णाला मिळेल.',
+    cancelConfirm: 'होय, रद्द करा',
+    cancelKeep: 'नको, ठेवा',
+    cancelDone: 'तुमची अपॉइंटमेंट रद्द झाली',
+    cancelDoneHint: 'कळवल्याबद्दल धन्यवाद. नवीन वेळ हवी असल्यास रुग्णालयाला संपर्क करा.',
+    cancelTooLate: 'ही अपॉइंटमेंट आता रद्द करता येणार नाही',
+    cancelTooLateHint: 'कृपया रिसेप्शनला विचारा.',
   },
   hi: {
     yourToken: 'आपका टोकन नंबर',
@@ -94,6 +113,15 @@ export const t: Record<Locale, Strings> = {
     refresh: 'दोबारा जाँचें',
     waiting: 'कतार में',
     leaveHint: 'आप बाहर इंतज़ार कर सकते हैं। समय पास आने पर हम बता देंगे।',
+    appointmentTime: 'अपॉइंटमेंट का समय',
+    cancelAction: 'अपॉइंटमेंट रद्द करें',
+    cancelPrompt: 'यदि आप नहीं आ पा रहे हैं, तो अभी रद्द कर दें। वह समय किसी और मरीज़ को मिल जाएगा।',
+    cancelConfirm: 'हाँ, रद्द करें',
+    cancelKeep: 'नहीं, रहने दें',
+    cancelDone: 'आपकी अपॉइंटमेंट रद्द कर दी गई',
+    cancelDoneHint: 'बताने के लिए धन्यवाद। नया समय चाहिए तो अस्पताल से संपर्क करें।',
+    cancelTooLate: 'यह अपॉइंटमेंट अब रद्द नहीं की जा सकती',
+    cancelTooLateHint: 'कृपया रिसेप्शन से पूछें।',
   },
   en: {
     yourToken: 'Your token number',
@@ -119,6 +147,24 @@ export const t: Record<Locale, Strings> = {
     refresh: 'Check again',
     waiting: 'In queue',
     leaveHint: 'You can wait outside. We will message you when your turn is close.',
+    appointmentTime: 'Appointment time',
+    cancelAction: 'Cancel appointment',
+    /**
+     * Says why cancelling is worth doing, not just that it is possible.
+     *
+     * A patient who cannot come will either cancel or quietly not turn up. The
+     * second costs the hospital an empty slot and the patient nothing, so the
+     * copy names the benefit to someone else — which is what actually moves
+     * people to press it.
+     */
+    cancelPrompt:
+      'If you cannot come, please cancel now. Your time can then be given to another patient.',
+    cancelConfirm: 'Yes, cancel it',
+    cancelKeep: 'No, keep it',
+    cancelDone: 'Your appointment is cancelled',
+    cancelDoneHint: 'Thank you for letting us know. To book again, contact the hospital.',
+    cancelTooLate: 'This appointment can no longer be cancelled here',
+    cancelTooLateHint: 'Please speak to the reception desk.',
   },
 };
 

@@ -53,13 +53,61 @@ export async function toggleSlotOverrideApi(payload: {
   return data;
 }
 
+export type DisruptionSummaryDto = {
+  cancelled: number;
+  needsDeskAction: number;
+  leftAlone: number;
+};
+
+/**
+ * Counts who a block would affect, changing nothing.
+ *
+ * Read-only by design so the confirmation the user sees is generated from the
+ * same rules that will run a moment later, rather than from a guess made in
+ * the browser.
+ */
+export async function previewIntervalApi(payload: {
+  doctorId: string;
+  serviceDate: string;
+  startTime: string;
+  endTime: string;
+}): Promise<{ summary: DisruptionSummaryDto }> {
+  const res = await fetch('/api/doctor-schedule', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'preview_interval', ...payload }),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.ok) {
+    throw new Error(data.error || 'Failed to check which appointments are affected');
+  }
+  return data;
+}
+
+/**
+ * Blocks the window and handles everyone booked inside it.
+ *
+ * Returns the server's summary sentence. The caller shows that rather than
+ * inventing its own: what the user needs to know is what happened to patients,
+ * not that a time range changed colour.
+ */
 export async function addIntervalBlockApi(payload: {
   doctorId: string;
   serviceDate: string;
   startTime: string;
   endTime: string;
   reason?: string;
-}) {
+}): Promise<{
+  message: string;
+  blockId: string;
+  summary: DisruptionSummaryDto;
+  needsDeskAction: Array<{
+    appointmentId: string;
+    patientName: string;
+    phoneE164: string | null;
+    tokenNumber: number | null;
+  }>;
+}> {
   const res = await fetch('/api/doctor-schedule', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
