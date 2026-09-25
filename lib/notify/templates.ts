@@ -75,10 +75,24 @@ export const TEMPLATES: Record<TemplateCode, TemplateDefinition> = {
   appointment_confirmed: {
     name: 'opd_appointment_confirmed',
     variables: ['doctorName', 'appointmentDate', 'appointmentTime', 'tokenNumber'],
+    /**
+     * Purely declarative, because Meta rejected the earlier wording as
+     * INCORRECT_CATEGORY in all three languages.
+     *
+     * The only difference was a closing instruction — "Please arrive 10
+     * minutes early". Meta's classifier reads an imperative to the reader as
+     * persuasion, which is a MARKETING signal, and it judges the template's
+     * overall purpose rather than individual words. Every template that passed
+     * first time states facts and asks for nothing.
+     *
+     * The advice was worth having, and the place for it is the queue page the
+     * button opens — where it costs nothing, needs no approval, and can be
+     * reworded freely. It is not there yet.
+     */
     body: {
-      mr: 'डॉ. {{1}} यांच्यासोबत तुमची अपॉइंटमेंट {{2}} रोजी {{3}} वाजता निश्चित झाली आहे. तुमचा टोकन क्रमांक {{4}} आहे. कृपया १० मिनिटे आधी पोहोचा.',
-      hi: 'डॉ. {{1}} के साथ आपकी अपॉइंटमेंट {{2}} को {{3}} बजे तय हो गई है। आपका टोकन नंबर {{4}} है। कृपया 10 मिनट पहले पहुँचें।',
-      en: 'Your appointment with Dr. {{1}} on {{2}} at {{3}} is confirmed. Your token number is {{4}}. Please arrive 10 minutes early.',
+      mr: 'डॉ. {{1}} यांच्यासोबत तुमची अपॉइंटमेंट {{2}} रोजी {{3}} वाजता निश्चित झाली आहे. या भेटीसाठी टोकन क्रमांक {{4}} राखून ठेवला आहे.',
+      hi: 'डॉ. {{1}} के साथ आपकी अपॉइंटमेंट {{2}} को {{3}} बजे तय हो गई है। इस विज़िट के लिए टोकन नंबर {{4}} सुरक्षित रखा गया है।',
+      en: 'Your appointment with Dr. {{1}} on {{2}} at {{3}} is confirmed. Token number {{4}} is reserved for this visit.',
     },
     urlButton: {
       label: { mr: 'तपशील पाहा', hi: 'विवरण देखें', en: 'View details' },
@@ -145,15 +159,35 @@ export const TEMPLATES: Record<TemplateCode, TemplateDefinition> = {
   queue_skipped: {
     name: 'opd_queue_skipped',
     variables: ['tokenNumber', 'doctorName'],
+    /**
+     * A plain notification, with no button.
+     *
+     * It carried an "I am here" quick reply, which Meta rejected as
+     * INCORRECT_CATEGORY in Marathi and English across two attempts — an
+     * interactive re-engagement prompt reads as persuasion, and removing the
+     * matching instruction from the body was not enough on its own.
+     *
+     * Dropping it is the right outcome regardless: nothing in the conversation
+     * state machine handles that reply, so a patient who tapped it would have
+     * been answered with the booking menu rather than given their place back.
+     * A button that does nothing is worse than no button.
+     *
+     * Re-adding it later means wiring the handler first and submitting under a
+     * new template name, since buttons are fixed at approval time.
+     */
     body: {
-      mr: 'तुमचा टोकन क्रमांक {{1}} डॉ. {{2}} यांच्यासाठी पुकारला गेला, पण तुम्ही उपस्थित नव्हतात. तुम्ही अजूनही रुग्णालयात असाल, तर खाली "मी येथे आहे" वर टॅप करा — आम्ही तुम्हाला पुन्हा रांगेत घेऊ.',
-      hi: 'आपका टोकन नंबर {{1}} डॉ. {{2}} के लिए पुकारा गया, लेकिन आप मौजूद नहीं थे। यदि आप अब भी अस्पताल में हैं, तो नीचे "मैं यहाँ हूँ" पर टैप करें — हम आपको फिर से कतार में जोड़ देंगे।',
-      en: 'Your token number {{1}} was called for Dr. {{2}}, but you were not present. If you are still at the hospital, tap "I am here" below and we will add you back to the queue.',
-    },
-    quickReplies: {
-      mr: ['मी येथे आहे'],
-      hi: ['मैं यहाँ हूँ'],
-      en: ['I am here'],
+      mr: 'डॉ. {{2}} यांच्यासाठी टोकन क्रमांक {{1}} पुकारला गेला, पण तुम्ही उपस्थित नव्हतात. तुम्ही रुग्णालयात असाल, तर रिसेप्शनवर कळवू शकता.',
+      hi: 'डॉ. {{2}} के लिए टोकन नंबर {{1}} पुकारा गया, लेकिन आप मौजूद नहीं थे। यदि आप अस्पताल में हैं, तो रिसेप्शन पर बता सकते हैं।',
+      /**
+       * Stripped further than the other two, which both passed.
+       *
+       * Marathi and Hindi cleared with a closing line about the reception
+       * desk; English was rejected again on the same structure. Meta's English
+       * classifier is the strictest, and any sentence describing what someone
+       * can do next reads to it as re-engagement. What remains is a record of
+       * what happened and nothing else.
+       */
+      en: 'Token number {{1}} for Dr. {{2}} was called at the clinic and there was no response at that time.',
     },
   },
   /**
@@ -187,10 +221,17 @@ export const TEMPLATES: Record<TemplateCode, TemplateDefinition> = {
   doctor_delayed: {
     name: 'opd_doctor_delayed',
     variables: ['doctorName', 'delayMinutes', 'newTime'],
+    /**
+     * "Please plan accordingly" was rejected in Hindi while the same sentence
+     * passed in Marathi and English — the classifier is noisy at the margin,
+     * and the right response to a borderline verdict is to move away from the
+     * margin rather than resubmit and hope. The new time is the useful fact;
+     * what the patient does with it is theirs to decide.
+     */
     body: {
-      mr: 'डॉ. {{1}} आज सुमारे {{2}} मिनिटे उशिरा सुरू करत आहेत. तुमची अपेक्षित वेळ आता सुमारे {{3}} आहे. त्यानुसार निघा — तुमचा टोकन क्रमांक कायम आहे.',
-      hi: 'डॉ. {{1}} आज लगभग {{2}} मिनट देर से शुरू कर रहे हैं। आपका अनुमानित समय अब लगभग {{3}} है। उसी हिसाब से निकलें — आपका टोकन नंबर सुरक्षित है।',
-      en: 'Dr. {{1}} is running about {{2}} minutes late today. Your expected time is now around {{3}}. Please plan accordingly — your token number is unchanged.',
+      mr: 'डॉ. {{1}} आज सुमारे {{2}} मिनिटे उशिरा सुरू करत आहेत. तुमची अपेक्षित वेळ आता सुमारे {{3}} आहे, आणि तुमचा टोकन क्रमांक कायम आहे.',
+      hi: 'डॉ. {{1}} आज लगभग {{2}} मिनट देर से शुरू कर रहे हैं। आपका अनुमानित समय अब लगभग {{3}} है, और आपका टोकन नंबर सुरक्षित है।',
+      en: 'Dr. {{1}} is running about {{2}} minutes late today. Your expected time is now around {{3}}, and your token number is unchanged.',
     },
   },
   /**
