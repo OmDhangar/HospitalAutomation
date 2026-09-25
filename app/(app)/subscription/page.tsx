@@ -12,7 +12,12 @@ import { computeCharge, formatRupees } from '@/lib/domain/billing';
 import { MESSAGE_CATEGORY_LABELS } from '@/lib/domain/message-category';
 import { isRazorpayConfigured, isTestMode } from '@/lib/payments/razorpay';
 import { canConfigureHospital } from '@/lib/services/auth';
-import { listPayments, paymentErrorMessage, type PaymentError } from '@/lib/services/payments';
+import {
+  listPayments,
+  paymentErrorMessage,
+  reconcileOpenPayments,
+  type PaymentError,
+} from '@/lib/services/payments';
 import {
   getCurrentSubscription,
   getSubscriptionHistory,
@@ -73,6 +78,22 @@ export default async function SubscriptionPage({
    * because of a table it does not use. It also keeps the page working on a
    * deployment where the code shipped ahead of the migration.
    */
+  /**
+   * Catch up on anything the gateway already settled before rendering.
+   *
+   * The webhook is the intended path, but a hospital that has genuinely paid
+   * while the page still shows an unpaid link is the worst state this system
+   * can present — and it is exactly what a misconfigured or lost webhook
+   * produces. Reconciling on render means returning from the payment page is
+   * enough to fix it, with no button to find and no support call.
+   *
+   * Sequential, not parallel with the reads below: it can change the very rows
+   * those reads are about.
+   */
+  if (paymentsEnabled) {
+    await reconcileOpenPayments(session.hospitalId);
+  }
+
   const [breakdown, recentPayments] = await Promise.all([
     getMessageBreakdown({
       hospitalId: session.hospitalId,
@@ -241,7 +262,49 @@ export default async function SubscriptionPage({
                 </p>
               ) : null}
 
-              {paymentsEnabled ? (
+              {!paymentsEnabled ? (
+                <p className="text-xs leading-relaxed text-ink-500">
+                  To renew or change plan, contact your Qurio representative. Online
+                  payment is not enabled for this hospital yet.
+                </p>
+              ) : openPayment?.shortUrl ? (
+                /**
+                 * A plain anchor, not a server action.
+                 *
+                 * `redirect()` inside a Server Action performs a *client-side*
+                 * navigation when JavaScript is available, and a client-side
+                 * navigation cannot cross origins — so redirecting to
+                 * rzp.io did nothing visible while still creating the link.
+                 * The button appeared dead and every later press reused the
+                 * same unpaid link.
+                 *
+                 * An anchor to another origin is the one thing a browser is
+                 * guaranteed to get right.
+                 */
+                <>
+                  <a
+                    href={openPayment.shortUrl}
+                    className="flex min-h-11 w-full items-center justify-center rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-700 active:bg-brand-800"
+                  >
+                    Pay {formatRupees(openPayment.totalPaise)} now
+                  </a>
+                  <p className="text-xs leading-relaxed text-ink-500">
+                    Opens a secure Razorpay page. UPI, card and net banking accepted.
+                    {testMode ? ' TEST MODE — no real money moves.' : ''}
+                  </p>
+                  {/* The safety net is still here for the case where someone
+                      paid on another device and this tab never reloaded. */}
+                  <form action={checkPaymentStatus}>
+                    <input type="hidden" name="paymentId" value={openPayment.id} />
+                    <button
+                      type="submit"
+                      className="text-xs font-medium text-ink-500 underline underline-offset-2"
+                    >
+                      I have already paid — check now
+                    </button>
+                  </form>
+                </>
+              ) : (
                 <>
                   <form action={renewPlan}>
                     <Button type="submit" variant="primary" className="w-full">
@@ -249,44 +312,13 @@ export default async function SubscriptionPage({
                     </Button>
                   </form>
                   <p className="text-xs leading-relaxed text-ink-500">
-                    Opens a secure Razorpay page. UPI, card and net banking accepted.
+                    Creates a secure Razorpay payment link. UPI, card and net banking
+                    accepted.
                     {testMode ? ' TEST MODE — no real money moves.' : ''}
                   </p>
                 </>
-              ) : (
-                <p className="text-xs leading-relaxed text-ink-500">
-                  To renew or change plan, contact your Qurio representative. Online
-                  payment is not enabled for this hospital yet.
-                </p>
               )}
 
-              {openPayment?.shortUrl ? (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                  <p className="text-xs leading-relaxed text-amber-900">
-                    A payment link for {formatRupees(openPayment.totalPaise)} is already
-                    open.
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    <a
-                      href={openPayment.shortUrl}
-                      className="text-xs font-semibold text-amber-900 underline underline-offset-2"
-                    >
-                      Open payment page
-                    </a>
-                    {/* For the case where the webhook never arrived: paying is
-                        not the same as us having heard about it. */}
-                    <form action={checkPaymentStatus}>
-                      <input type="hidden" name="paymentId" value={openPayment.id} />
-                      <button
-                        type="submit"
-                        className="text-xs font-semibold text-amber-900 underline underline-offset-2"
-                      >
-                        I have already paid
-                      </button>
-                    </form>
-                  </div>
-                </div>
-              ) : null}
             </div>
           </Card>
 

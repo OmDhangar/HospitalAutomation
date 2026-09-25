@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNull, lt } from 'drizzle-orm';
+import { and, desc, eq, gt, isNotNull, isNull, lt } from 'drizzle-orm';
 import { withTenant } from '@/lib/db';
 import { getAdminDb } from '@/lib/db/admin';
 import { auditLogs, hospitals, payments, planTiers } from '@/lib/db/schema';
@@ -78,6 +78,57 @@ export type PaymentView = {
   paidAt: Date | null;
   createdAt: Date;
 };
+
+/**
+ * Settles anything the gateway already considers paid.
+ *
+ * The webhook is the intended path and this is the safety net under it.
+ * Webhooks get misconfigured, lost, delivered to a URL that has moved, or
+ * dropped after their retries run out — and when that happens the hospital has
+ * genuinely paid while the product shows an unpaid link, which is the worst
+ * state this system can be in.
+ *
+ * Called when the subscription page renders, so returning from the payment
+ * page is enough to resolve it. Costs one gateway read, and only while a
+ * payment is actually open — which is a short window between creating a link
+ * and settling it, not a steady-state cost.
+ *
+ * Failures are swallowed: this is a background repair, and a gateway being
+ * briefly unreachable must not take down the billing page.
+ */
+export async function reconcileOpenPayments(hospitalId: string): Promise<number> {
+  if (!isRazorpayConfigured()) return 0;
+
+  const open = await withTenant(hospitalId, (tx) =>
+    tx
+      .select({ id: payments.id })
+      .from(payments)
+      .where(and(eq(payments.status, 'created'), isNotNull(payments.providerLinkId)))
+      .orderBy(desc(payments.createdAt))
+      // Bounded: a hospital with a pile of abandoned links must not turn one
+      // page render into a pile of gateway calls.
+      .limit(3),
+  );
+
+  let settled = 0;
+  for (const row of open) {
+    try {
+      const result = await reconcilePayment({ hospitalId, paymentId: row.id });
+      if (result.outcome === 'renewed') settled += 1;
+    } catch (error) {
+      console.error(
+        '[payments:auto_reconcile_failed]',
+        JSON.stringify({
+          hospital_id: hospitalId,
+          payment_id: row.id,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+  }
+
+  return settled;
+}
 
 export async function listPayments(
   hospitalId: string,
