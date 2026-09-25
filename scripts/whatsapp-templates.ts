@@ -321,6 +321,25 @@ async function main() {
 
   if (!shouldSubmit) {
     console.log(`${payloads.length} templates to create, all category UTILITY.\n`);
+
+    /**
+     * Warn here too, rather than only refusing at submit time.
+     *
+     * The preview is what people read before deciding the payloads look right.
+     * Printing button URLs that `--submit` would reject means the preview says
+     * one thing and the submission says another — and a base URL missing its
+     * scheme looks entirely plausible in a wall of JSON.
+     */
+    const base = templateBaseUrl();
+    if (!base.startsWith('https://')) {
+      console.log(
+        `  ! WHATSAPP_TEMPLATE_BASE_URL is "${base}", which has no https:// scheme.\n` +
+          '    The button URLs below are NOT what would be submitted — --submit\n' +
+          '    refuses this, because the URL is frozen into the approved template\n' +
+          '    and changing it later means re-approving every one of them.\n',
+      );
+    }
+
     console.log('Paste each into Meta → WhatsApp → Message Templates,');
     console.log('or re-run with --submit to create them via the API.\n');
     console.log(JSON.stringify(payloads, null, 2));
