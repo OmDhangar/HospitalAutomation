@@ -34,7 +34,16 @@ export default async function DisplayPage({ params }: PageProps<'/display/[branc
   });
 
   return (
-    <main className="min-h-dvh bg-ink-900 px-8 py-7 text-white">
+    /**
+     * min-h-screen, not min-h-dvh.
+     *
+     * `dvh` needs Chrome 108 and exists to cope with a mobile browser's
+     * collapsing address bar. A wall-mounted television has no such toolbar,
+     * so the dynamic unit buys nothing here and costs the dark background on
+     * any older TV browser — which shows up as a white band under the content,
+     * on the one screen in the building that a waiting room is looking at.
+     */
+    <main className="min-h-screen bg-ink-900 px-8 py-7 text-white">
       <AutoRefresh seconds={15} />
 
       <header className="mb-8 flex items-baseline justify-between border-b border-white/10 pb-5">

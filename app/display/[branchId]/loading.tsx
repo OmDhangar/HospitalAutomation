@@ -1,6 +1,6 @@
 export default function DisplayLoading() {
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-ink-950 px-6 py-8">
+    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-6 py-8">
       <div className="w-full max-w-5xl animate-pulse space-y-8">
         {/* Header skeleton */}
         <div className="flex items-center justify-between">
