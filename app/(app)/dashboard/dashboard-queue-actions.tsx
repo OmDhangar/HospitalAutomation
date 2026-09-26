@@ -272,6 +272,9 @@ const ACTION_TONES: Partial<Record<QueueAction, string>> = {
   mark_no_show:
     'bg-red-600 text-white ring-1 ring-inset ring-red-700 ' +
     'hover:bg-red-700 active:bg-red-800 focus-visible:outline-red-700',
+  enqueue:
+    'bg-brand-600 text-white ring-1 ring-inset ring-brand-700 ' +
+    'hover:bg-brand-700 active:bg-brand-800 focus-visible:outline-brand-700',
 };
 
 /**
@@ -282,6 +285,7 @@ const ACTION_TONES: Partial<Record<QueueAction, string>> = {
  * them. Chosen to be legible at a glance rather than decorative.
  */
 const ACTION_GLYPHS: Partial<Record<QueueAction, string>> = {
+  enqueue: '✓',
   hold: '⏸',
   resume: '▶',
   skip: '⤼',

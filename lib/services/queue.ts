@@ -72,6 +72,8 @@ export type QueueSnapshot = {
   rows: QueueRow[];
   /** Skipped and held patients: out of the line, but recoverable. */
   parked: QueueRow[];
+  /** Booked appointments reserved remotely, waiting for patient arrival / check-in. */
+  booked: QueueRow[];
   medianConsultMinutes: number | null;
   delayMinutes: number;
 };
@@ -997,6 +999,26 @@ export async function getQueueSnapshotInTx(
     parked: rows
       .filter((row) => row.status === 'SKIPPED' || row.status === 'HELD')
       .sort((a, b) => a.tokenNumber - b.tokenNumber)
+      .map((row) => ({
+        appointmentId: row.id,
+        tokenNumber: row.tokenNumber,
+        status: row.status,
+        priority: row.priority,
+        patientName: row.patientName,
+        patientAge: row.patientAge,
+        patientId: row.patientId,
+        enqueuedAt: row.enqueuedAt,
+        calledAt: row.calledAt,
+        scheduledSlotAt: row.scheduledSlotAt,
+      })),
+    booked: rows
+      .filter((row) => row.status === 'BOOKED' || row.status === 'CONFIRMED' || row.status === 'ARRIVED')
+      .sort((a, b) => {
+        if (a.scheduledSlotAt && b.scheduledSlotAt) {
+          return a.scheduledSlotAt.getTime() - b.scheduledSlotAt.getTime();
+        }
+        return a.tokenNumber - b.tokenNumber;
+      })
       .map((row) => ({
         appointmentId: row.id,
         tokenNumber: row.tokenNumber,

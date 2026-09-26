@@ -85,7 +85,11 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
     (row) => row.status === 'CALLED' || row.status === 'IN_CONSULTATION',
   );
   const waiting = snapshot?.rows.filter((row) => row.status === 'WAITING') ?? [];
-  const scheduledToday = snapshot?.rows.filter((row) => Boolean(row.scheduledSlotAt)) ?? [];
+  const booked = snapshot?.booked ?? [];
+  const scheduledToday = [
+    ...(snapshot?.rows.filter((row) => Boolean(row.scheduledSlotAt)) ?? []),
+    ...booked.filter((row) => Boolean(row.scheduledSlotAt)),
+  ];
 
   return (
     <>
@@ -284,6 +288,68 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
             <CardHeader title="Add walk-in" hint="Issues a token and sends the queue link" />
             <AddWalkInForm doctorId={selectedId ?? ''} branchId={branchId} />
           </Card>
+
+          {booked.length > 0 ? (
+            <Card>
+              <CardHeader
+                title="Booked appointments"
+                hint={`${booked.length} awaiting arrival / check-in`}
+              />
+              <ul className="divide-y divide-ink-200">
+                {booked.map((row) => (
+                  <li
+                    key={row.appointmentId}
+                    className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 sm:px-5 sm:py-3.5 hover:bg-ink-50/50 transition-colors"
+                  >
+                    <div className="flex items-start sm:items-center gap-3 min-w-0">
+                      <span className="numeric shrink-0 size-9 rounded-xl bg-sky-50 border border-sky-200 text-sky-800 text-base font-bold flex items-center justify-center">
+                        {row.tokenNumber}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                          <p className="truncate text-sm font-bold text-ink-900">
+                            {row.patientName}
+                            {row.patientAge ? (
+                              <span className="ml-1 text-xs text-ink-500 font-normal">
+                                ({row.patientAge}y)
+                              </span>
+                            ) : null}
+                          </p>
+                          {row.scheduledSlotAt ? (
+                            <span className="inline-flex items-center gap-1 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold text-sky-900">
+                              🕒 {formatTimeIn(session.timezone, row.scheduledSlotAt)}
+                            </span>
+                          ) : null}
+                          <StatusPill status={row.status} />
+                        </div>
+                        <p className="text-xs text-ink-500 mt-0.5">
+                          Booked remotely · Not in waiting room yet
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 self-end sm:self-auto shrink-0 pt-1 sm:pt-0">
+                      <QueueActionButton
+                        doctorId={selectedId!}
+                        appointmentId={row.appointmentId}
+                        action="enqueue"
+                        label="Check in"
+                        size="sm"
+                      />
+                      <QueueActionButton
+                        doctorId={selectedId!}
+                        appointmentId={row.appointmentId}
+                        action="cancel"
+                        label="Cancel"
+                        size="sm"
+                        variant="danger"
+                      />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          ) : null}
 
           <Card>
             <CardHeader title="Today" hint={snapshot?.serviceDate} />

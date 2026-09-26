@@ -42,7 +42,7 @@ export async function expireStaleAppointments(now: Date = new Date()): Promise<n
     .set({ status: 'EXPIRED', updatedAt: now })
     .where(
       and(
-        inArray(appointments.status, ['CREATED', 'CONFIRMED', 'ARRIVED', 'WAITING', 'HELD', 'SKIPPED']),
+        inArray(appointments.status, ['CREATED', 'BOOKED', 'CONFIRMED', 'ARRIVED', 'WAITING', 'HELD', 'SKIPPED']),
         lt(appointments.serviceDate, sql`(${now}::timestamptz at time zone 'Asia/Kolkata')::date`),
       ),
     )
@@ -137,7 +137,7 @@ export async function expireStaleAppointmentsForHospital(
     .where(
       and(
         eq(appointments.hospitalId, hospitalId),
-        inArray(appointments.status, ['CREATED', 'CONFIRMED', 'ARRIVED', 'WAITING', 'HELD', 'SKIPPED']),
+        inArray(appointments.status, ['CREATED', 'BOOKED', 'CONFIRMED', 'ARRIVED', 'WAITING', 'HELD', 'SKIPPED']),
         lt(appointments.serviceDate, sql`(${now}::timestamptz at time zone 'Asia/Kolkata')::date`),
       ),
     )

@@ -39,6 +39,7 @@ import { timeStringToMinutes } from './scheduling';
 /** Statuses worth examining. Terminal ones are excluded in SQL. */
 const LIVE_STATUSES = [
   'CREATED',
+  'BOOKED',
   'CONFIRMED',
   'ARRIVED',
   'WAITING',

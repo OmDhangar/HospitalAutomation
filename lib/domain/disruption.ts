@@ -35,6 +35,7 @@ export type DisruptionAction =
 export function disruptionActionFor(status: AppointmentStatus): DisruptionAction {
   switch (status) {
     case 'CREATED':
+    case 'BOOKED':
     case 'CONFIRMED':
       return 'cancel_and_notify';
 
@@ -115,6 +116,7 @@ export function minutesOfDayIn(timezone: string, at: Date): number {
 export function isCancellableByPatient(status: AppointmentStatus): boolean {
   switch (status) {
     case 'CREATED':
+    case 'BOOKED':
     case 'CONFIRMED':
     case 'ARRIVED':
     case 'WAITING':

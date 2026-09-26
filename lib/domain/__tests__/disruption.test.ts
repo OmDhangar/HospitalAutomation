@@ -12,6 +12,7 @@ import { APPOINTMENT_STATUSES } from '../types';
 describe('disruptionActionFor', () => {
   it('cancels and messages patients who have not arrived', () => {
     expect(disruptionActionFor('CREATED')).toBe('cancel_and_notify');
+    expect(disruptionActionFor('BOOKED')).toBe('cancel_and_notify');
     expect(disruptionActionFor('CONFIRMED')).toBe('cancel_and_notify');
   });
 
@@ -48,11 +49,11 @@ describe('disruptionActionFor', () => {
     }
   });
 
-  it('cancels only two of the twelve statuses', () => {
+  it('cancels only not-arrived statuses (CREATED, BOOKED, CONFIRMED)', () => {
     const cancelled = APPOINTMENT_STATUSES.filter(
       (s) => disruptionActionFor(s) === 'cancel_and_notify',
     );
-    expect(cancelled).toEqual(['CREATED', 'CONFIRMED']);
+    expect(cancelled).toEqual(['CREATED', 'BOOKED', 'CONFIRMED']);
   });
 });
 

@@ -135,7 +135,8 @@ export function CardHeader({
  */
 const STATUS_STYLES: Record<AppointmentStatus, { label: string; className: string }> = {
   CREATED: { label: 'New', className: 'bg-ink-100 text-ink-600 ring-ink-200' },
-  CONFIRMED: { label: 'Booked', className: 'bg-ink-100 text-ink-600 ring-ink-200' },
+  BOOKED: { label: 'Booked', className: 'bg-sky-50 text-sky-700 ring-sky-200' },
+  CONFIRMED: { label: 'Confirmed', className: 'bg-ink-100 text-ink-600 ring-ink-200' },
   ARRIVED: { label: 'Arrived', className: 'bg-sky-50 text-sky-700 ring-sky-200' },
   WAITING: { label: 'Waiting', className: 'bg-ink-100 text-ink-700 ring-ink-200' },
   CALLED: { label: 'Called', className: 'bg-brand-50 text-brand-800 ring-brand-300' },

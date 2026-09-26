@@ -26,7 +26,15 @@ const TRANSITIONS: Record<
   AppointmentStatus,
   Partial<Record<QueueAction, AppointmentStatus>>
 > = {
-  CREATED: { confirm: 'CONFIRMED', cancel: 'CANCELLED', expire: 'EXPIRED' },
+  CREATED: { book: 'BOOKED', confirm: 'CONFIRMED', cancel: 'CANCELLED', expire: 'EXPIRED' },
+  BOOKED: {
+    confirm: 'CONFIRMED',
+    arrive: 'ARRIVED',
+    enqueue: 'WAITING',
+    cancel: 'CANCELLED',
+    mark_no_show: 'NO_SHOW',
+    expire: 'EXPIRED',
+  },
   CONFIRMED: {
     arrive: 'ARRIVED',
     enqueue: 'WAITING',

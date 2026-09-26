@@ -1,5 +1,6 @@
 export const APPOINTMENT_STATUSES = [
   'CREATED',
+  'BOOKED',
   'CONFIRMED',
   'ARRIVED',
   'WAITING',
@@ -16,6 +17,7 @@ export const APPOINTMENT_STATUSES = [
 export type AppointmentStatus = (typeof APPOINTMENT_STATUSES)[number];
 
 export const QUEUE_ACTIONS = [
+  'book',
   'confirm',
   'arrive',
   'enqueue',

@@ -228,12 +228,11 @@ export async function bookScheduledSlot(args: {
         patientId: patient.id,
         serviceDate,
         tokenNumber,
-        status: 'WAITING',
+        status: 'BOOKED',
         source: 'whatsapp',
         publicToken,
         publicTokenExpiresAt,
         scheduledSlotAt: slotDate,
-        enqueuedAt: now,
       })
       .returning();
 
@@ -244,9 +243,9 @@ export async function bookScheduledSlot(args: {
       hospitalId: args.hospitalId,
       appointmentId: appointment.id,
       doctorId: doctor.id,
-      action: 'enqueue',
+      action: 'book',
       fromStatus: 'CREATED',
-      toStatus: 'WAITING',
+      toStatus: 'BOOKED',
       actorUserId: null,
       metadata: {
         scheduledSlotAt: slotDate.toISOString(),

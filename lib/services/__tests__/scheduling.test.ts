@@ -33,6 +33,24 @@ describe('Doctor Appointment Scheduling Engine', () => {
     ]);
   });
 
+  it('generates correct slot intervals for 5 minute consultation duration', () => {
+    const slots5 = generateRawSlots({
+      startTime: '10:00',
+      endTime: '10:30',
+      slotMinutes: 5,
+    });
+
+    expect(slots5.length).toBe(6);
+    expect(slots5.map((s) => s.timeFormatted)).toEqual([
+      '10:00 AM',
+      '10:05 AM',
+      '10:10 AM',
+      '10:15 AM',
+      '10:20 AM',
+      '10:25 AM',
+    ]);
+  });
+
   it('generates correct slot intervals for 15, 30, and 60 minute durations', () => {
     const slots15 = generateRawSlots({
       startTime: '10:00',
