@@ -77,6 +77,29 @@ export interface NotificationProvider {
 
 const GRAPH_VERSION = 'v23.0';
 
+/**
+ * Ceiling on a single send, matching `lib/notify/meta-admin.ts`.
+ *
+ * The drain claims up to `BATCH_SIZE` rows and sends them one after another, so
+ * an unbounded request does not stall one message — it stalls the whole batch,
+ * and the rows behind it stay in `sending` until the stuck-row reclaim releases
+ * them five minutes later. Whatever runs the tick has its own limit too: the
+ * serverless function is capped at sixty seconds and an external scheduler
+ * typically gives up around thirty, so without a cap here the process is killed
+ * mid-batch instead of failing one row.
+ *
+ * The trade-off is real and worth stating: a send that times out may still have
+ * been delivered, so the retry can duplicate it. That risk already exists — the
+ * current behaviour is a killed function and a row reclaimed and retried five
+ * minutes later, which duplicates just as happily while also delaying
+ * everything queued behind it. Ten seconds is long enough that a healthy send
+ * never reaches it.
+ *
+ * An abort surfaces as a plain `DOMException`, not a `ProviderError`, and the
+ * worker already treats anything that is not a `ProviderError` as retryable.
+ */
+const TIMEOUT_MS = 10_000;
+
 export class MetaCloudProvider implements NotificationProvider {
   readonly name = 'meta';
 
@@ -92,6 +115,7 @@ export class MetaCloudProvider implements NotificationProvider {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ messaging_product: 'whatsapp', ...(payload as object) }),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
       },
     );
 
@@ -208,6 +232,7 @@ export class MetaCloudProvider implements NotificationProvider {
         status: 'read',
         message_id: args.messageId,
       }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     }).catch(() => {});
 
     fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${args.phoneNumberId}/messages`, {
@@ -222,6 +247,7 @@ export class MetaCloudProvider implements NotificationProvider {
         to: args.toPhoneE164,
         type: 'typing_indicator',
       }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     }).catch(() => {});
   }
 }
