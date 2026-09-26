@@ -264,6 +264,10 @@ npm run whatsapp:templates        # print / --submit / --status / --fix
 npm run report:monthly            # owner summaries for the previous month
 ```
 
+`worker:tick` drains the outbox exactly once, which is what you want while
+debugging. In a deployment something has to call `POST /api/internal/tick` on a
+schedule instead — see [Scheduling the drain](#scheduling-the-drain).
+
 ---
 
 ## Multi-tenant WhatsApp strategy
@@ -285,8 +289,32 @@ Full reasoning in [`docs/runbooks/whatsapp-setup.md`](docs/runbooks/whatsapp-set
 
 ---
 
+## Scheduling the drain
+
+`POST /api/internal/tick` drains the notification outbox and runs the scheduled
+housekeeping. **Nothing calls it by default**, and nothing in the app reveals
+that: bookings succeed, the dashboard looks healthy, and no patient receives a
+queue link or a reminder. It is the single piece of setup that decides whether
+the product works.
+
+Vercel's Hobby cron runs once per day, anywhere inside the scheduled hour, and
+slot reminders are due fifteen minutes before an appointment. So pick one:
+
+| Option | Pick it when |
+|---|---|
+| [`infra/external-cron/`](infra/external-cron/README.md) | Nothing to operate — a free hosted cron service. No SLA, and the secret leaves your infrastructure. A bridge until Vercel Pro. |
+| [`infra/vps/`](infra/vps/README.md) | A VPS already exists and is already being patched. |
+| [`infra/aws/`](infra/aws/README.md) | No machine, plus real alarms, inside AWS's permanent free tier. |
+
+The interval is the worst case for how late a message can be — `scheduled_for`
+is a "not before" gate, so nothing is ever delivered early.
+
+---
+
 ## Documentation
 
+- [`infra/README.md`](infra/README.md) — the three ways to run the drain on a
+  schedule, and what each one costs you
 - [`docs/runbooks/whatsapp-setup.md`](docs/runbooks/whatsapp-setup.md) — account
   strategy, testing without Meta, what Meta's template review actually enforces
 - [`docs/runbooks/onboarding.md`](docs/runbooks/onboarding.md) — putting this into
@@ -310,6 +338,20 @@ Stated plainly, because a README that only lists strengths is not useful:
   hand, which is correct below roughly twenty customers.
 - **No SMS fallback**, no HMS/EMR integration, no native app. All deliberate.
 - **No production deployment.** Runs locally and against managed Postgres.
-al/tick`
+- **No scheduler watchdog.** A hosted cron service that stops running the job
+  sends no failure email, so the drain can die unnoticed. Before the first
+  paying hospital, either build the watchdog or move to
+  [`infra/aws/`](infra/aws/README.md), which alarms on consecutive failures.
+
+---
+
+## Before production
+
+- Meta business verification and nine template approvals (three kinds × three
+  languages) — start two weeks ahead, it gates everything
+- Decide the production domain before submitting templates: it is baked into
+  the queue link button and cannot be changed without re-approval
+- Re-check Meta's India rate card and update `PAISE_PER_MESSAGE`
+- Point a scheduler at `POST /api/internal/tick` — see [`infra/`](infra/README.md)
 - Run one restore drill and write down how long it took
 - Get the Data Processing Agreement reviewed

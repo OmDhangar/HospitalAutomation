@@ -40,7 +40,10 @@ Work down this list in order:
    before raising the threshold.
 3. `npm run worker:tick` by hand and read the output.
 4. If nothing is draining, check that whatever calls `POST /api/internal/tick`
-   is still running, and that `INTERNAL_TICK_SECRET` matches.
+   is still running, and that `INTERNAL_TICK_SECRET` matches. Whichever
+   scheduler this deployment uses is documented in
+   [`infra/`](../../infra/README.md); note that a hosted cron service which has
+   stopped running the job reports nothing at all.
 5. Rows stuck in `sending` for over five minutes are reclaimed automatically on
    the next pass. If they are piling up, the worker is crashing mid-send — check
    the logs before restarting it.
