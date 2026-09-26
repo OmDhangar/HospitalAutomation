@@ -155,7 +155,7 @@ export default function AppLayout({ children }: LayoutProps<'/'>) {
          * Responsive main container with tight padding on mobile (px-3.5 py-3.5)
          * and generous padding on tablet/desktop (sm:px-6 lg:py-6).
          */}
-        <main className="mx-auto w-full max-w-[1600px] px-3.5 py-3.5 sm:px-6 lg:py-6">
+        <main className="mx-auto w-full max-w-[1600px] px-3.5 py-3.5 sm:px-6 lg:py-6 2xl:px-10 2xl:py-8">
           {/**
            * Streamed rather than awaited. The banner needs a subscription
            * lookup, and blocking every page in the app on a billing query to

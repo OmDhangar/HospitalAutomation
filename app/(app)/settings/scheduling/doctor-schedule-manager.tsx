@@ -387,6 +387,7 @@ export function DoctorScheduleManager({
                   onChange={(e) => setSlotMinutes(Number(e.target.value))}
                   className="w-full rounded-lg border-0 bg-white px-3 py-2.5 text-sm text-ink-900 ring-1 ring-inset ring-ink-300 focus:ring-2 focus:ring-brand-600 cursor-pointer"
                 >
+                  <option value={5}>5 minutes</option>
                   <option value={10}>10 minutes</option>
                   <option value={15}>15 minutes</option>
                   <option value={20}>20 minutes</option>

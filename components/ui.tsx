@@ -12,22 +12,23 @@ type ButtonSize = 'sm' | 'md' | 'lg' | 'xl';
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary:
     'bg-brand-600 text-white hover:bg-brand-700 active:bg-brand-800 shadow-sm ' +
-    'focus-visible:outline-brand-700',
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2',
   secondary:
     'bg-white text-ink-700 ring-1 ring-inset ring-ink-300 hover:bg-ink-50 ' +
-    'active:bg-ink-100 focus-visible:outline-ink-500',
-  ghost: 'text-ink-600 hover:bg-ink-100 active:bg-ink-200 focus-visible:outline-ink-400',
+    'active:bg-ink-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2',
+  ghost:
+    'text-ink-600 hover:bg-ink-100 active:bg-ink-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2',
   danger:
     'bg-white text-rose-700 ring-1 ring-inset ring-rose-200 hover:bg-rose-50 ' +
-    'active:bg-rose-100 focus-visible:outline-rose-500',
+    'active:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2',
 };
 
 const BUTTON_SIZES: Record<ButtonSize, string> = {
-  sm: 'h-8 px-3 text-sm gap-1.5',
-  md: 'h-10 px-4 text-sm gap-2',
+  sm: 'min-h-[36px] h-9 px-3.5 text-sm gap-1.5',
+  md: 'min-h-[44px] h-11 px-4 text-sm font-medium gap-2',
   // Reception taps these hundreds of times a day, often in a hurry.
-  lg: 'h-12 px-6 text-base gap-2',
-  xl: 'h-16 px-8 text-lg gap-3 font-semibold',
+  lg: 'min-h-[48px] h-12 px-6 text-base font-medium gap-2.5',
+  xl: 'min-h-[56px] h-14 sm:h-16 px-6 sm:px-8 text-base sm:text-lg font-bold gap-3',
 };
 
 export function Button({
@@ -48,9 +49,10 @@ export function Button({
       {...props}
       disabled={disabled || isLoading}
       className={cn(
-        'inline-flex items-center justify-center rounded-lg font-medium',
-        'transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2',
-        'disabled:cursor-not-allowed disabled:opacity-40',
+        'inline-flex items-center justify-center rounded-lg font-medium cursor-pointer select-none',
+        'touch-manipulation transition-all duration-150 active:scale-[0.98]',
+        'focus-visible:outline-none',
+        'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
         BUTTON_VARIANTS[variant],
         BUTTON_SIZES[size],
         className,

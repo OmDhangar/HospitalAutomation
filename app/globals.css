@@ -137,3 +137,51 @@ body {
 .animate-fadeIn {
   animation: fadeIn 0.15s ease-out forwards;
 }
+
+/**
+ * TV safe area & interactive elements clickability
+ * Ensures buttons, links, and forms respond immediately to clicks/taps with zero delay,
+ * and highlights active items clearly on TV remote D-Pad navigation.
+ */
+button,
+a,
+[role="button"],
+input[type="submit"],
+input[type="button"],
+input[type="checkbox"],
+input[type="radio"],
+select,
+summary {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+}
+
+/* TV safe area overscan utility */
+.tv-safe-area {
+  padding-left: max(1.5rem, env(safe-area-inset-left, 1.5rem));
+  padding-right: max(1.5rem, env(safe-area-inset-right, 1.5rem));
+  padding-top: max(1.5rem, env(safe-area-inset-top, 1.5rem));
+  padding-bottom: max(1.5rem, env(safe-area-inset-bottom, 1.5rem));
+}
+
+/* High-contrast focus state for TV remote / keyboard navigation */
+:focus-visible {
+  outline: 3px solid #14b8a6;
+  outline-offset: 3px;
+}
+
+/* Pulse glow for active token call on display */
+@keyframes tv-glow {
+  0%, 100% {
+    box-shadow: 0 0 15px 0 rgba(45, 212, 191, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 35px 6px rgba(45, 212, 191, 0.45);
+  }
+}
+
+.tv-glow-active {
+  animation: tv-glow 2.5s ease-in-out infinite;
+}
+

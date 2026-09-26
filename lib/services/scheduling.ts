@@ -23,7 +23,7 @@ export type DoctorScheduleSettings = {
   specialty: string | null;
   startTime: string; // "10:00"
   endTime: string; // "17:00"
-  slotMinutes: number; // 10, 15, 20, 30, 45, 60
+  slotMinutes: number; // 5, 10, 15, 20, 30, 45, 60
   breakStartTime: string | null; // "13:00"
   breakEndTime: string | null; // "14:00"
   mode: 'queue' | 'slot' | 'both';
