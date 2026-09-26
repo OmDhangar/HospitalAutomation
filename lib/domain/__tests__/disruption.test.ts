@@ -10,31 +10,68 @@ import {
 import { APPOINTMENT_STATUSES } from '../types';
 
 describe('disruptionActionFor', () => {
+  const now = new Date('2026-09-26T09:00:00+05:30');
+  const laterToday = new Date('2026-09-26T10:20:00+05:30');
+  const earlierToday = new Date('2026-09-26T08:20:00+05:30');
+
   it('cancels and messages patients who have not arrived', () => {
-    expect(disruptionActionFor('CREATED')).toBe('cancel_and_notify');
-    expect(disruptionActionFor('CONFIRMED')).toBe('cancel_and_notify');
+    expect(disruptionActionFor({ status: 'CREATED', now })).toBe('cancel_and_notify');
+    expect(disruptionActionFor({ status: 'CONFIRMED', now })).toBe('cancel_and_notify');
   });
 
-  it('never auto-cancels a patient who is already in the building', () => {
+  it('messages an online booking whose slot has not come round yet', () => {
     /**
-     * The rule that matters most. Sending "please book another day" to
-     * somebody sitting fifteen feet from the reception desk is worse than
-     * saying nothing — those conversations only go well in person.
+     * The regression this signature exists for.
+     *
+     * `bookScheduledSlot` writes WAITING the moment a slot is booked, so a
+     * patient who booked 10:20 from home is WAITING hours before they leave
+     * the house. Reading that as presence classified every online booking as
+     * "already at the hospital", and the emergency-unavailability feature
+     * notified nobody at all — the people it exists for were the only ones it
+     * never reached.
      */
-    expect(disruptionActionFor('ARRIVED')).toBe('needs_desk_action');
-    expect(disruptionActionFor('WAITING')).toBe('needs_desk_action');
-    expect(disruptionActionFor('HELD')).toBe('needs_desk_action');
-    expect(disruptionActionFor('SKIPPED')).toBe('needs_desk_action');
+    expect(
+      disruptionActionFor({ status: 'WAITING', scheduledSlotAt: laterToday, now }),
+    ).toBe('cancel_and_notify');
+  });
+
+  it('treats a walk-in as present, because it has no slot to be early for', () => {
+    expect(disruptionActionFor({ status: 'WAITING', scheduledSlotAt: null, now })).toBe(
+      'needs_desk_action',
+    );
+    expect(disruptionActionFor({ status: 'WAITING', now })).toBe('needs_desk_action');
+  });
+
+  it('treats a booked slot whose time has arrived as present', () => {
+    // Past their own slot and still WAITING: they are most likely in the
+    // building, so this stays a conversation for the desk.
+    expect(
+      disruptionActionFor({ status: 'WAITING', scheduledSlotAt: earlierToday, now }),
+    ).toBe('needs_desk_action');
+  });
+
+  it('never auto-cancels a patient the desk has already dealt with', () => {
+    /**
+     * The rule that matters most, and it still beats scheduling: a future slot
+     * time does not override an explicit signal that somebody is here.
+     */
+    for (const status of ['ARRIVED', 'HELD', 'SKIPPED'] as const) {
+      expect(disruptionActionFor({ status, scheduledSlotAt: laterToday, now })).toBe(
+        'needs_desk_action',
+      );
+    }
   });
 
   it('leaves alone anyone already with the doctor', () => {
-    expect(disruptionActionFor('CALLED')).toBe('leave_alone');
-    expect(disruptionActionFor('IN_CONSULTATION')).toBe('leave_alone');
+    expect(disruptionActionFor({ status: 'CALLED', now })).toBe('leave_alone');
+    expect(disruptionActionFor({ status: 'IN_CONSULTATION', now })).toBe('leave_alone');
   });
 
   it('leaves terminal appointments untouched', () => {
     for (const status of ['COMPLETED', 'CANCELLED', 'NO_SHOW', 'EXPIRED'] as const) {
-      expect(disruptionActionFor(status)).toBe('leave_alone');
+      expect(disruptionActionFor({ status, scheduledSlotAt: laterToday, now })).toBe(
+        'leave_alone',
+      );
     }
   });
 
@@ -43,16 +80,24 @@ describe('disruptionActionFor', () => {
     // and silently do nothing to a real patient's appointment.
     for (const status of APPOINTMENT_STATUSES) {
       expect(['cancel_and_notify', 'needs_desk_action', 'leave_alone']).toContain(
-        disruptionActionFor(status),
+        disruptionActionFor({ status, scheduledSlotAt: laterToday, now }),
       );
     }
   });
 
-  it('cancels only two of the twelve statuses', () => {
+  it('cancels only the three not-yet-here cases, and only ahead of the slot', () => {
     const cancelled = APPOINTMENT_STATUSES.filter(
-      (s) => disruptionActionFor(s) === 'cancel_and_notify',
+      (s) =>
+        disruptionActionFor({ status: s, scheduledSlotAt: laterToday, now }) ===
+        'cancel_and_notify',
     );
-    expect(cancelled).toEqual(['CREATED', 'CONFIRMED']);
+    expect(cancelled).toEqual(['CREATED', 'CONFIRMED', 'WAITING']);
+
+    // Without a booked slot in the future, WAITING drops back out.
+    const walkIns = APPOINTMENT_STATUSES.filter(
+      (s) => disruptionActionFor({ status: s, now }) === 'cancel_and_notify',
+    );
+    expect(walkIns).toEqual(['CREATED', 'CONFIRMED']);
   });
 });
 
@@ -217,6 +262,6 @@ describe('isCancellableByPatient', () => {
   it('differs from the doctor-unavailability rule at CALLED, on purpose', () => {
     // Pinned so the divergence is a decision rather than a later accident.
     expect(isCancellableByPatient('CALLED')).toBe(true);
-    expect(disruptionActionFor('CALLED')).toBe('leave_alone');
+    expect(disruptionActionFor({ status: 'CALLED' })).toBe('leave_alone');
   });
 });

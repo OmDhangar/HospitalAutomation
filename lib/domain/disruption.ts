@@ -22,24 +22,60 @@ export type DisruptionAction =
 /**
  * The single most important rule here: presence beats scheduling.
  *
- * A patient whose status is ARRIVED or WAITING is standing in the waiting
- * room. Silently cancelling their appointment and sending a WhatsApp message
- * telling them to book another day would be worse than doing nothing — they
- * would read it while sitting fifteen feet from the reception desk. Those
- * cases are handed to reception to resolve face to face, which is the only
- * way that conversation goes well.
+ * A patient who is standing in the waiting room must not be silently
+ * cancelled and sent a WhatsApp message telling them to book another day —
+ * they would read it while sitting fifteen feet from the reception desk.
+ * Those cases are handed to reception to resolve face to face, which is the
+ * only way that conversation goes well.
  *
  * CALLED and IN_CONSULTATION are already past the desk. If a doctor walks out
  * mid-consultation, no automated status change helps.
+ *
+ * The hard part is knowing who is actually present, because WAITING does not
+ * say. A walk-in is WAITING because reception put them in the queue, and they
+ * are standing there. But `bookScheduledSlot` also writes WAITING the moment
+ * an online booking is made, so a patient who booked a 10:20 slot at nine the
+ * previous evening is WAITING too, from their own home. Reading WAITING as
+ * presence therefore classified every online booking as "already here", which
+ * meant the one group this feature exists for — people who would otherwise
+ * travel to a hospital where the doctor has gone — was the one group never
+ * told anything.
+ *
+ * So presence is decided by the strongest signal available for the row:
+ *
+ *   - ARRIVED, HELD or SKIPPED mean somebody at the desk has interacted with
+ *     this patient. They are here.
+ *   - WAITING on a booked slot that has not come round yet means the opposite:
+ *     nothing has happened except the booking, and their slot is still in the
+ *     future. They are not here.
+ *   - WAITING on a walk-in, or on a slot whose time has already arrived, is
+ *     treated as present, which is the safe reading in both cases.
+ *
+ * This is an inference, and it is only needed because nothing yet records
+ * check-in. The `arrive` action already exists in the queue state machine but
+ * is not wired into the receptionist UI; once it is, ARRIVED becomes the
+ * answer and the time comparison below stops carrying any weight.
  */
-export function disruptionActionFor(status: AppointmentStatus): DisruptionAction {
+export function disruptionActionFor(args: {
+  status: AppointmentStatus;
+  /** Null for a walk-in, which has no booked time to be early or late for. */
+  scheduledSlotAt?: Date | null;
+  now?: Date;
+}): DisruptionAction {
+  const { status, scheduledSlotAt, now = new Date() } = args;
+
   switch (status) {
     case 'CREATED':
     case 'CONFIRMED':
       return 'cancel_and_notify';
 
-    case 'ARRIVED':
     case 'WAITING':
+      if (scheduledSlotAt && scheduledSlotAt.getTime() > now.getTime()) {
+        return 'cancel_and_notify';
+      }
+      return 'needs_desk_action';
+
+    case 'ARRIVED':
     case 'HELD':
     case 'SKIPPED':
       return 'needs_desk_action';

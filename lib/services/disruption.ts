@@ -154,15 +154,28 @@ export async function blockIntervalAndNotify(args: {
 
     const affected: Array<(typeof candidates)[number] & { action: DisruptionAction }> = [];
 
+    /**
+     * One clock for the whole pass. Deciding presence per row against a fresh
+     * `new Date()` would let a slot on the boundary be judged differently
+     * depending on where it sat in the loop.
+     */
+    const now = new Date();
+
     for (const row of candidates) {
       if (!row.scheduledSlotAt) continue;
       const slotMinutes = minutesOfDayIn(timezone, row.scheduledSlotAt);
       if (!slotIsInBlock({ slotMinutes, blockStartMinutes, blockEndMinutes })) continue;
-      affected.push({ ...row, action: disruptionActionFor(row.status) });
+      affected.push({
+        ...row,
+        action: disruptionActionFor({
+          status: row.status,
+          scheduledSlotAt: row.scheduledSlotAt,
+          now,
+        }),
+      });
     }
 
     const toCancel = affected.filter((row) => row.action === 'cancel_and_notify');
-    const now = new Date();
 
     for (const row of toCancel) {
       await tx
@@ -327,6 +340,10 @@ export async function previewDisruption(args: {
         ),
       );
 
+    // Same clock for every row, and the same one the preview's caller will see
+    // reflected when they confirm — see blockIntervalAndNotify.
+    const now = new Date();
+
     const actions = rows
       .filter(
         (row) =>
@@ -337,7 +354,13 @@ export async function previewDisruption(args: {
             blockEndMinutes,
           }),
       )
-      .map((row) => disruptionActionFor(row.status));
+      .map((row) =>
+        disruptionActionFor({
+          status: row.status,
+          scheduledSlotAt: row.scheduledSlotAt,
+          now,
+        }),
+      );
 
     return summarise(actions);
   });
