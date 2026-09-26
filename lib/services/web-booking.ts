@@ -1,5 +1,6 @@
 import { and, asc, eq, gte, lte, sql } from 'drizzle-orm';
 import { withTenant } from '@/lib/db';
+import { getAdminDb } from '@/lib/db/admin';
 import {
   appointments,
   branches,
@@ -42,6 +43,41 @@ export type DoctorBookingDetails = {
   serviceDate: string;
   slots: TimeSlot[];
 };
+
+/**
+ * Which hospital a doctor belongs to, for a link that only carries the doctor.
+ *
+ * Meta freezes a template's URL button at approval and allows it exactly one
+ * variable, appended as a suffix. `opd_slot_disrupted` and
+ * `opd_appointment_cancelled` were approved with `/book?doctor={{1}}`, so a
+ * rebooking link can carry the doctor id and nothing else — while /book also
+ * needs the hospital, and without it showed "Appointment Link Incomplete" to
+ * every patient whose appointment had just been cancelled out from under them.
+ *
+ * Resolving it here rather than widening the link is what avoids putting both
+ * templates back into Meta review, which takes days and blocks every
+ * notification that uses them in the meantime.
+ *
+ * Runs on the admin connection because the tenant is the very thing being
+ * looked up — `withTenant` needs a hospital id to set `app.hospital_id`, which
+ * is what this call exists to find. The same bootstrap shape as
+ * `resolve_public_token` and `resolve_whatsapp_number`, and deliberately as
+ * narrow: one column, for one active doctor, by primary key.
+ *
+ * It discloses nothing new. The hospital id already travels beside the doctor
+ * id in the plaintext booking links the conversation flow sends, and the page
+ * this unlocks shows only what a patient needs in order to book — doctor name,
+ * specialty, branch, and free slots.
+ */
+export async function resolveDoctorHospital(doctorId: string): Promise<string | null> {
+  const [row] = await getAdminDb()
+    .select({ hospitalId: doctors.hospitalId })
+    .from(doctors)
+    .where(and(eq(doctors.id, doctorId), eq(doctors.active, true)))
+    .limit(1);
+
+  return row?.hospitalId ?? null;
+}
 
 /**
  * Returns doctor info, hospital branch details, and available slots for booking.
