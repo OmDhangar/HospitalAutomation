@@ -59,9 +59,6 @@ export default function HomePage() {
       <section className="relative overflow-hidden border-b border-ink-200 bg-gradient-to-b from-brand-50/50 to-white px-4 py-16 sm:px-6 sm:py-24">
         <div className="mx-auto max-w-6xl">
           <div className="mx-auto max-w-3xl text-center">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-brand-200 bg-brand-100/70 px-3 py-1 text-xs font-bold uppercase tracking-wider text-brand-800">
-              Built for Small & Medium Hospitals
-            </span>
             <h1 className="mt-4 text-3xl font-extrabold tracking-tight text-ink-950 sm:text-5xl sm:leading-[1.15]">
               Empty the crowded corridor outside your consulting room.
             </h1>
