@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { Card, CardHeader } from '@/components/ui';
 import { isLocale, type Locale } from '@/lib/i18n/patient';
-import { getDoctorBookingDetails } from '@/lib/services/web-booking';
+import { getDoctorBookingDetails, resolveDoctorHospital } from '@/lib/services/web-booking';
 import { BookSlotForm } from './book-form';
 
 export const metadata = { title: 'Book Doctor Appointment Slot' };
@@ -14,10 +14,27 @@ export default async function BookSlotPage({
 }) {
   const query = await searchParams;
   const doctorId = query.doctor;
-  const hospitalId = query.hospital;
   const phone = query.phone ?? '';
   const date = query.date;
   const locale: Locale = isLocale(query.locale) ? query.locale : 'en';
+
+  /**
+   * The hospital is optional in the link, because for some links it cannot be
+   * in there at all.
+   *
+   * The conversation flow builds a full URL with doctor, hospital, phone and
+   * locale. A WhatsApp *template* button cannot: Meta freezes the URL at
+   * approval and allows one variable appended at the end, so the rebooking
+   * button on `opd_slot_disrupted` and `opd_appointment_cancelled` carries the
+   * doctor id alone. Requiring the hospital meant every patient following the
+   * "Pick a new time" button — sent precisely because their appointment had
+   * just been cancelled — landed on "Appointment Link Incomplete" instead.
+   *
+   * A doctor belongs to exactly one hospital, so the link does not need to
+   * carry it.
+   */
+  const hospitalId =
+    query.hospital ?? (doctorId ? await resolveDoctorHospital(doctorId) : null);
 
   if (!doctorId || !hospitalId) {
     return (
