@@ -69,17 +69,37 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
             </p>
           </div>
           <Link href="/settings/whatsapp" className="w-full sm:w-auto">
-            <Button size="sm" className="w-full sm:w-auto justify-center">
+            <Button variant="primary" className="w-full sm:w-auto justify-center">
               Configure WhatsApp
             </Button>
           </Link>
         </div>
       </Card>
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      {/*
+        items-start, or the grid stretches the shorter card to match the taller
+        one and the difference shows up as dead space inside Branches.
+      */}
+      <div className="grid gap-5 lg:grid-cols-2 lg:items-start">
         {/* Branches Card */}
         <Card>
-          <CardHeader title="Branches" hint={`${branches.length} active branch${branches.length === 1 ? '' : 'es'}`} />
+          {/*
+            The add form sits below the list, so it drifts further down the page
+            with every branch added. The header keeps a way to reach it that does
+            not depend on how long the list has become.
+          */}
+          <CardHeader
+            title="Branches"
+            hint={`${branches.length} active branch${branches.length === 1 ? '' : 'es'}`}
+            action={
+              <a
+                href="#add-branch"
+                className="shrink-0 text-xs font-semibold text-brand-700 hover:text-brand-800"
+              >
+                + Add
+              </a>
+            }
+          />
           {branches.length === 0 ? (
             <EmptyState
               title="No branches yet"
@@ -93,7 +113,7 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                     <span className="text-base text-ink-400">🏥</span>
                     <span className="font-semibold text-ink-900">{branch.name}</span>
                   </div>
-                  <span className="rounded-full bg-ink-100 px-2 py-0.5 text-[10px] font-semibold text-ink-600">
+                  <span className="rounded-full bg-ink-100 px-2 py-0.5 text-xs font-semibold text-ink-600">
                     Active
                   </span>
                 </li>
@@ -101,7 +121,12 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
             </ul>
           )}
           <form action={addBranchAction} className="space-y-4 border-t border-ink-200 p-4 sm:p-5 bg-ink-50/40">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-ink-500">Add New Branch</h3>
+            <h3
+              id="add-branch"
+              className="scroll-mt-4 text-xs font-bold uppercase tracking-wider text-ink-500"
+            >
+              Add New Branch
+            </h3>
             <Field label="Branch name">
               <Input name="name" required placeholder="Main building / OPD Wing" />
             </Field>
@@ -119,6 +144,14 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
           <CardHeader
             title="Doctors"
             hint={`${activeCount} active · ${doctors.length} total`}
+            action={
+              <a
+                href="#add-doctor"
+                className="shrink-0 text-xs font-semibold text-brand-700 hover:text-brand-800"
+              >
+                + Add
+              </a>
+            }
           />
           {doctors.length === 0 ? (
             <EmptyState title="No doctors yet" hint="Add a branch first, then a doctor." />
@@ -139,11 +172,11 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                           {doctor.name}
                         </p>
                         {doctor.active ? (
-                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800 shrink-0">
+                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-800 shrink-0">
                             Active
                           </span>
                         ) : (
-                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900 shrink-0">
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900 shrink-0">
                             Inactive
                           </span>
                         )}
@@ -172,7 +205,15 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                       <Button
                         type="submit"
                         size="sm"
-                        variant={doctor.active ? 'danger' : 'primary'}
+                        /*
+                         * Not `danger`, despite the word: this is a toggle, and
+                         * the same button turns back into Activate. Destructive
+                         * styling is a promise that something cannot be undone,
+                         * and spending it once per row on a reversible action
+                         * both drowns out the doctor names and leaves nothing
+                         * left to say when something really is irreversible.
+                         */
+                        variant={doctor.active ? 'secondary' : 'primary'}
                         className="w-full sm:w-auto"
                       >
                         {doctor.active ? 'Deactivate' : 'Activate'}
@@ -184,7 +225,7 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                   <div className="pt-0.5">
                     <span
                       className={cn(
-                        'inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold border',
+                        'inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-semibold border',
                         doctor.mode === 'both'
                           ? 'bg-amber-50 text-amber-900 border-amber-200'
                           : doctor.mode === 'slot'
@@ -206,7 +247,12 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
 
           {branches.length > 0 ? (
             <form action={addDoctorAction} className="space-y-4 border-t border-ink-200 p-4 sm:p-5 bg-ink-50/40">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-ink-500">Add New Doctor</h3>
+              <h3
+                id="add-doctor"
+                className="scroll-mt-4 text-xs font-bold uppercase tracking-wider text-ink-500"
+              >
+                Add New Doctor
+              </h3>
               <Field label="Doctor name">
                 <Input name="name" required placeholder="Dr. Anjali Deshmukh" />
               </Field>
