@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { withTenant, type Tx } from '@/lib/db';
 import { branches, doctorDayStates, doctors, doctorSchedules, hospitals } from '@/lib/db/schema';
 import type { DoctorScheduleMode } from '@/lib/domain/booking';
+import { assertCanAdd } from './entitlements';
 
 export type DoctorListItem = {
   id: string;
@@ -127,6 +128,8 @@ export async function createBranch(args: {
   name: string;
   address?: string;
 }) {
+  await assertCanAdd({ hospitalId: args.hospitalId, kind: 'branches' });
+
   const result = await withTenant(args.hospitalId, async (tx) => {
     const [row] = await tx
       .insert(branches)
@@ -146,6 +149,8 @@ export async function createDoctor(args: {
   defaultConsultMinutes?: number;
   mode?: DoctorScheduleMode;
 }) {
+  await assertCanAdd({ hospitalId: args.hospitalId, kind: 'doctors' });
+
   const result = await withTenant(args.hospitalId, async (tx) => {
     const [row] = await tx
       .insert(doctors)

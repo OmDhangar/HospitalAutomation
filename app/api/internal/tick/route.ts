@@ -29,12 +29,13 @@ export const maxDuration = 60;
  *
  * Protected by a shared secret because it is reachable from the internet.
  */
-export async function POST(request: Request) {
-  const secret = process.env.INTERNAL_TICK_SECRET;
+async function handleTick(request: Request) {
+  const secret = process.env.INTERNAL_TICK_SECRET || process.env.CRON_SECRET;
   if (!secret) {
     return NextResponse.json({ error: 'INTERNAL_TICK_SECRET is not set' }, { status: 503 });
   }
-  if (request.headers.get('authorization') !== `Bearer ${secret}`) {
+  const authHeader = request.headers.get('authorization');
+  if (authHeader !== `Bearer ${secret}`) {
     return new NextResponse('unauthorized', { status: 401 });
   }
 
@@ -51,4 +52,12 @@ export async function POST(request: Request) {
   const sweeps = await runSweeps();
 
   return NextResponse.json({ ...result, sweeps });
+}
+
+export async function POST(request: Request) {
+  return handleTick(request);
+}
+
+export async function GET(request: Request) {
+  return handleTick(request);
 }

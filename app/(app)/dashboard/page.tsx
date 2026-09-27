@@ -19,8 +19,10 @@ import {
   AddWalkInForm,
   CallNextButton,
   DoctorTabs,
+  PausePatientButton,
   PriorityButton,
   QueueActionButton,
+  ResumePatientButton,
   TogglePauseButton,
 } from './dashboard-queue-actions';
 
@@ -235,11 +237,12 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                     action="skip"
                     label="Skip"
                   />
-                  <QueueActionButton
+                  <PausePatientButton
                     doctorId={selectedId!}
                     appointmentId={serving.appointmentId}
-                    action="hold"
-                    label="Hold"
+                    patientName={serving.patientName}
+                    tokenNumber={serving.tokenNumber}
+                    size="md"
                   />
                   {serving.status === 'CALLED' ? (
                     <div className="col-span-2 sm:col-auto">
@@ -331,19 +334,34 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                             </span>
                           ) : null}
                         </p>
-                        <div className="mt-0.5">
+                        <div className="mt-0.5 flex flex-wrap items-center gap-2">
                           <StatusPill status={row.status} />
+                          {row.status === 'HELD' && row.resumeAt ? (
+                            <span className="text-xs text-amber-800 font-medium">
+                              Auto-resumes at {formatTimeIn(session.timezone, row.resumeAt)}
+                            </span>
+                          ) : null}
                         </div>
                       </div>
                     </div>
                     <div className="self-end sm:self-auto">
-                      <QueueActionButton
-                        doctorId={selectedId!}
-                        appointmentId={row.appointmentId}
-                        action={row.status === 'SKIPPED' ? 'recall' : 'resume'}
-                        label={row.status === 'SKIPPED' ? 'Recall' : 'Resume'}
-                        size="sm"
-                      />
+                      {row.status === 'HELD' ? (
+                        <ResumePatientButton
+                          doctorId={selectedId!}
+                          appointmentId={row.appointmentId}
+                          patientName={row.patientName}
+                          tokenNumber={row.tokenNumber}
+                          size="sm"
+                        />
+                      ) : (
+                        <QueueActionButton
+                          doctorId={selectedId!}
+                          appointmentId={row.appointmentId}
+                          action="recall"
+                          label="Recall"
+                          size="sm"
+                        />
+                      )}
                     </div>
                   </li>
                 ))}
@@ -411,11 +429,11 @@ function WaitingRow({
         {row.priority === 0 ? (
           <PriorityButton doctorId={doctorId} appointmentId={row.appointmentId} />
         ) : null}
-        <QueueActionButton
+        <PausePatientButton
           doctorId={doctorId}
           appointmentId={row.appointmentId}
-          action="hold"
-          label="Hold"
+          patientName={row.patientName}
+          tokenNumber={row.tokenNumber}
           size="sm"
         />
         <QueueActionButton
@@ -430,3 +448,4 @@ function WaitingRow({
     </li>
   );
 }
+

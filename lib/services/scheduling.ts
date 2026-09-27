@@ -428,7 +428,7 @@ export async function getDoctorSlotsForDate(args: {
           eq(appointments.doctorId, args.doctorId),
           eq(appointments.serviceDate, args.serviceDate),
           sql`${appointments.scheduledSlotAt} is not null`,
-          sql`${appointments.status} not in ('CANCELLED', 'NO_SHOW')`,
+          sql`${appointments.status} not in ('COMPLETED', 'CANCELLED', 'NO_SHOW', 'EXPIRED')`,
         ),
       );
 

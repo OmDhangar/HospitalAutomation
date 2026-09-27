@@ -8,7 +8,9 @@ import type { QueueAction } from '@/lib/domain/types';
 import {
   addWalkInDynamic,
   advanceQueueDynamic,
+  pauseAppointmentDynamic,
   queueActionDynamic,
+  resumeAppointmentDynamic,
   setPriorityDynamic,
   togglePauseDynamic,
 } from './actions';
@@ -408,6 +410,190 @@ export function TogglePauseButton({
       isLoading={isPending}
     >
       {paused ? 'Resume queue' : 'Pause queue'}
+    </Button>
+  );
+}
+
+export function PausePatientButton({
+  doctorId,
+  appointmentId,
+  patientName,
+  tokenNumber,
+  size = 'md',
+}: {
+  doctorId: string;
+  appointmentId: string;
+  patientName?: string;
+  tokenNumber?: number;
+  size?: 'sm' | 'md' | 'lg';
+}) {
+  const toast = useToast();
+  const [isOpen, setIsOpen] = useState(false);
+  const [minutes, setMinutes] = useState<number | null>(15);
+  const [reason, setReason] = useState('Stepped out / Test');
+  const [isPending, startTransition] = useTransition();
+
+  const handlePause = (e: React.FormEvent) => {
+    e.preventDefault();
+    startTransition(async () => {
+      const res = await pauseAppointmentDynamic({
+        doctorId,
+        appointmentId,
+        resumeAfterMinutes: minutes,
+        reason,
+      });
+
+      if (res.ok) {
+        toast.info(
+          `Token #${tokenNumber ?? ''} Paused`,
+          `${patientName ?? 'Patient'} placed on hold${minutes ? ` for ${minutes} mins` : ''}.`,
+        );
+        setIsOpen(false);
+      } else {
+        toast.error('Failed to pause patient', res.error);
+      }
+    });
+  };
+
+  return (
+    <>
+      <Button
+        type="button"
+        size={size}
+        variant="ghost"
+        onClick={() => setIsOpen(true)}
+        className="bg-amber-50 text-amber-900 ring-1 ring-inset ring-amber-300 hover:bg-amber-100 font-medium"
+      >
+        <span aria-hidden="true">⏸</span>
+        Pause / Hold
+      </Button>
+
+      {isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl ring-1 ring-black/10">
+            <div className="flex items-center justify-between border-b border-ink-100 pb-3">
+              <h3 className="text-base font-bold text-ink-900">
+                Pause Patient {tokenNumber ? `(#${tokenNumber})` : ''}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsOpen(false)}
+                className="rounded-lg p-1 text-ink-400 hover:bg-ink-100 hover:text-ink-700"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handlePause} className="mt-4 space-y-4">
+              <p className="text-xs text-ink-600">
+                Temporarily removes <strong className="text-ink-900">{patientName ?? 'patient'}</strong> from the active calling queue while keeping their token and place.
+              </p>
+
+              <Field label="Auto-resume timer" hint="The appointment will automatically return to the queue when the timer expires.">
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { label: '10 mins', val: 10 },
+                    { label: '15 mins', val: 15 },
+                    { label: '30 mins', val: 30 },
+                    { label: '45 mins', val: 45 },
+                    { label: '60 mins', val: 60 },
+                    { label: 'Manual', val: null },
+                  ].map((opt) => (
+                    <button
+                      key={String(opt.val)}
+                      type="button"
+                      onClick={() => setMinutes(opt.val)}
+                      className={cn(
+                        'rounded-lg px-2.5 py-2 text-xs font-semibold ring-1 transition-all',
+                        minutes === opt.val
+                          ? 'bg-amber-500 text-white ring-amber-500 shadow-sm'
+                          : 'bg-ink-50 text-ink-700 ring-ink-200 hover:bg-ink-100',
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+
+              <Field label="Reason (Optional)">
+                <Input
+                  type="text"
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="e.g. Blood test, X-Ray, Stepped out"
+                />
+              </Field>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-ink-100">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="md"
+                  onClick={() => setIsOpen(false)}
+                  disabled={isPending}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="md"
+                  isLoading={isPending}
+                  className="bg-amber-600 hover:bg-amber-700 focus-visible:outline-amber-600"
+                >
+                  Confirm Pause
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+export function ResumePatientButton({
+  doctorId,
+  appointmentId,
+  patientName,
+  tokenNumber,
+  size = 'sm',
+}: {
+  doctorId: string;
+  appointmentId: string;
+  patientName?: string;
+  tokenNumber?: number;
+  size?: 'sm' | 'md' | 'lg';
+}) {
+  const toast = useToast();
+  const [isPending, startTransition] = useTransition();
+
+  const handleResume = () => {
+    startTransition(async () => {
+      const res = await resumeAppointmentDynamic({ doctorId, appointmentId });
+      if (res.ok) {
+        toast.success(
+          `Token #${tokenNumber ?? ''} Resumed!`,
+          `${patientName ?? 'Patient'} rejoined the waiting line.`,
+        );
+      } else {
+        toast.error('Failed to resume patient', res.error);
+      }
+    });
+  };
+
+  return (
+    <Button
+      type="button"
+      size={size}
+      variant="ghost"
+      onClick={handleResume}
+      isLoading={isPending}
+      className="bg-emerald-50 text-emerald-900 ring-1 ring-inset ring-emerald-300 hover:bg-emerald-100 font-medium"
+    >
+      <span aria-hidden="true">▶</span>
+      Resume
     </Button>
   );
 }

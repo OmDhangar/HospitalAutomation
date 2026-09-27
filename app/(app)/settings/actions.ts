@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { requireSession } from '@/lib/auth/session';
-import { canConfigureHospital } from '@/lib/services/auth';
+import { canConfigureHospital, createStaffUser, setStaffActive, type StaffRole } from '@/lib/services/auth';
 import { checkCanAdd } from '@/lib/services/entitlements';
 import { createBranch, createDoctor, setDoctorActive } from '@/lib/services/hospital';
 
@@ -73,6 +73,54 @@ export async function toggleDoctorAction(formData: FormData) {
     hospitalId: session.hospitalId,
     doctorId: String(formData.get('doctorId') ?? ''),
     active: String(formData.get('active') ?? '') === 'true',
+  });
+
+  revalidatePath('/settings');
+  redirect('/settings');
+}
+
+export async function addStaffAction(formData: FormData) {
+  const session = await authorize();
+  const name = String(formData.get('name') ?? '').trim();
+  const email = String(formData.get('email') ?? '').trim();
+  const password = String(formData.get('password') ?? '').trim() || undefined;
+  const role = (String(formData.get('role') ?? 'receptionist') as StaffRole);
+  const branchId = String(formData.get('branchId') ?? '').trim() || undefined;
+
+  if (!name || !email) redirect('/settings?error=name');
+
+  const check = await checkCanAdd({ hospitalId: session.hospitalId, kind: 'staff' });
+  if (!check.allowed) redirect('/settings?limit=staff');
+
+  try {
+    await createStaffUser({
+      hospitalId: session.hospitalId,
+      name,
+      email,
+      password,
+      role,
+      branchId,
+    });
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === 'PlanLimitError') {
+      redirect('/settings?limit=staff');
+    }
+    throw err;
+  }
+
+  revalidatePath('/settings');
+  redirect('/settings');
+}
+
+export async function toggleStaffAction(formData: FormData) {
+  const session = await authorize();
+  const membershipId = String(formData.get('membershipId') ?? '');
+  const active = String(formData.get('active') ?? '') === 'true';
+
+  await setStaffActive({
+    hospitalId: session.hospitalId,
+    membershipId,
+    active,
   });
 
   revalidatePath('/settings');

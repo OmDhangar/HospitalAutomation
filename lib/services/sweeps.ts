@@ -1,4 +1,4 @@
-import { and, eq, inArray, lt, sql } from 'drizzle-orm';
+import { and, eq, inArray, lt, lte, sql } from 'drizzle-orm';
 import { getAdminDb } from '@/lib/db/admin';
 import { appointments, queueEvents } from '@/lib/db/schema';
 import { expireStalePaymentLinks } from './payments';
@@ -43,7 +43,7 @@ export async function expireStaleAppointments(now: Date = new Date()): Promise<n
     .where(
       and(
         inArray(appointments.status, ['CREATED', 'CONFIRMED', 'ARRIVED', 'WAITING', 'HELD', 'SKIPPED']),
-        lt(appointments.serviceDate, sql`(${now}::timestamptz at time zone 'Asia/Kolkata')::date`),
+        lt(appointments.serviceDate, sql`(${now.toISOString()}::timestamptz at time zone 'Asia/Kolkata')::date`),
       ),
     )
     .returning({
@@ -73,8 +73,57 @@ export async function expireStaleAppointments(now: Date = new Date()): Promise<n
   return rows.length;
 }
 
+/**
+ * Moves HELD appointments whose scheduled resume time has arrived back to
+ * WAITING.
+ *
+ * The doctor set a timer when they paused the appointment ("bring them back
+ * in 15 minutes"). This sweep is that timer. It fires on every tick, so the
+ * worst-case latency is one tick interval — the same as every other sweep.
+ */
+export async function resumePausedAppointments(now: Date = new Date()): Promise<number> {
+  const db = getAdminDb();
+
+  const rows = await db
+    .update(appointments)
+    .set({
+      status: 'WAITING',
+      pausedAt: null,
+      resumeAt: null,
+      enqueuedAt: now,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(appointments.status, 'HELD'),
+        lte(appointments.resumeAt, now),
+      ),
+    )
+    .returning({
+      id: appointments.id,
+      hospitalId: appointments.hospitalId,
+      doctorId: appointments.doctorId,
+    });
+
+  for (const row of rows) {
+    await db.insert(queueEvents).values({
+      hospitalId: row.hospitalId,
+      appointmentId: row.id,
+      doctorId: row.doctorId,
+      action: 'resume',
+      fromStatus: 'HELD',
+      toStatus: 'WAITING',
+      actorUserId: null,
+      metadata: { reason: 'scheduled_auto_resume', swept_at: now.toISOString() },
+    });
+  }
+
+  return rows.length;
+}
+
 export type SweepResult = {
   appointmentsExpired: number;
+  appointmentsResumed: number;
   subscriptionsExpired: number;
   paymentLinksExpired: number;
 };
@@ -89,6 +138,7 @@ export type SweepResult = {
 export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
   const result: SweepResult = {
     appointmentsExpired: 0,
+    appointmentsResumed: 0,
     subscriptionsExpired: 0,
     paymentLinksExpired: 0,
   };
@@ -97,6 +147,12 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
     result.appointmentsExpired = await expireStaleAppointments(now);
   } catch (error) {
     console.error('[sweeps] appointment expiry failed', error);
+  }
+
+  try {
+    result.appointmentsResumed = await resumePausedAppointments(now);
+  } catch (error) {
+    console.error('[sweeps] appointment auto-resume failed', error);
   }
 
   try {
@@ -114,7 +170,8 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
   }
 
   const total =
-    result.appointmentsExpired + result.subscriptionsExpired + result.paymentLinksExpired;
+    result.appointmentsExpired + result.appointmentsResumed +
+    result.subscriptionsExpired + result.paymentLinksExpired;
   if (total > 0) {
     console.log('[sweeps] completed', JSON.stringify(result));
   }

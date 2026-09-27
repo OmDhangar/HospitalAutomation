@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   applyAction,
   callNext,
+  canCancel,
+  canPause,
   canTransition,
   currentlyServing,
   isActive,
   isTerminal,
   nextTokenNumber,
+  occupiesBookingSlot,
   orderQueue,
   patientsAhead,
   QueueTransitionError,
@@ -56,10 +59,40 @@ describe('state machine', () => {
     for (const status of ['COMPLETED', 'CANCELLED', 'NO_SHOW', 'EXPIRED'] as const) {
       expect(isTerminal(status)).toBe(true);
       expect(isActive(status)).toBe(false);
+      expect(occupiesBookingSlot(status)).toBe(false);
+      expect(canCancel(status)).toBe(false);
+      expect(canPause(status)).toBe(false);
     }
   });
 
-  it('does not count held or skipped patients as occupying the queue', () => {
+  it('determines pause and cancel capability correctly for non-terminal states', () => {
+    expect(canPause('IN_CONSULTATION')).toBe(true);
+    expect(canPause('WAITING')).toBe(true);
+    expect(canPause('CALLED')).toBe(true);
+    expect(canPause('CREATED')).toBe(false);
+    expect(canPause('CONFIRMED')).toBe(false);
+    expect(canPause('HELD')).toBe(false);
+
+    expect(canCancel('CREATED')).toBe(true);
+    expect(canCancel('CONFIRMED')).toBe(true);
+    expect(canCancel('ARRIVED')).toBe(true);
+    expect(canCancel('WAITING')).toBe(true);
+    expect(canCancel('CALLED')).toBe(true);
+    expect(canCancel('SKIPPED')).toBe(true);
+    expect(canCancel('HELD')).toBe(true);
+    expect(canCancel('IN_CONSULTATION')).toBe(false);
+
+    expect(occupiesBookingSlot('CREATED')).toBe(true);
+    expect(occupiesBookingSlot('CONFIRMED')).toBe(true);
+    expect(occupiesBookingSlot('ARRIVED')).toBe(true);
+    expect(occupiesBookingSlot('WAITING')).toBe(true);
+    expect(occupiesBookingSlot('CALLED')).toBe(true);
+    expect(occupiesBookingSlot('IN_CONSULTATION')).toBe(true);
+    expect(occupiesBookingSlot('HELD')).toBe(true);
+    expect(occupiesBookingSlot('SKIPPED')).toBe(true);
+  });
+
+  it('does not count held or skipped patients as occupying the active queue', () => {
     expect(isActive('HELD')).toBe(false);
     expect(isActive('SKIPPED')).toBe(false);
   });

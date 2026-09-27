@@ -31,7 +31,8 @@ import {
   listHospitalsAwaitingNumber,
   listUnassignedNumbers,
 } from '@/lib/services/whatsapp-numbers';
-import { assignNumber, refreshHealth, releaseNumber } from './actions';
+import { listActiveTiers } from '@/lib/services/subscriptions';
+import { assignNumber, createHospitalAction, refreshHealth, releaseNumber } from './actions';
 
 export const metadata = { title: 'Platform · OPD Queue' };
 
@@ -60,13 +61,14 @@ export default async function AdminPage({ searchParams }: PageProps<'/admin'>) {
     );
   }
 
-  const [portfolio, failures, numbers, rate, awaiting, inventory] = await Promise.all([
+  const [portfolio, failures, numbers, rate, awaiting, inventory, tiers] = await Promise.all([
     getPortfolioHealth(),
     getRecentFailures(),
     listAllNumbers(),
     resolvePaisePerMessage(),
     listHospitalsAwaitingNumber(),
     listUnassignedNumbers(),
+    listActiveTiers().catch(() => []),
   ]);
 
   const totals = portfolio.reduce(
@@ -83,16 +85,103 @@ export default async function AdminPage({ searchParams }: PageProps<'/admin'>) {
     totals.appointments > 0 ? totals.messages / totals.appointments : null;
 
   return (
-    <div className="space-y-5">
-      <div>
-        <h1 className="text-lg font-semibold text-ink-900">Platform</h1>
-        <p className="mt-0.5 text-sm text-ink-500">
-          {portfolio.length} active {portfolio.length === 1 ? 'hospital' : 'hospitals'} · this
-          month
-        </p>
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2">
+        <div>
+          <h1 className="text-xl font-bold text-ink-900">Platform Operator Console</h1>
+          <p className="mt-0.5 text-sm text-ink-500">
+            {portfolio.length} active {portfolio.length === 1 ? 'hospital' : 'hospitals'} · {inventory.length} unassigned WhatsApp numbers
+          </p>
+        </div>
       </div>
 
       <AdminNotices params={params} />
+
+      {/* Hospital Onboarding Section */}
+      <Card>
+        <CardHeader
+          title="Onboard New Hospital"
+          hint="Create a new hospital tenant with admin owner account, initial clinic branch, and plan subscription"
+        />
+        <form action={createHospitalAction} className="p-5 space-y-4 bg-ink-50/40">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Field label="Hospital Name" hint="Official name shown to patients">
+              <Input name="name" required placeholder="e.g. Sanjeevani Care Hospital" />
+            </Field>
+
+            <Field label="Plan Tier" hint="Sets daily capacity and feature limits">
+              <select
+                name="planTierCode"
+                defaultValue="free"
+                className="w-full rounded-lg border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-brand-600"
+              >
+                {tiers.length > 0 ? (
+                  tiers.map((tier) => (
+                    <option key={tier.code} value={tier.code}>
+                      {tier.name} · {rupees(tier.monthlyPricePaise)}/mo ({tier.patientsPerDay} tokens/day)
+                    </option>
+                  ))
+                ) : (
+                  <>
+                    <option value="free">Free Tier</option>
+                    <option value="starter">Starter</option>
+                    <option value="pro">Pro Growth</option>
+                  </>
+                )}
+              </select>
+            </Field>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 border-t border-ink-200 pt-4">
+            <Field label="Owner Full Name">
+              <Input name="ownerName" required placeholder="Dr. Rajesh Sharma" />
+            </Field>
+            <Field label="Owner Email" hint="Login email for dashboard">
+              <Input name="ownerEmail" type="email" required placeholder="admin@sanjeevani.com" />
+            </Field>
+            <Field label="Owner Mobile (WhatsApp)">
+              <Input name="ownerPhoneE164" type="tel" placeholder="9876543210" />
+            </Field>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-ink-200 pt-4">
+            <Field label="Primary Branch Name">
+              <Input name="branchName" defaultValue="Main Clinic" placeholder="Main Clinic / Pune Branch" />
+            </Field>
+            <Field label="Branch Address" hint="Optional">
+              <Input name="branchAddress" placeholder="102 MG Road, Shivajinagar, Pune" />
+            </Field>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 border-t border-ink-200 pt-4">
+            <Field label="Initial Doctor Name" hint="Optional">
+              <Input name="initialDoctorName" placeholder="Dr. Anjali Patil" />
+            </Field>
+            <Field label="Doctor Specialty" hint="Optional">
+              <Input name="initialDoctorSpecialty" placeholder="e.g. Paediatrics, General" />
+            </Field>
+            <Field label="WhatsApp Sender Number" hint="Assign from unassigned inventory">
+              <select
+                name="phoneNumberId"
+                className="w-full rounded-lg border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-brand-600"
+              >
+                <option value="">Do not assign yet (configure later)</option>
+                {inventory.map((n) => (
+                  <option key={n.phoneNumberId} value={n.phoneNumberId}>
+                    {n.displayPhoneNumber ?? n.phoneNumberId} {n.verifiedName ? `(${n.verifiedName})` : ''}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <Button type="submit" variant="primary" size="lg">
+              Onboard &amp; Activate Hospital
+            </Button>
+          </div>
+        </form>
+      </Card>
 
       <Card>
         <CardHeader
@@ -446,6 +535,9 @@ function AdminNotices({
 
   return (
     <>
+      {params.created ? (
+        <Alert tone="warn">Hospital &ldquo;{String(params.created)}&rdquo; onboarded successfully with owner account and initial setup!</Alert>
+      ) : null}
       {params.assigned ? (
         <Alert tone="warn">Number assigned and verified against our WABA.</Alert>
       ) : null}
@@ -456,6 +548,16 @@ function AdminNotices({
       {known ? (
         <Alert tone="error">
           {integrationErrorMessage(known as IntegrationErrorCode)}
+        </Alert>
+      ) : null}
+      {error === 'REQUIRED_FIELDS' ? (
+        <Alert tone="error">
+          Please fill in all required hospital and owner details.
+        </Alert>
+      ) : null}
+      {error === 'CREATION_FAILED' ? (
+        <Alert tone="error">
+          Failed to onboard hospital. Please check details and try again.
         </Alert>
       ) : null}
       {error === 'CONFIRM' ? (

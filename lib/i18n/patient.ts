@@ -31,6 +31,11 @@ type Strings = {
   doctor: string;
   paused: string;
   pausedHint: string;
+  patientPaused: string;
+  patientPausedHint: string;
+  resumeAction: string;
+  resumeDone: string;
+  resumeDoneHint: string;
   completed: string;
   completedHint: string;
   expired: string;
@@ -52,6 +57,14 @@ type Strings = {
   cancelDoneHint: string;
   cancelTooLate: string;
   cancelTooLateHint: string;
+  /** Display board translations. */
+  displayTitle: string;
+  displayNextPatient: string;
+  displayWaiting: string;
+  displaySeenToday: string;
+  displayOnBreak: string;
+  displayNotStarted: string;
+  displayNoDoctors: string;
 };
 
 export const t: Record<Locale, Strings> = {
@@ -68,6 +81,11 @@ export const t: Record<Locale, Strings> = {
     doctor: 'डॉक्टर',
     paused: 'रांग तात्पुरती थांबली आहे',
     pausedHint: 'डॉक्टर लवकरच पुन्हा सुरू करतील. तुमचा टोकन सुरक्षित आहे.',
+    patientPaused: 'तुमचा नंबर होल्डवर (थांबवून) ठेवला आहे',
+    patientPausedHint: 'तुम्ही टेस्ट किंवा कामासाठी बाहेर गेला असल्यास, परत आल्यावर खालील बटण दाबा.',
+    resumeAction: 'मी परत आलो आहे / रांगेत पुन्हा या',
+    resumeDone: 'तुम्ही रांगेत पुन्हा आला आहात',
+    resumeDoneHint: 'तुमचा टोकन सक्रिय रांगेत जोडला गेला आहे.',
     completed: 'तुमची तपासणी पूर्ण झाली',
     completedHint: 'धन्यवाद. तब्येतीची काळजी घ्या.',
     expired: 'ही लिंक कालबाह्य झाली आहे',
@@ -88,6 +106,13 @@ export const t: Record<Locale, Strings> = {
     cancelDoneHint: 'कळवल्याबद्दल धन्यवाद. नवीन वेळ हवी असल्यास रुग्णालयाला संपर्क करा.',
     cancelTooLate: 'ही अपॉइंटमेंट आता रद्द करता येणार नाही',
     cancelTooLateHint: 'कृपया रिसेप्शनला विचारा.',
+    displayTitle: 'प्रतीक्षा कक्ष फलक',
+    displayNextPatient: 'पुढील रुग्ण',
+    displayWaiting: 'प्रतीक्षेत',
+    displaySeenToday: 'आज पाहिलेले',
+    displayOnBreak: 'विश्रांतीवर',
+    displayNotStarted: 'सुरू झाले नाही',
+    displayNoDoctors: 'सध्या कोणतेही डॉक्टर सुरू नाहीत',
   },
   hi: {
     yourToken: 'आपका टोकन नंबर',
@@ -102,6 +127,11 @@ export const t: Record<Locale, Strings> = {
     doctor: 'डॉक्टर',
     paused: 'कतार कुछ देर के लिए रुकी है',
     pausedHint: 'डॉक्टर जल्द ही दोबारा शुरू करेंगे। आपका टोकन सुरक्षित है।',
+    patientPaused: 'आपकी बारी होल्ड पर रखी गई है',
+    patientPausedHint: 'यदि आप जाँच या किसी काम से बाहर हैं, तो लौटने पर नीचे दिया बटन दबाएँ।',
+    resumeAction: 'मैं वापस आ गया हूँ / कतार में जुड़ें',
+    resumeDone: 'आप दोबारा कतार में जुड़ गए हैं',
+    resumeDoneHint: 'आपका टोकन सक्रिय कतार में वापस आ गया है।',
     completed: 'आपकी जाँच पूरी हो गई',
     completedHint: 'धन्यवाद। अपना ध्यान रखें।',
     expired: 'यह लिंक समाप्त हो गया है',
@@ -122,6 +152,13 @@ export const t: Record<Locale, Strings> = {
     cancelDoneHint: 'बताने के लिए धन्यवाद। नया समय चाहिए तो अस्पताल से संपर्क करें।',
     cancelTooLate: 'यह अपॉइंटमेंट अब रद्द नहीं की जा सकती',
     cancelTooLateHint: 'कृपया रिसेप्शन से पूछें।',
+    displayTitle: 'प्रतीक्षा कक्ष डिस्प्ले',
+    displayNextPatient: 'अगला मरीज़',
+    displayWaiting: 'प्रतीक्षारत',
+    displaySeenToday: 'आज देखे गए',
+    displayOnBreak: 'ब्रेक पर',
+    displayNotStarted: 'शुरू नहीं हुआ',
+    displayNoDoctors: 'कोई डॉक्टर उपलब्ध नहीं है',
   },
   en: {
     yourToken: 'Your token number',
@@ -136,6 +173,11 @@ export const t: Record<Locale, Strings> = {
     doctor: 'Doctor',
     paused: 'The queue is paused',
     pausedHint: 'The doctor will resume shortly. Your token is safe.',
+    patientPaused: 'Your turn is temporarily on hold',
+    patientPausedHint: 'If you stepped out for tests, tap below when you are back in the waiting room.',
+    resumeAction: 'I am back / Rejoin queue',
+    resumeDone: 'You rejoined the queue',
+    resumeDoneHint: 'Your token is back in the active waiting line.',
     completed: 'Your consultation is complete',
     completedHint: 'Thank you. Take care.',
     expired: 'This link has expired',
@@ -149,14 +191,6 @@ export const t: Record<Locale, Strings> = {
     leaveHint: 'You can wait outside. We will message you when your turn is close.',
     appointmentTime: 'Appointment time',
     cancelAction: 'Cancel appointment',
-    /**
-     * Says why cancelling is worth doing, not just that it is possible.
-     *
-     * A patient who cannot come will either cancel or quietly not turn up. The
-     * second costs the hospital an empty slot and the patient nothing, so the
-     * copy names the benefit to someone else — which is what actually moves
-     * people to press it.
-     */
     cancelPrompt:
       'If you cannot come, please cancel now. Your time can then be given to another patient.',
     cancelConfirm: 'Yes, cancel it',
@@ -165,6 +199,13 @@ export const t: Record<Locale, Strings> = {
     cancelDoneHint: 'Thank you for letting us know. To book again, contact the hospital.',
     cancelTooLate: 'This appointment can no longer be cancelled here',
     cancelTooLateHint: 'Please speak to the reception desk.',
+    displayTitle: 'Waiting Room Display',
+    displayNextPatient: 'Next Patient',
+    displayWaiting: 'Waiting',
+    displaySeenToday: 'Seen today',
+    displayOnBreak: 'On a break',
+    displayNotStarted: 'Not started',
+    displayNoDoctors: 'No doctors in session',
   },
 };
 

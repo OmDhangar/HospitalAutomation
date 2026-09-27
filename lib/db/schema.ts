@@ -530,6 +530,10 @@ export const appointments = pgTable(
     calledAt: timestamp('called_at', { withTimezone: true }),
     consultStartedAt: timestamp('consult_started_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
+    /** When the doctor paused this appointment. Null unless status is HELD. */
+    pausedAt: timestamp('paused_at', { withTimezone: true }),
+    /** Earliest time the scheduled resume job should fire. Null unless status is HELD. */
+    resumeAt: timestamp('resume_at', { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

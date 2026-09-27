@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { cancelByPublicToken } from '@/lib/services/queue';
+import { cancelByPublicToken, resumeByPublicToken } from '@/lib/services/queue';
 import { consumeToken } from '@/lib/security/rate-limit';
 
 /**
@@ -48,6 +48,38 @@ export async function cancelAppointment(formData: FormData) {
         ? 'done'
         : result.outcome === 'too_late'
           ? 'late'
+          : 'error'
+    }${suffix}`,
+  );
+}
+
+/**
+ * A patient resuming their appointment after being paused/held (e.g. returning from test).
+ */
+export async function resumeAppointment(formData: FormData) {
+  const token = String(formData.get('token') ?? '').trim();
+  const lang = String(formData.get('lang') ?? '').trim();
+  const suffix = lang ? `&lang=${encodeURIComponent(lang)}` : '';
+
+  if (!token) redirect('/');
+
+  const limit = consumeToken({
+    key: `q:resume:${token}`,
+    capacity: 5,
+    windowMs: 60_000,
+  });
+  if (!limit.allowed) redirect(`/q/${token}?resume=busy${suffix}`);
+
+  const result = await resumeByPublicToken({ publicToken: token });
+
+  revalidatePath(`/q/${token}`);
+
+  redirect(
+    `/q/${token}?resume=${
+      result.outcome === 'resumed'
+        ? 'done'
+        : result.outcome === 'not_paused'
+          ? 'not_paused'
           : 'error'
     }${suffix}`,
   );

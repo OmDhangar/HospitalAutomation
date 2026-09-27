@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { requireSession } from '@/lib/auth/session';
 import { isPlausiblePhoneNumberId } from '@/lib/domain/whatsapp-integration';
+import { createHospital } from '@/lib/services/platform';
 import {
   assignNumberToHospital,
   IntegrationAuthError,
@@ -105,3 +106,57 @@ export async function releaseNumber(formData: FormData) {
   revalidatePath('/admin');
   redirect('/admin?released=1');
 }
+
+/**
+ * Onboards a brand-new hospital tenant with owner user, initial branch,
+ * plan tier, and optional doctor / WhatsApp number.
+ */
+export async function createHospitalAction(formData: FormData) {
+  const actor = await authorizePlatform();
+
+  const name = String(formData.get('name') ?? '').trim();
+  const ownerName = String(formData.get('ownerName') ?? '').trim();
+  const ownerEmail = String(formData.get('ownerEmail') ?? '').trim();
+  const ownerPassword = String(formData.get('ownerPassword') ?? '').trim() || undefined;
+  const ownerPhoneE164 = String(formData.get('ownerPhoneE164') ?? '').trim() || undefined;
+  const branchName = String(formData.get('branchName') ?? '').trim() || 'Main Branch';
+  const branchAddress = String(formData.get('branchAddress') ?? '').trim() || undefined;
+  const planTierCode = String(formData.get('planTierCode') ?? '').trim() || 'free';
+  const billingCycle = (String(formData.get('billingCycle') ?? 'monthly') as 'monthly' | 'annual');
+
+  const initialDoctorName = String(formData.get('initialDoctorName') ?? '').trim() || undefined;
+  const initialDoctorSpecialty = String(formData.get('initialDoctorSpecialty') ?? '').trim() || undefined;
+  const rawMode = String(formData.get('initialDoctorMode') ?? 'both');
+  const initialDoctorMode = rawMode === 'slot' ? 'slot' : rawMode === 'queue' ? 'queue' : 'both';
+  const phoneNumberId = String(formData.get('phoneNumberId') ?? '').trim() || undefined;
+
+  if (!name || !ownerName || !ownerEmail) {
+    redirect('/admin?error=REQUIRED_FIELDS');
+  }
+
+  try {
+    const res = await createHospital({
+      name,
+      ownerName,
+      ownerEmail,
+      ownerPassword,
+      ownerPhoneE164,
+      branchName,
+      branchAddress,
+      planTierCode,
+      billingCycle,
+      initialDoctorName,
+      initialDoctorSpecialty,
+      initialDoctorMode,
+      phoneNumberId,
+      actorUserId: actor.userId,
+    });
+
+    revalidatePath('/admin');
+    redirect(`/admin?created=${encodeURIComponent(res.hospitalName)}`);
+  } catch (err: unknown) {
+    console.error('[admin:createHospitalAction]', err);
+    redirect('/admin?error=CREATION_FAILED');
+  }
+}
+

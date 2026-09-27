@@ -10,6 +10,8 @@ import {
   advanceQueue,
   applyQueueAction,
   createWalkIn,
+  pauseAppointment,
+  resumeAppointment,
   setDoctorPaused,
   setPriority,
 } from '@/lib/services/queue';
@@ -194,6 +196,66 @@ export async function togglePauseDynamic(args: {
     return { ok: true };
   } catch (err: unknown) {
     return { ok: false, error: err instanceof Error ? err.message : 'Failed to toggle pause status' };
+  }
+}
+
+export async function pauseAppointmentDynamic(args: {
+  doctorId: string;
+  appointmentId: string;
+  resumeAfterMinutes?: number | null;
+  reason?: string | null;
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const session = await authorize();
+    const result = await pauseAppointment({
+      hospitalId: session.hospitalId,
+      doctorId: args.doctorId,
+      appointmentId: args.appointmentId,
+      timezone: session.timezone,
+      resumeAfterMinutes: args.resumeAfterMinutes,
+      reason: args.reason,
+      actorUserId: session.userId,
+    });
+
+    if (result.outcome !== 'paused') {
+      return { ok: false, error: `Cannot pause appointment in status: ${result.currentStatus}` };
+    }
+
+    revalidatePath('/dashboard');
+    return { ok: true };
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to pause patient' };
+  }
+}
+
+export async function resumeAppointmentDynamic(args: {
+  doctorId: string;
+  appointmentId: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const session = await authorize();
+    const result = await resumeAppointment({
+      hospitalId: session.hospitalId,
+      doctorId: args.doctorId,
+      appointmentId: args.appointmentId,
+      timezone: session.timezone,
+      actorUserId: session.userId,
+    });
+
+    if (result.outcome !== 'resumed') {
+      return {
+        ok: false,
+        error:
+          result.outcome === 'not_found'
+            ? 'Appointment not found'
+            : `Cannot resume appointment in status: ${result.currentStatus}`,
+      };
+    }
+
+    revalidatePath('/dashboard');
+    return { ok: true };
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to resume patient' };
   }
 }
 
