@@ -6,6 +6,7 @@ import { formatTimeIn } from '@/lib/domain/time';
 import { isLocale, t, type Locale } from '@/lib/i18n/patient';
 import { listBranches } from '@/lib/services/auth';
 import { getBranchSnapshots } from '@/lib/services/queue';
+import { DisplayAudioNotifier } from './display-audio';
 
 export const metadata = { title: 'Waiting Room Display · Live OPD' };
 export const dynamic = 'force-dynamic';
@@ -18,6 +19,7 @@ export const dynamic = 'force-dynamic';
  * - Shows current patient name + token
  * - Shows next waiting patient for preparedness
  * - Instant language toggle (English / मराठी)
+ * - Automatic chime announcement when new tokens are called
  */
 export default async function DisplayPage({
   params,
@@ -41,6 +43,14 @@ export default async function DisplayPage({
     timezone: session.timezone,
     now,
   });
+
+  const servingState = snapshots.map((snap) => ({
+    doctorId: snap.doctorId,
+    doctorName: snap.doctorName,
+    tokenNumber: snap.currentToken ?? null,
+    patientName: snap.currentPatientName ?? null,
+    status: snap.currentToken ? 'CALLED' : null,
+  }));
 
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-6 sm:px-10 sm:py-8 text-white flex flex-col justify-between selection:bg-emerald-500 selection:text-white">
@@ -66,8 +76,10 @@ export default async function DisplayPage({
           </div>
         </div>
 
-        {/* Right Header: Clock & Language Toggle */}
-        <div className="flex items-center gap-5">
+        {/* Right Header: Audio Alert Toggle, Language Toggle, & Clock */}
+        <div className="flex flex-wrap items-center gap-3 sm:gap-5">
+          <DisplayAudioNotifier servingState={servingState} />
+
           <div className="flex items-center rounded-xl bg-white/5 p-1 ring-1 ring-white/10">
             <Link
               href={`/display/${branchId}?lang=en`}

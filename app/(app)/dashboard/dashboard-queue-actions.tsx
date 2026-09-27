@@ -4,6 +4,7 @@ import React, { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button, Field, Input, cn } from '@/components/ui';
 import { useToast } from '@/components/toast';
+import { playChime } from '@/lib/utils/sound';
 import type { QueueAction } from '@/lib/domain/types';
 import {
   addWalkInDynamic,
@@ -203,18 +204,23 @@ export function AddWalkInForm({
 export function CallNextButton({
   doctorId,
   disabled,
+  label = 'Call next patient',
+  size = 'xl',
 }: {
   doctorId: string;
   disabled: boolean;
+  label?: string;
+  size?: 'md' | 'lg' | 'xl';
 }) {
   const toast = useToast();
   const [isPending, startTransition] = useTransition();
 
   const handleCallNext = () => {
+    playChime();
     startTransition(async () => {
       const res = await advanceQueueDynamic({ doctorId });
       if (res.ok) {
-        toast.success('Next Patient Called', 'Queue advanced to next patient.');
+        toast.success('Queue Advanced', 'Next patient called successfully.');
       } else {
         toast.error('Failed to call next patient', res.error);
       }
@@ -225,13 +231,67 @@ export function CallNextButton({
     <Button
       type="button"
       variant="primary"
-      size="xl"
+      size={size}
       onClick={handleCallNext}
       disabled={disabled || isPending}
       isLoading={isPending}
     >
-      {isPending ? 'Calling...' : 'Call next patient'}
+      {isPending ? 'Calling...' : label}
     </Button>
+  );
+}
+
+export function ViewModeToggle({
+  currentView,
+  doctorId,
+}: {
+  currentView: 'doctor' | 'reception';
+  doctorId?: string | null;
+}) {
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+
+  const handleSwitch = (view: 'doctor' | 'reception') => {
+    if (view === currentView) return;
+    startTransition(() => {
+      const query = new URLSearchParams();
+      query.set('view', view);
+      if (doctorId) query.set('doctor', doctorId);
+      router.push(`/dashboard?${query.toString()}`);
+    });
+  };
+
+  return (
+    <div className="inline-flex items-center rounded-xl bg-ink-100 p-1 border border-ink-200">
+      <button
+        type="button"
+        onClick={() => handleSwitch('doctor')}
+        disabled={isPending}
+        className={cn(
+          'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer select-none',
+          currentView === 'doctor'
+            ? 'bg-white text-ink-900 shadow-xs ring-1 ring-ink-200'
+            : 'text-ink-600 hover:text-ink-900',
+        )}
+      >
+        <span>🩺</span>
+        <span>Doctor View</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => handleSwitch('reception')}
+        disabled={isPending}
+        className={cn(
+          'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer select-none',
+          currentView === 'reception'
+            ? 'bg-white text-ink-900 shadow-xs ring-1 ring-ink-200'
+            : 'text-ink-600 hover:text-ink-900',
+        )}
+      >
+        <span>📋</span>
+        <span>Reception Desk</span>
+      </button>
+    </div>
   );
 }
 
@@ -313,6 +373,9 @@ export function QueueActionButton({
   const [isPending, startTransition] = useTransition();
 
   const handleAction = () => {
+    if (action === 'call' || action === 'recall') {
+      playChime();
+    }
     startTransition(async () => {
       const res = await queueActionDynamic({ doctorId, appointmentId, action });
       if (res.ok) {

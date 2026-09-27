@@ -19,8 +19,11 @@ async function AppHeader() {
 
   const navItems: NavItem[] = [
     { label: 'Queue', href: '/dashboard' },
-    { label: 'Reports', href: '/reports' },
   ];
+
+  if (session.role !== 'doctor') {
+    navItems.push({ label: 'Reports', href: '/reports' });
+  }
 
   if (session.role === 'owner') {
     navItems.push(
@@ -97,7 +100,7 @@ async function AppHeader() {
  */
 async function PlanExpiryNotice() {
   const session = await getSession();
-  if (!session) return null;
+  if (!session || session.role === 'doctor') return null;
 
   const subscription = await getCurrentSubscription(session.hospitalId);
   if (!subscription) return null;
