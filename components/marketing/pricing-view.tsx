@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { Button, Card, cn } from '@/components/ui';
 import { DemoForm } from '@/components/marketing/demo-form';
+import { supportLabel } from '@/lib/domain/entitlements';
 
 export type PricingTierData = {
   code: string;
@@ -16,7 +17,26 @@ export type PricingTierData = {
   setupFeePaise: number;
   overagePaisePerAppointment: number;
   overagePaisePerMessage: number;
+  maxBranches: number | null;
+  maxDoctors: number | null;
+  maxStaffLogins: number | null;
+  hasDisplayBoard: boolean;
+  hasOwnerReport: boolean;
+  hasAdvancedReports: boolean;
+  hasDataExport: boolean;
+  hasAuditLog: boolean;
+  supportTier: string;
 };
+
+/**
+ * `null` is unlimited; every other number is a real cap the product enforces.
+ *
+ * Singulars are given explicitly rather than derived by trimming an "s" — the
+ * one-branch plan is the most common plan on the page, and "1 branche" is not
+ * a typo a buyer forgives on a pricing table.
+ */
+const cap = (value: number | null, one: string, many: string): string =>
+  value === null ? `Unlimited ${many}` : `${value} ${value === 1 ? one : many}`;
 
 export function rupees(paise: number): string {
   return `₹${Math.round(paise / 100).toLocaleString('en-IN')}`;
@@ -81,8 +101,9 @@ export function PricingView({
           Complete transparency. No hidden charges.
         </h1>
         <p className="mt-4 text-base sm:text-lg text-ink-600 leading-relaxed">
-          Every plan includes the complete Qurio software with zero feature gating. Capacity is the
-          only difference.
+          WhatsApp booking, the live queue and your reception screen are on every plan. What
+          changes is how many doctors, branches and staff you run, and how deep the reporting
+          goes. Every price below is the price — setup is quoted once and nothing else is hidden.
         </p>
 
         {/* Billing Cycle Switcher */}
@@ -222,39 +243,73 @@ export function PricingView({
                   </div>
                 </div>
 
-                {/* Key Inclusions */}
+                {/* What this tier actually includes, which differs by tier */}
                 <div className="pt-5 pb-6 flex-1">
                   <p className="text-xs font-bold uppercase tracking-wider text-ink-400 mb-3">
-                    Includes Full Platform:
+                    Included at this plan
                   </p>
                   <ul className="space-y-2.5 text-xs text-ink-700">
+                    {/*
+                      Scale first. These are the rows a buyer measures their own
+                      hospital against, and the reason one plan is not another.
+                    */}
                     <li className="flex items-start gap-2">
-                      <span className="text-brand-600 font-bold">✓</span>
-                      <span>WhatsApp Bot in Marathi, Hindi & English</span>
+                      <span className="font-bold text-brand-600">✓</span>
+                      <span className="font-semibold text-ink-900">
+                        {cap(tier.maxDoctors, 'doctor', 'doctors')}
+                      </span>
                     </li>
                     <li className="flex items-start gap-2">
-                      <span className="text-brand-600 font-bold">✓</span>
-                      <span>Live patient queue status tracker web link</span>
+                      <span className="font-bold text-brand-600">✓</span>
+                      <span className="font-semibold text-ink-900">
+                        {cap(tier.maxStaffLogins, 'staff login', 'staff logins')}
+                      </span>
                     </li>
                     <li className="flex items-start gap-2">
-                      <span className="text-brand-600 font-bold">✓</span>
-                      <span>1-Click reception Call Next operator screen</span>
+                      <span className="font-bold text-brand-600">✓</span>
+                      <span className="font-semibold text-ink-900">
+                        {cap(tier.maxBranches, 'branch', 'branches')}
+                      </span>
+                    </li>
+
+                    {/* On every plan, because these are why anyone buys. */}
+                    <li className="flex items-start gap-2">
+                      <span className="font-bold text-brand-600">✓</span>
+                      <span>WhatsApp booking in Marathi, Hindi &amp; English</span>
                     </li>
                     <li className="flex items-start gap-2">
-                      <span className="text-brand-600 font-bold">✓</span>
-                      <span>Smart automated 2-patient recall WhatsApp nudges</span>
+                      <span className="font-bold text-brand-600">✓</span>
+                      <span>Live queue tracker &amp; 1-click reception screen</span>
                     </li>
+
+                    {/*
+                      Withheld features are shown struck through rather than
+                      hidden: a buyer cannot value what they are not told they
+                      are missing, and this is the whole point of the ladder.
+                    */}
+                    {[
+                      { on: tier.hasDisplayBoard, label: 'Waiting room TV display' },
+                      { on: tier.hasOwnerReport, label: 'Monthly owner report on WhatsApp' },
+                      { on: tier.hasAdvancedReports, label: 'Full reports & insights' },
+                      { on: tier.hasDataExport, label: 'Data export' },
+                      { on: tier.hasAuditLog, label: 'Audit log' },
+                    ].map((row) => (
+                      <li
+                        key={row.label}
+                        className={`flex items-start gap-2 ${row.on ? '' : 'text-ink-400'}`}
+                      >
+                        <span className={row.on ? 'font-bold text-brand-600' : 'text-ink-300'}>
+                          {row.on ? '✓' : '—'}
+                        </span>
+                        <span className={row.on ? '' : 'line-through decoration-ink-300'}>
+                          {row.label}
+                        </span>
+                      </li>
+                    ))}
+
                     <li className="flex items-start gap-2">
-                      <span className="text-brand-600 font-bold">✓</span>
-                      <span>Waiting room live TV display mode</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-brand-600 font-bold">✓</span>
-                      <span>Unlimited doctors & staff logins</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-brand-600 font-bold">✓</span>
-                      <span>On-site & video staff training (15 mins)</span>
+                      <span className="font-bold text-brand-600">✓</span>
+                      <span>{supportLabel(tier.supportTier)}</span>
                     </li>
                   </ul>
                 </div>

@@ -37,6 +37,15 @@ export default async function PricingPage() {
           setupFeePaise: t.setupFeePaise,
           overagePaisePerAppointment: t.overagePaisePerAppointment,
           overagePaisePerMessage: t.overagePaisePerMessage,
+          maxBranches: t.maxBranches,
+          maxDoctors: t.maxDoctors,
+          maxStaffLogins: t.maxStaffLogins,
+          hasDisplayBoard: t.hasDisplayBoard,
+          hasOwnerReport: t.hasOwnerReport,
+          hasAdvancedReports: t.hasAdvancedReports,
+          hasDataExport: t.hasDataExport,
+          hasAuditLog: t.hasAuditLog,
+          supportTier: t.supportTier,
         }))
       : SEED_PLAN_TIERS.map((t) => ({
           code: t.code,
@@ -49,6 +58,15 @@ export default async function PricingPage() {
           setupFeePaise: t.setupFeePaise,
           overagePaisePerAppointment: t.overagePaisePerAppointment,
           overagePaisePerMessage: t.overagePaisePerMessage,
+          maxBranches: t.maxBranches,
+          maxDoctors: t.maxDoctors,
+          maxStaffLogins: t.maxStaffLogins,
+          hasDisplayBoard: t.hasDisplayBoard,
+          hasOwnerReport: t.hasOwnerReport,
+          hasAdvancedReports: t.hasAdvancedReports,
+          hasDataExport: t.hasDataExport,
+          hasAuditLog: t.hasAuditLog,
+          supportTier: t.supportTier,
         }));
 
   return (

@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { requireSession } from '@/lib/auth/session';
 import { canConfigureHospital } from '@/lib/services/auth';
+import { checkCanAdd } from '@/lib/services/entitlements';
 import { createBranch, createDoctor, setDoctorActive } from '@/lib/services/hospital';
 
 async function authorize() {
@@ -18,6 +19,9 @@ export async function addBranchAction(formData: FormData) {
   const session = await authorize();
   const name = String(formData.get('name') ?? '').trim();
   if (!name) redirect('/settings?error=name');
+
+  const check = await checkCanAdd({ hospitalId: session.hospitalId, kind: 'branches' });
+  if (!check.allowed) redirect('/settings?limit=branches');
 
   await createBranch({
     hospitalId: session.hospitalId,
@@ -38,6 +42,15 @@ export async function addDoctorAction(formData: FormData) {
   const minutes = Number(formData.get('defaultConsultMinutes') ?? 10);
   const rawMode = String(formData.get('mode') ?? 'both');
   const mode = rawMode === 'slot' ? 'slot' : rawMode === 'queue' ? 'queue' : 'both';
+
+  /**
+   * Checked before the write, and surfaced as a redirect rather than a thrown
+   * error, because the page already reports validation this way and a limit is
+   * a normal answer rather than a fault. The service enforces it as well — this
+   * is only what turns it into a sentence somebody can act on.
+   */
+  const check = await checkCanAdd({ hospitalId: session.hospitalId, kind: 'doctors' });
+  if (!check.allowed) redirect('/settings?limit=doctors');
 
   await createDoctor({
     hospitalId: session.hospitalId,

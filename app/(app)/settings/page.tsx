@@ -11,6 +11,7 @@ import {
 } from '@/components/ui';
 import { requireSession } from '@/lib/auth/session';
 import { canConfigureHospital, listBranches } from '@/lib/services/auth';
+import { describeLimit } from '@/lib/services/entitlements';
 import { listDoctors } from '@/lib/services/hospital';
 import { addBranchAction, addDoctorAction, toggleDoctorAction } from './actions';
 
@@ -23,6 +24,17 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
   const session = await requireSession();
   const params = await searchParams;
   const today = serviceDateIn(session.timezone, new Date());
+
+  /**
+   * Recomputed here rather than passed through the redirect, so the secret of
+   * what the plan allows is never a URL parameter somebody can edit, and the
+   * numbers shown are the ones true at render time.
+   */
+  const limitKind =
+    params.limit === 'branches' ? 'branches' : params.limit === 'doctors' ? 'doctors' : null;
+  const limitHit = limitKind
+    ? await describeLimit({ hospitalId: session.hospitalId, kind: limitKind })
+    : null;
 
   if (!canConfigureHospital(session.role)) {
     return (
@@ -55,6 +67,22 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
 
       {params.error === 'name' ? (
         <Alert tone="error">A name is required.</Alert>
+      ) : null}
+
+      {/*
+        A plan limit is reported with both numbers and the plan that lifts it.
+        "Upgrade your plan" on its own tells somebody they cannot do their job
+        and not what to do about it, which produces a phone call rather than an
+        upgrade. Nothing already set up is affected — the limit only stops the
+        next addition.
+      */}
+      {limitHit ? (
+        <Alert tone="warn">
+          {limitHit}{' '}
+          <Link href="/plans" className="font-semibold underline underline-offset-2">
+            See plans
+          </Link>
+        </Alert>
       ) : null}
 
       <Card>

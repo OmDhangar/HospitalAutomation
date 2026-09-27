@@ -11,6 +11,23 @@
 export type PlanTier = {
   code: string;
   name: string;
+  /**
+   * What the tier permits beyond volume, mirroring `plan_tiers`.
+   *
+   * Kept on the seed so the published rate card says the same thing whether it
+   * came from the database or from this fallback. A pricing page that promises
+   * unlimited doctors while the product enforces three is worse than one that
+   * promises nothing.
+   */
+  maxBranches: number | null;
+  maxDoctors: number | null;
+  maxStaffLogins: number | null;
+  hasDisplayBoard: boolean;
+  hasOwnerReport: boolean;
+  hasAdvancedReports: boolean;
+  hasDataExport: boolean;
+  hasAuditLog: boolean;
+  supportTier: string;
   /** Nameplate outpatients per day this tier is sold against. */
   patientsPerDay: number;
   includedAppointments: number;
@@ -60,6 +77,61 @@ export const WORKING_DAYS_PER_MONTH = 26;
  */
 export const QUOTA_HEADROOM = 1.35;
 
+/**
+ * The ladder, in one place.
+ *
+ * Three countable axes rather than a longer list of flags, because each is
+ * already a table in the schema and each maps to a hospital's real size — so a
+ * buyer recognises which row is theirs without being told.
+ */
+const TIER_ENTITLEMENTS: Record<
+  string,
+  Pick<
+    PlanTier,
+    | 'maxBranches'
+    | 'maxDoctors'
+    | 'maxStaffLogins'
+    | 'hasDisplayBoard'
+    | 'hasOwnerReport'
+    | 'hasAdvancedReports'
+    | 'hasDataExport'
+    | 'hasAuditLog'
+    | 'supportTier'
+  >
+> = {
+  solo: {
+    maxBranches: 1, maxDoctors: 1, maxStaffLogins: 2,
+    hasDisplayBoard: false, hasOwnerReport: false, hasAdvancedReports: false,
+    hasDataExport: false, hasAuditLog: false, supportTier: 'email_48h',
+  },
+  clinic: {
+    maxBranches: 1, maxDoctors: 3, maxStaffLogins: 4,
+    hasDisplayBoard: true, hasOwnerReport: false, hasAdvancedReports: false,
+    hasDataExport: false, hasAuditLog: false, supportTier: 'email_24h',
+  },
+  practice: {
+    maxBranches: 1, maxDoctors: 6, maxStaffLogins: 8,
+    hasDisplayBoard: true, hasOwnerReport: true, hasAdvancedReports: true,
+    hasDataExport: true, hasAuditLog: false, supportTier: 'whatsapp_12h',
+  },
+  hospital: {
+    maxBranches: 3, maxDoctors: 12, maxStaffLogins: 15,
+    hasDisplayBoard: true, hasOwnerReport: true, hasAdvancedReports: true,
+    hasDataExport: true, hasAuditLog: true, supportTier: 'whatsapp_4h',
+  },
+  large_opd: {
+    maxBranches: 5, maxDoctors: 20, maxStaffLogins: 25,
+    hasDisplayBoard: true, hasOwnerReport: true, hasAdvancedReports: true,
+    hasDataExport: true, hasAuditLog: true, supportTier: 'priority_4h',
+  },
+  // null is unlimited, which is the thing this tier is actually sold on.
+  multi_branch: {
+    maxBranches: null, maxDoctors: null, maxStaffLogins: null,
+    hasDisplayBoard: true, hasOwnerReport: true, hasAdvancedReports: true,
+    hasDataExport: true, hasAuditLog: true, supportTier: 'dedicated',
+  },
+};
+
 const tier = (
   code: string,
   name: string,
@@ -80,6 +152,7 @@ const tier = (
   overagePaisePerAppointment: 100,
   overagePaisePerMessage: 25,
   setupFeePaise: SETUP_FEE_PAISE,
+  ...TIER_ENTITLEMENTS[code],
 });
 
 /**
