@@ -19,6 +19,42 @@ import {
   toggleSlotOverrideApi,
 } from './actions';
 
+/**
+ * The three practice modes, as data.
+ *
+ * Previously three near-identical hand-written buttons, each repeating the same
+ * layout and state classes with one colour changed — which is where most of the
+ * page's "extra button styles" came from, since none of them went through the
+ * shared Button component either. Only what actually differs per mode lives
+ * here; the rest is written once at the call site.
+ */
+const SCHEDULE_MODE_OPTIONS = [
+  {
+    value: 'both',
+    icon: '🌟',
+    label: 'Hybrid',
+    hint: 'Both (Queue + Slots)',
+    selectedClass:
+      'bg-amber-50 border-amber-500 text-amber-950 font-bold ring-2 ring-amber-500 shadow-xs',
+  },
+  {
+    value: 'queue',
+    icon: '🎫',
+    label: 'Live Queue',
+    hint: 'Tokens Only',
+    selectedClass:
+      'bg-blue-50 border-blue-600 text-blue-950 font-bold ring-2 ring-blue-600 shadow-xs',
+  },
+  {
+    value: 'slot',
+    icon: '🕒',
+    label: 'Time Slots',
+    hint: 'Slots Only',
+    selectedClass:
+      'bg-emerald-50 border-emerald-600 text-emerald-950 font-bold ring-2 ring-emerald-600 shadow-xs',
+  },
+] as const;
+
 export function DoctorScheduleManager({
   doctors,
   initialDate,
@@ -227,7 +263,12 @@ export function DoctorScheduleManager({
     <div className="space-y-5 sm:space-y-6">
       {/* Doctor & Date Header Bar */}
       <Card className="p-3.5 sm:p-4 bg-white border-ink-200 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
+        {/*
+          No justify-between: with two children it forces them to opposite edges,
+          which pushed the date picker away from the doctor selector it filters
+          alongside. They read as one set of controls, so they sit as one.
+        */}
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 sm:gap-4">
           <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 min-w-0">
             <div className="flex items-center gap-2">
               <label className="text-xs sm:text-sm font-bold text-ink-900 shrink-0">Doctor:</label>
@@ -246,7 +287,7 @@ export function DoctorScheduleManager({
 
             <div>
               <span
-                className={`inline-flex items-center rounded-full px-2.5 py-0.5 sm:py-1 text-[11px] font-bold ${
+                className={`inline-flex items-center rounded-full px-2.5 py-0.5 sm:py-1 text-xs font-bold ${
                   scheduleMode === 'both'
                     ? 'bg-amber-100 text-amber-900 border border-amber-300'
                     : scheduleMode === 'queue'
@@ -285,58 +326,72 @@ export function DoctorScheduleManager({
               hint="Configure appointment slots, live OPD queue, or both"
             />
             <form onSubmit={handleSaveConfig} className="p-4 sm:p-5 space-y-4">
-              <Field
-                label="Practice / Schedule Mode"
-                hint="Choose Hybrid (both) for regular OPD, or Live Queue for visiting specialists."
-              >
+              {/*
+                A fieldset, not <Field>.
+                Field renders a <label> around whatever it wraps, and a label may
+                be associated with only one control — it binds to the first
+                labelable descendant, so with a group of radios inside, a click
+                anywhere in the group could land on the first one. fieldset and
+                legend are what actually group a set of related controls, and
+                screen readers announce the legend before each option.
+              */}
+              <fieldset className="block">
+                <legend className="mb-1.5 block text-sm font-medium text-ink-700">
+                  Practice / Schedule Mode
+                </legend>
+                {/*
+                  Real radio inputs rather than three buttons.
+                  These are one choice out of three, and as buttons nothing
+                  announced which was selected -- the state lived only in the
+                  colour and the ring, so a screen reader heard three unrelated
+                  buttons. A radio group also gets arrow-key navigation from the
+                  browser rather than from hand-written key handlers.
+                */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setScheduleMode('both')}
-                    className={`flex items-center sm:flex-col justify-start sm:justify-center p-3 rounded-xl border text-left sm:text-center transition-all cursor-pointer ${
-                      scheduleMode === 'both'
-                        ? 'bg-amber-50 border-amber-500 text-amber-950 font-bold ring-2 ring-amber-500 shadow-xs'
-                        : 'bg-ink-50 border-ink-200 text-ink-700 hover:bg-ink-100 font-medium'
-                    }`}
-                  >
-                    <span className="text-lg sm:text-sm mr-2.5 sm:mr-0">🌟</span>
-                    <div>
-                      <span className="text-xs sm:text-sm font-bold block">Hybrid</span>
-                      <span className="text-[10px] opacity-80 block">Both (Queue + Slots)</span>
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setScheduleMode('queue')}
-                    className={`flex items-center sm:flex-col justify-start sm:justify-center p-3 rounded-xl border text-left sm:text-center transition-all cursor-pointer ${
-                      scheduleMode === 'queue'
-                        ? 'bg-blue-50 border-blue-600 text-blue-950 font-bold ring-2 ring-blue-600 shadow-xs'
-                        : 'bg-ink-50 border-ink-200 text-ink-700 hover:bg-ink-100 font-medium'
-                    }`}
-                  >
-                    <span className="text-lg sm:text-sm mr-2.5 sm:mr-0">🎫</span>
-                    <div>
-                      <span className="text-xs sm:text-sm font-bold block">Live Queue</span>
-                      <span className="text-[10px] opacity-80 block">Tokens Only</span>
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setScheduleMode('slot')}
-                    className={`flex items-center sm:flex-col justify-start sm:justify-center p-3 rounded-xl border text-left sm:text-center transition-all cursor-pointer ${
-                      scheduleMode === 'slot'
-                        ? 'bg-emerald-50 border-emerald-600 text-emerald-950 font-bold ring-2 ring-emerald-600 shadow-xs'
-                        : 'bg-ink-50 border-ink-200 text-ink-700 hover:bg-ink-100 font-medium'
-                    }`}
-                  >
-                    <span className="text-lg sm:text-sm mr-2.5 sm:mr-0">🕒</span>
-                    <div>
-                      <span className="text-xs sm:text-sm font-bold block">Time Slots</span>
-                      <span className="text-[10px] opacity-80 block">Slots Only</span>
-                    </div>
-                  </button>
+                  {SCHEDULE_MODE_OPTIONS.map((option) => {
+                    const selected = scheduleMode === option.value;
+                    return (
+                      <label
+                        key={option.value}
+                        className={`relative flex items-center sm:flex-col justify-start sm:justify-center p-3 rounded-xl border text-left sm:text-center transition-all cursor-pointer ${
+                          selected
+                            ? option.selectedClass
+                            : 'bg-ink-50 border-ink-200 text-ink-700 hover:bg-ink-100 font-medium'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="scheduleMode"
+                          value={option.value}
+                          checked={selected}
+                          onChange={() => setScheduleMode(option.value)}
+                          className="peer sr-only"
+                        />
+                        {/* Sibling of the input, so `peer` can reach it. */}
+                        <span
+                          aria-hidden="true"
+                          className="pointer-events-none absolute inset-0 rounded-xl peer-focus-visible:ring-2 peer-focus-visible:ring-brand-600 peer-focus-visible:ring-offset-2"
+                        />
+                        <span aria-hidden="true" className="text-lg sm:text-sm mr-2.5 sm:mr-0">
+                          {option.icon}
+                        </span>
+                        <div>
+                          <span className="text-xs sm:text-sm font-bold block">{option.label}</span>
+                          {/*
+                            A colour token, not opacity: opacity composites against
+                            whichever tint the selected state sets, so the effective
+                            contrast changed per mode.
+                          */}
+                          <span className="block text-xs text-ink-500">{option.hint}</span>
+                        </div>
+                      </label>
+                    );
+                  })}
                 </div>
-              </Field>
+                <span className="mt-1 block text-xs text-ink-500">
+                  Choose Hybrid (both) for regular OPD, or Live Queue for visiting specialists.
+                </span>
+              </fieldset>
 
               {scheduleMode === 'both' ? (
                 <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-950 leading-relaxed space-y-1">
@@ -387,6 +442,7 @@ export function DoctorScheduleManager({
                   onChange={(e) => setSlotMinutes(Number(e.target.value))}
                   className="w-full rounded-lg border-0 bg-white px-3 py-2.5 text-sm text-ink-900 ring-1 ring-inset ring-ink-300 focus:ring-2 focus:ring-brand-600 cursor-pointer"
                 >
+                  <option value={5}>5 minutes</option>
                   <option value={10}>10 minutes</option>
                   <option value={15}>15 minutes</option>
                   <option value={20}>20 minutes</option>
@@ -495,7 +551,7 @@ export function DoctorScheduleManager({
                           {block.startTime} – {block.endTime}
                         </span>
                         {block.reason ? (
-                          <span className="block text-[11px] opacity-80">{block.reason}</span>
+                          <span className="block text-xs text-ink-500">{block.reason}</span>
                         ) : null}
                       </div>
                       <button

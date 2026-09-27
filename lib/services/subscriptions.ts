@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, lt } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lt, lte, or } from 'drizzle-orm';
 import { withTenant, type Tx } from '@/lib/db';
 import { getAdminDb } from '@/lib/db/admin';
 import { auditLogs, hospitals, planTiers, subscriptions } from '@/lib/db/schema';
@@ -13,16 +13,48 @@ import {
 export type Subscription = typeof subscriptions.$inferSelect;
 export type Tier = typeof planTiers.$inferSelect;
 
-/** The subscription in force right now, or null for a hospital never onboarded. */
-export async function getCurrentSubscription(
+/**
+ * The one authoritative answer to "which term covered this hospital at this
+ * instant".
+ *
+ * Everything — the dashboard, historical usage, appointment attribution,
+ * message attribution, reconciliation — resolves through here, so there is one
+ * definition of coverage rather than a slightly different `where` clause per
+ * service.
+ *
+ * The term is `[starts_at, ends_at)`: start inclusive, end exclusive. That is
+ * what removes the boundary ambiguity — 30 Sep 23:59:59 belongs to September
+ * and 1 Oct 00:00:00 belongs to October, with no instant belonging to both or
+ * to neither.
+ *
+ * `superseded_at` is deliberately not read as a boolean. It records when a row
+ * was administratively replaced, and on an early renewal that is a *future*
+ * timestamp — the old term is superseded on the day the new one begins, not on
+ * the day somebody clicked Renew. Testing `superseded_at IS NULL` is what
+ * removed a still-running term from view the moment its successor was written,
+ * which zeroed the dashboard and left the messages sent in between attributed
+ * to no plan at all. Compared against `at`, the same column behaves correctly.
+ *
+ * Status is not filtered here, and that is a decision rather than an omission.
+ * Status describes what a term is doing *now*; this function answers what a
+ * term covered *then*. A September term later marked `expired` still owns
+ * September's usage, and excluding it would reintroduce the same class of bug
+ * one layer down. Callers that need "may this hospital be served right now"
+ * ask `isServing(subscription.status)` separately.
+ */
+export async function getSubscriptionEffectiveAt(
   hospitalId: string,
+  at: Date,
 ): Promise<Subscription | null> {
-  return withTenant(hospitalId, (tx) => getCurrentSubscriptionInTx(tx, hospitalId));
+  return withTenant(hospitalId, (tx) =>
+    getSubscriptionEffectiveAtInTx(tx, hospitalId, at),
+  );
 }
 
-export async function getCurrentSubscriptionInTx(
+export async function getSubscriptionEffectiveAtInTx(
   tx: Tx,
   hospitalId: string,
+  at: Date,
 ): Promise<Subscription | null> {
   const [row] = await tx
     .select()
@@ -30,10 +62,104 @@ export async function getCurrentSubscriptionInTx(
     .where(
       and(
         eq(subscriptions.hospitalId, hospitalId),
-        isNull(subscriptions.supersededAt),
+        lte(subscriptions.startsAt, at),
+        gt(subscriptions.endsAt, at),
+        or(isNull(subscriptions.supersededAt), gt(subscriptions.supersededAt, at)),
       ),
-    );
+    )
+    // Overlapping terms should not exist, but ordering makes the answer
+    // deterministic if one ever does: the later term wins, which is the one a
+    // human would have intended by creating it.
+    .orderBy(desc(subscriptions.startsAt))
+    .limit(1);
+
   return row ?? null;
+}
+
+/** The subscription in force right now, or null for a hospital never onboarded. */
+export async function getCurrentSubscription(
+  hospitalId: string,
+  now: Date = new Date(),
+): Promise<Subscription | null> {
+  return withTenant(hospitalId, (tx) =>
+    getSubscriptionEffectiveAtInTx(tx, hospitalId, now),
+  );
+}
+
+export async function getCurrentSubscriptionInTx(
+  tx: Tx,
+  hospitalId: string,
+  now: Date = new Date(),
+): Promise<Subscription | null> {
+  return getSubscriptionEffectiveAtInTx(tx, hospitalId, now);
+}
+
+/**
+ * A term that has been paid for but has not started yet.
+ *
+ * Early renewal is a normal state, not an edge case, and the two rows have to
+ * be shown as two rows. Before this existed the upcoming term was simply
+ * returned as the current one, which is the bug this module now guards against.
+ */
+export async function getUpcomingSubscription(
+  hospitalId: string,
+  now: Date = new Date(),
+): Promise<Subscription | null> {
+  return withTenant(hospitalId, async (tx) => {
+    const [row] = await tx
+      .select()
+      .from(subscriptions)
+      .where(
+        and(
+          eq(subscriptions.hospitalId, hospitalId),
+          gt(subscriptions.startsAt, now),
+          /**
+           * A term replaced before it ever began never takes effect and is not
+           * "upcoming". One replaced after it begins — every ordinary renewal,
+           * where `superseded_at` is the day the successor starts — is. Testing
+           * for NULL alone would hide October the moment November was bought.
+           */
+          or(
+            isNull(subscriptions.supersededAt),
+            gt(subscriptions.supersededAt, subscriptions.startsAt),
+          ),
+        ),
+      )
+      .orderBy(subscriptions.startsAt)
+      .limit(1);
+
+    return row ?? null;
+  });
+}
+
+/**
+ * The furthest-future term on the books, which is what a renewal extends.
+ *
+ * Distinct from both "current" and "next": after two early renewals a hospital
+ * holds three terms, and a third renewal has to begin where the last one ends,
+ * not where today's does.
+ */
+export async function getLatestSubscriptionTerm(
+  hospitalId: string,
+): Promise<Subscription | null> {
+  return withTenant(hospitalId, async (tx) => {
+    const [row] = await tx
+      .select()
+      .from(subscriptions)
+      .where(
+        and(
+          eq(subscriptions.hospitalId, hospitalId),
+          or(
+            isNull(subscriptions.supersededAt),
+            gt(subscriptions.supersededAt, subscriptions.startsAt),
+          ),
+        ),
+      )
+      .orderBy(desc(subscriptions.endsAt))
+      .limit(1);
+
+    return row ?? null;
+  });
 }
 
 /** Every subscription this hospital has had, newest first. */
@@ -225,7 +351,17 @@ export async function renewSubscription(args: {
   hospitalId: string;
   changedByUserId?: string | null;
 }): Promise<Subscription> {
-  const current = await getCurrentSubscription(args.hospitalId);
+  const now = new Date();
+  /**
+   * Chained from the furthest-future term, not the one running today.
+   *
+   * These differ precisely when a renewal has already been bought and has not
+   * started — which is the state this module now models properly. Renewing
+   * from the *current* term would set the new one to begin when September
+   * ends, landing it on top of the October term already sitting there. The
+   * last term on the books is the one a renewal extends.
+   */
+  const current = await getLatestSubscriptionTerm(args.hospitalId);
   if (!current) throw new Error('No subscription to renew');
 
   return startSubscription({
@@ -235,7 +371,7 @@ export async function renewSubscription(args: {
     // A renewal begins when the previous term ended, not when someone got
     // round to clicking the button — otherwise every renewal silently gifts
     // the customer the gap.
-    startsAt: current.endsAt > new Date() ? current.endsAt : new Date(),
+    startsAt: current.endsAt > now ? current.endsAt : now,
     changeReason: 'renewal',
     changedByUserId: args.changedByUserId,
     pricePaiseOverride: current.pricePaise,

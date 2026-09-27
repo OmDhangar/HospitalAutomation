@@ -1,7 +1,11 @@
 import postgres from 'postgres';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb } from '@/lib/db';
-import { getCurrentSubscription } from '@/lib/services/subscriptions';
+import {
+  getCurrentSubscription,
+  getSubscriptionEffectiveAt,
+  getUpcomingSubscription,
+} from '@/lib/services/subscriptions';
 import { getHospitalUsage, getMessageBreakdown } from '@/lib/services/usage';
 
 const adminUrl = process.env.DATABASE_ADMIN_URL;
@@ -253,5 +257,126 @@ describe.skipIf(!enabled)('hospital usage', () => {
     expect(usage.appointments.allowance).toBe(0);
     expect(usage.appointments.percent).toBeNull();
     expect(await getCurrentSubscription(bare)).toBeNull();
+  });
+  describe('which term is in effect', () => {
+    /**
+     * The renewal boundary, which is where this went wrong in production.
+     *
+     * An early renewal writes the next term immediately and stamps the running
+     * one with `superseded_at = <the day the next term begins>`. Every reader
+     * used to test `superseded_at IS NULL`, so the still-running term vanished
+     * the moment its successor was written: the dashboard reset to zero and the
+     * messages sent in between belonged to no plan at all.
+     */
+    const seedRenewedHospital = async () => {
+      const id = uuid();
+      await admin`
+        insert into hospitals (id, name, slug, plan_tier_code)
+        values (${id}, 'Usage Hospital', ${'r-' + id.slice(0, 12)}, 'hospital')
+      `;
+      // September term, superseded on the day October begins.
+      await admin`
+        insert into subscriptions
+          (hospital_id, plan_tier_code, billing_cycle, status, price_paise, setup_fee_paise,
+           daily_appointment_capacity, included_appointments, included_messages,
+           starts_at, ends_at, superseded_at, change_reason)
+        values (${id}, 'hospital', 'monthly', 'active', 699900, 500000,
+                150, 5300, 21200,
+                ${new Date('2026-09-01T00:00:00.000Z')},
+                ${new Date('2026-10-01T00:00:00.000Z')},
+                ${new Date('2026-10-01T00:00:00.000Z')}, 'initial_setup')
+      `;
+      // October term, bought early and not yet begun.
+      await admin`
+        insert into subscriptions
+          (hospital_id, plan_tier_code, billing_cycle, status, price_paise, setup_fee_paise,
+           daily_appointment_capacity, included_appointments, included_messages,
+           starts_at, ends_at, change_reason)
+        values (${id}, 'hospital', 'monthly', 'active', 699900, 0,
+                150, 5300, 21200,
+                ${new Date('2026-10-01T00:00:00.000Z')},
+                ${new Date('2026-11-01T00:00:00.000Z')}, 'renewal')
+      `;
+      return id;
+    };
+
+    it('keeps the running term while a renewal waits to start', async () => {
+      const id = await seedRenewedHospital();
+      const at = new Date('2026-09-27T10:00:00.000Z');
+
+      const effective = await getSubscriptionEffectiveAt(id, at);
+      expect(effective?.changeReason).toBe('initial_setup');
+      expect(effective?.startsAt).toEqual(new Date('2026-09-01T00:00:00.000Z'));
+    });
+
+    it('switches at the boundary instant, not before and not after', async () => {
+      const id = await seedRenewedHospital();
+
+      const justBefore = await getSubscriptionEffectiveAt(
+        id,
+        new Date('2026-09-30T23:59:59.999Z'),
+      );
+      expect(justBefore?.changeReason).toBe('initial_setup');
+
+      // ends_at is exclusive and starts_at inclusive, so this instant belongs
+      // to exactly one term.
+      const atBoundary = await getSubscriptionEffectiveAt(
+        id,
+        new Date('2026-10-01T00:00:00.000Z'),
+      );
+      expect(atBoundary?.changeReason).toBe('renewal');
+    });
+
+    it('does not let a future renewal hide usage already on the meter', async () => {
+      const id = await seedRenewedHospital();
+      const at = new Date('2026-09-27T10:00:00.000Z');
+
+      await sentMessage({
+        hospital: id,
+        sentAt: new Date('2026-09-20T12:00:00.000Z'),
+        templateCode: 'queue_link',
+        milestone: 'queue_link',
+      });
+
+      const usage = await getHospitalUsage({ hospitalId: id, timezone: TZ, now: at });
+
+      // Before the fix this read zero: the period came from the October term,
+      // whose window had not opened yet.
+      expect(usage.messages.used).toBe(1);
+      expect(usage.period?.start).toEqual(new Date('2026-09-01T00:00:00.000Z'));
+    });
+
+    it('resolves a term that has already ended, for historical usage', async () => {
+      const id = await seedRenewedHospital();
+
+      const historical = await getSubscriptionEffectiveAt(
+        id,
+        new Date('2026-09-15T00:00:00.000Z'),
+      );
+      expect(historical?.changeReason).toBe('initial_setup');
+    });
+
+    it('reports no coverage for an instant no term covers', async () => {
+      const id = await seedRenewedHospital();
+
+      expect(
+        await getSubscriptionEffectiveAt(id, new Date('2026-08-01T00:00:00.000Z')),
+      ).toBeNull();
+      expect(
+        await getSubscriptionEffectiveAt(id, new Date('2027-01-01T00:00:00.000Z')),
+      ).toBeNull();
+    });
+
+    it('surfaces the upcoming term separately rather than as the current one', async () => {
+      const id = await seedRenewedHospital();
+      const at = new Date('2026-09-27T10:00:00.000Z');
+
+      const upcoming = await getUpcomingSubscription(id, at);
+      expect(upcoming?.changeReason).toBe('renewal');
+      expect(upcoming?.startsAt).toEqual(new Date('2026-10-01T00:00:00.000Z'));
+
+      const current = await getCurrentSubscription(id, at);
+      expect(current?.changeReason).toBe('initial_setup');
+    });
   });
 });

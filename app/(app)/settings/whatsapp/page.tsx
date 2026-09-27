@@ -281,7 +281,7 @@ export default async function WhatsAppSettingsPage({
                 <p className="font-mono text-xs sm:text-sm font-bold text-ink-900">
                   {definition.name}
                 </p>
-                <p className="text-[11px] sm:text-xs text-ink-500">
+                <p className="text-xs text-ink-500">
                   {definition.variables.length} variable
                   {definition.variables.length === 1 ? '' : 's'}:{' '}
                   {definition.variables.join(', ')}
