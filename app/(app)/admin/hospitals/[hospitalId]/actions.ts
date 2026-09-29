@@ -7,6 +7,7 @@ import { setSessionCookie } from '@/lib/auth/session';
 import { SUBSCRIPTION_STATUSES, type SubscriptionStatus } from '@/lib/domain/subscription';
 import { createStaffUser, type StaffRole } from '@/lib/services/auth';
 import { ImpersonationError, startImpersonation } from '@/lib/services/impersonation';
+import { bindHospitalWaba, WabaBindingError } from '@/lib/services/whatsapp-byo';
 import {
   AccountAdminError,
   resetUserPassword,
@@ -329,4 +330,38 @@ export async function startImpersonationAction(formData: FormData) {
 
   await setSessionCookie(token);
   redirect('/dashboard');
+}
+
+/* ------------------------------------------------------------- WhatsApp */
+
+/**
+ * Binds or rebinds the hospital's own WhatsApp Business Account.
+ *
+ * Rebinding is how a rotated token or app secret is applied, so this is not a
+ * one-time onboarding step — it is the maintenance path, and the form is
+ * always available.
+ */
+export async function bindWabaAction(formData: FormData) {
+  const session = await requirePlatformAdmin();
+  const hospitalId = hospitalIdFrom(formData);
+
+  try {
+    await bindHospitalWaba({
+      hospitalId,
+      phoneNumberId: text(formData, 'phoneNumberId'),
+      wabaId: text(formData, 'wabaId'),
+      accessToken: text(formData, 'accessToken'),
+      verifyToken: text(formData, 'verifyToken'),
+      appSecret: text(formData, 'appSecret'),
+      businessId: text(formData, 'businessId') || undefined,
+      displayPhoneNumber: text(formData, 'displayPhoneNumber') || undefined,
+      verifiedName: text(formData, 'verifiedName') || undefined,
+      actorUserId: session.userId,
+    });
+  } catch (error) {
+    if (error instanceof WabaBindingError) back(hospitalId, { error: error.code });
+    fail(hospitalId, error);
+  }
+
+  back(hospitalId, { done: 'waba_bound' });
 }

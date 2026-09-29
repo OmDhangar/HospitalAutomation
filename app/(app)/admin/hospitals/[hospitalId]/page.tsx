@@ -13,7 +13,8 @@ import { requirePlatformAdmin } from '@/lib/auth/platform';
 import { supportLabel } from '@/lib/domain/entitlements';
 import { SUBSCRIPTION_STATUSES } from '@/lib/domain/subscription';
 import { getAccountDetail } from '@/lib/services/platform-accounts';
-import { listActiveTiers } from '@/lib/services/subscriptions';
+import { listAssignableTiers } from '@/lib/services/custom-plans';
+import { getBindingView } from '@/lib/services/whatsapp-byo';
 import {
   BackLink,
   ConfirmWord,
@@ -39,6 +40,7 @@ import {
   updateProfileAction,
 } from './actions';
 import { PasswordResetForm } from './password-reset';
+import { WhatsAppCard } from './whatsapp-card';
 
 export const metadata = { title: 'Account · Platform' };
 
@@ -63,9 +65,10 @@ export default async function AccountDetailPage({
   const { hospitalId } = await params;
   const query = await searchParams;
 
-  const [detail, tiers] = await Promise.all([
+  const [detail, tiers, binding] = await Promise.all([
     getAccountDetail(hospitalId),
-    listActiveTiers().catch(() => []),
+    listAssignableTiers().catch(() => []),
+    getBindingView(hospitalId).catch(() => null),
   ]);
 
   if (!detail) notFound();
@@ -293,27 +296,11 @@ export default async function AccountDetailPage({
             </div>
           </Card>
 
-          <Card>
-            <CardHeader title="WhatsApp" />
-            {detail.whatsapp ? (
-              <dl className="divide-y divide-ink-200">
-                <DefinitionRow term="Number">
-                  {detail.whatsapp.displayPhoneNumber ?? detail.whatsapp.phoneNumberId}
-                </DefinitionRow>
-                <DefinitionRow term="Patients see">
-                  {detail.whatsapp.verifiedName ?? '—'}
-                </DefinitionRow>
-                <DefinitionRow term="Status">
-                  <span className="capitalize">{detail.whatsapp.status}</span>
-                </DefinitionRow>
-                <DefinitionRow term="Quality">
-                  {detail.whatsapp.qualityRating ?? '—'}
-                </DefinitionRow>
-              </dl>
-            ) : (
-              <EmptyState title="No sender number" hint="Assign one from the WhatsApp tab." />
-            )}
-          </Card>
+          <WhatsAppCard
+            hospitalId={account.hospitalId}
+            binding={binding}
+            number={detail.whatsapp}
+          />
         </div>
       </div>
 
@@ -691,6 +678,8 @@ const DONE_MESSAGES: Record<string, string> = {
   access_restored: 'Access to this hospital restored.',
   access_revoked: 'Access to this hospital revoked and sessions ended.',
   staff_added: 'Login created on the default password — reset it before handing it over.',
+  waba_bound: 'WhatsApp credentials sealed and stored. Point Meta at the callback URL shown below.',
+  custom_plan: 'Bespoke plan created and applied. It is hidden from public pricing.',
 };
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -705,6 +694,11 @@ const ERROR_MESSAGES: Record<string, string> = {
   HOSPITAL_NOT_FOUND: 'That hospital no longer exists.',
   PLAN_LIMIT: 'The plan’s staff-login limit is reached. Upgrade the tier first.',
   NOT_PLATFORM_ADMIN: 'Not permitted.',
+  INVALID_PHONE_NUMBER_ID: 'That phone number ID does not look like one of Meta’s.',
+  NUMBER_TAKEN: 'That phone number ID is already bound to another hospital.',
+  MISSING_FIELD: 'Every WhatsApp field except the three optional ones is required.',
+  NO_ENCRYPTION_KEY:
+    'WHATSAPP_ENCRYPTION_KEY is not set on this server, so credentials cannot be sealed.',
 };
 
 function Notices({ query }: { query: Record<string, string | string[] | undefined> }) {

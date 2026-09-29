@@ -14,6 +14,13 @@ const SELECT_CLASS =
 const ERRORS: Record<string, string> = {
   REQUIRED_FIELDS: 'Hospital name, owner name and owner email are all required.',
   CREATION_FAILED: 'Onboarding failed. Check the details — the email may already be in use.',
+  WABA_INCOMPLETE:
+    'Give all five WhatsApp fields or none. A partial binding cannot receive messages.',
+  INVALID_PHONE_NUMBER_ID: 'That phone number ID does not look like one of Meta’s.',
+  NUMBER_TAKEN: 'That phone number ID is already bound to another hospital.',
+  MISSING_FIELD: 'A required WhatsApp field was blank.',
+  NO_ENCRYPTION_KEY:
+    'WHATSAPP_ENCRYPTION_KEY is not set on this server, so credentials cannot be sealed.',
 };
 
 /**
@@ -103,10 +110,10 @@ export default async function OnboardPage({ searchParams }: PageProps<'/admin/on
             </Field>
           </fieldset>
 
-          <fieldset className="grid gap-4 border-t border-ink-200 pt-4 md:grid-cols-4">
+          <fieldset className="grid gap-4 border-t border-ink-200 pt-4 md:grid-cols-3">
             <legend className="mb-2 text-sm font-semibold text-ink-800">
-              First doctor and sender number
-              <span className="ml-2 font-normal text-ink-500">— both optional</span>
+              First doctor
+              <span className="ml-2 font-normal text-ink-500">— optional</span>
             </legend>
             <Field label="Doctor name">
               <Input name="initialDoctorName" placeholder="Dr. Anjali Patil" />
@@ -121,17 +128,75 @@ export default async function OnboardPage({ searchParams }: PageProps<'/admin/on
                 <option value="slot">Slots only</option>
               </select>
             </Field>
-            <Field label="WhatsApp number" hint="From unassigned inventory">
-              <select name="phoneNumberId" defaultValue="" className={SELECT_CLASS}>
-                <option value="">Assign later</option>
-                {inventory.map((number) => (
-                  <option key={number.phoneNumberId} value={number.phoneNumberId}>
-                    {number.displayPhoneNumber ?? number.phoneNumberId}
-                    {number.verifiedName ? ` (${number.verifiedName})` : ''}
-                  </option>
-                ))}
-              </select>
+          </fieldset>
+
+          <fieldset className="space-y-4 border-t border-ink-200 pt-4">
+            <legend className="mb-1 text-sm font-semibold text-ink-800">
+              WhatsApp Business Account
+              <span className="ml-2 font-normal text-ink-500">
+                — the hospital&rsquo;s own Meta App
+              </span>
+            </legend>
+            <p className="text-xs leading-relaxed text-ink-500">
+              All five fields together, or leave them all blank and bind it later from the
+              account page. A number bound without its inbound secrets answers Meta&rsquo;s
+              handshake and then rejects every message. Once saved, give Meta the callback
+              URL shown on the account page — it is specific to this hospital.
+            </p>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="Phone number ID" hint="WhatsApp → API Setup, the numeric sender id">
+                <Input name="wabaPhoneNumberId" placeholder="123456789012345" />
+              </Field>
+              <Field label="WhatsApp Business Account ID" hint="The WABA the number belongs to">
+                <Input name="wabaBusinessAccountId" placeholder="987654321098765" />
+              </Field>
+            </div>
+
+            <Field
+              label="Access token"
+              hint="System User token from Business Settings → System Users. Sealed before storage and never shown again."
+            >
+              <Input name="wabaAccessToken" type="password" autoComplete="off" placeholder="EAA…" />
             </Field>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="Webhook verify token" hint="Whatever you set in the app's webhook config">
+                <Input name="wabaVerifyToken" type="password" autoComplete="off" />
+              </Field>
+              <Field label="App secret" hint="App Settings → Basic. Signs every inbound payload.">
+                <Input name="wabaAppSecret" type="password" autoComplete="off" />
+              </Field>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-3">
+              <Field label="Meta business ID" hint="Optional, informational">
+                <Input name="wabaMetaBusinessId" />
+              </Field>
+              <Field label="Display number" hint="Optional, what patients see">
+                <Input name="wabaDisplayNumber" placeholder="+91 98765 43210" />
+              </Field>
+              <Field label="Verified name" hint="Optional">
+                <Input name="wabaVerifiedName" placeholder="Sanjeevani Care" />
+              </Field>
+            </div>
+
+            {inventory.length > 0 ? (
+              <Field
+                label="Or assign from our shared inventory"
+                hint="Platform-owned number under our Meta App. Use this instead of the fields above, not as well."
+              >
+                <select name="phoneNumberId" defaultValue="" className={SELECT_CLASS}>
+                  <option value="">Not from inventory</option>
+                  {inventory.map((number) => (
+                    <option key={number.phoneNumberId} value={number.phoneNumberId}>
+                      {number.displayPhoneNumber ?? number.phoneNumberId}
+                      {number.verifiedName ? ` (${number.verifiedName})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            ) : null}
           </fieldset>
 
           <div className="flex items-center justify-between gap-4 border-t border-ink-200 pt-4">

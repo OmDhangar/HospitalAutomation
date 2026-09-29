@@ -15,6 +15,7 @@ import {
 } from '@/lib/db/schema';
 import { hashPassword } from '@/lib/security/password';
 import { startSubscription } from './subscriptions';
+import { bindHospitalWaba } from './whatsapp-byo';
 import { assignNumberToHospital } from './whatsapp-integration';
 import {
   calculateMonthlyBill,
@@ -107,7 +108,15 @@ export async function getPortfolioHealth(month?: string): Promise<HospitalHealth
   const rate = (await resolvePaisePerMessage(month)).paise;
   // Recommendations come from the live rate card, not the seeded constants, so
   // a price negotiated in the database is respected here too.
-  const allTiers = (await db.select().from(planTiers)) as PlanTier[];
+  /**
+   * Active tiers only. A bespoke plan is stored as an inactive `plan_tiers`
+   * row priced for one hospital's volume and negotiated terms; recommending it
+   * to a different hospital would quote them somebody else's deal.
+   */
+  const allTiers = (await db
+    .select()
+    .from(planTiers)
+    .where(eq(planTiers.active, true))) as PlanTier[];
 
   const rows = await db
     .select({
@@ -226,6 +235,22 @@ export type CreateHospitalParams = {
   initialDoctorMode?: 'queue' | 'slot' | 'both';
   initialDoctorConsultMinutes?: number;
   phoneNumberId?: string;
+  /**
+   * The hospital's own WhatsApp Business Account, when they run their own Meta
+   * App. All five arrive together or not at all: a number bound without its
+   * inbound secrets answers Meta's handshake and then rejects every payload,
+   * which reads as a Meta outage rather than a half-finished setup.
+   */
+  waba?: {
+    phoneNumberId: string;
+    wabaId: string;
+    accessToken: string;
+    verifyToken: string;
+    appSecret: string;
+    businessId?: string;
+    displayPhoneNumber?: string;
+    verifiedName?: string;
+  };
   actorUserId?: string | null;
 };
 
@@ -236,6 +261,8 @@ export type CreateHospitalResult = {
   ownerUserId: string;
   branchId: string;
   doctorId?: string;
+  /** True when the hospital's own WABA was bound during onboarding. */
+  wabaBound?: boolean;
 };
 
 /**
@@ -353,8 +380,34 @@ export async function createHospital(args: CreateHospitalParams): Promise<Create
     }
   }
 
-  // Assign WhatsApp Number if phoneNumberId provided
-  if (args.phoneNumberId?.trim()) {
+  /**
+   * Two ways to give a hospital a sender, and they are not variations of one
+   * thing. `waba` binds their own WhatsApp Business Account behind their own
+   * Meta App — we hold their credentials and they get their own callback URL.
+   * `phoneNumberId` assigns a number from our shared inventory under the
+   * platform's app. A hospital has one or the other, never both.
+   */
+  let wabaBound = false;
+  if (args.waba) {
+    /**
+     * Rethrown, unlike the assignment path below. A hospital onboarded with
+     * credentials that silently failed to store looks connected and is not —
+     * and the operator has already closed the form by the time anyone notices.
+     */
+    await bindHospitalWaba({
+      hospitalId: hospital.id,
+      phoneNumberId: args.waba.phoneNumberId,
+      wabaId: args.waba.wabaId,
+      accessToken: args.waba.accessToken,
+      verifyToken: args.waba.verifyToken,
+      appSecret: args.waba.appSecret,
+      businessId: args.waba.businessId,
+      displayPhoneNumber: args.waba.displayPhoneNumber,
+      verifiedName: args.waba.verifiedName,
+      actorUserId: args.actorUserId ?? user.id,
+    });
+    wabaBound = true;
+  } else if (args.phoneNumberId?.trim()) {
     try {
       await assignNumberToHospital({
         hospitalId: hospital.id,
@@ -377,6 +430,7 @@ export async function createHospital(args: CreateHospitalParams): Promise<Create
     ownerUserId: user.id,
     branchId: branch.id,
     doctorId,
+    wabaBound,
   };
 }
 

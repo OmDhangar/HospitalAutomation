@@ -7,6 +7,7 @@ import { clearSessionCookie, readSessionCookie, setSessionCookie } from '@/lib/a
 import { isPlausiblePhoneNumberId } from '@/lib/domain/whatsapp-integration';
 import { endImpersonation, ImpersonationError } from '@/lib/services/impersonation';
 import { createHospital } from '@/lib/services/platform';
+import { WabaBindingError } from '@/lib/services/whatsapp-byo';
 import {
   assignNumberToHospital,
   IntegrationAuthError,
@@ -136,6 +137,35 @@ export async function createHospitalAction(formData: FormData) {
     redirect('/admin/onboard?error=REQUIRED_FIELDS');
   }
 
+  /**
+   * The hospital's own WhatsApp Business Account. All five fields or none:
+   * a partial binding produces an integration that answers Meta's handshake
+   * and then rejects every message, which is harder to diagnose than an
+   * integration that plainly does not exist yet.
+   */
+  const wabaFields = {
+    phoneNumberId: String(formData.get('wabaPhoneNumberId') ?? '').trim(),
+    wabaId: String(formData.get('wabaBusinessAccountId') ?? '').trim(),
+    accessToken: String(formData.get('wabaAccessToken') ?? '').trim(),
+    verifyToken: String(formData.get('wabaVerifyToken') ?? '').trim(),
+    appSecret: String(formData.get('wabaAppSecret') ?? '').trim(),
+  };
+  const providedCount = Object.values(wabaFields).filter(Boolean).length;
+  if (providedCount > 0 && providedCount < 5) {
+    redirect('/admin/onboard?error=WABA_INCOMPLETE');
+  }
+
+  const waba =
+    providedCount === 5
+      ? {
+          ...wabaFields,
+          businessId: String(formData.get('wabaMetaBusinessId') ?? '').trim() || undefined,
+          displayPhoneNumber:
+            String(formData.get('wabaDisplayNumber') ?? '').trim() || undefined,
+          verifiedName: String(formData.get('wabaVerifiedName') ?? '').trim() || undefined,
+        }
+      : undefined;
+
   let hospitalId: string;
   try {
     const result = await createHospital({
@@ -152,10 +182,16 @@ export async function createHospitalAction(formData: FormData) {
       initialDoctorSpecialty,
       initialDoctorMode,
       phoneNumberId,
+      waba,
       actorUserId: actor.userId,
     });
     hospitalId = result.hospitalId;
   } catch (error) {
+    if (error instanceof WabaBindingError) {
+      // The hospital exists by this point; only the binding failed. Naming the
+      // reason matters because every one of these is a typo in a pasted key.
+      redirect(`/admin/onboard?error=${encodeURIComponent(error.code)}`);
+    }
     console.error('[admin:createHospitalAction]', error);
     redirect('/admin/onboard?error=CREATION_FAILED');
   }

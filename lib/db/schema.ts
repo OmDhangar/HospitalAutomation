@@ -748,6 +748,25 @@ export const whatsappIntegrations = pgTable(
     credentialAuthTag: text('credential_auth_tag'),
     credentialKeyVersion: smallint('credential_key_version'),
 
+    /**
+     * The inbound half, sealed the same way and NULL under platform ownership.
+     *
+     * The verify token is what Meta echoes during the subscription handshake;
+     * the app secret is what every payload is signed with. Both are per-Meta-App,
+     * so a hospital running its own app needs its own pair — and the webhook
+     * needs a per-hospital URL to know which pair to reach for, because the
+     * handshake carries no tenant identity of its own.
+     */
+    verifyTokenCiphertext: text('verify_token_ciphertext'),
+    verifyTokenIv: text('verify_token_iv'),
+    verifyTokenAuthTag: text('verify_token_auth_tag'),
+    verifyTokenKeyVersion: smallint('verify_token_key_version'),
+
+    appSecretCiphertext: text('app_secret_ciphertext'),
+    appSecretIv: text('app_secret_iv'),
+    appSecretAuthTag: text('app_secret_auth_tag'),
+    appSecretKeyVersion: smallint('app_secret_key_version'),
+
     connectedAt: timestamp('connected_at', { withTimezone: true }),
     lastValidatedAt: timestamp('last_validated_at', { withTimezone: true }),
     /** A category, never a provider message — those quote the token back. */

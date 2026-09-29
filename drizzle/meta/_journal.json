@@ -169,6 +169,13 @@
       "when": 1789400000000,
       "tag": "0023_platform_console",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1789450000000,
+      "tag": "0024_hospital_waba_secrets",
+      "breakpoints": true
     }
   ]
 }
