@@ -2,7 +2,12 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { clearSessionCookie, readSessionCookie, requireSession } from '@/lib/auth/session';
+import {
+  clearSessionCookie,
+  readSessionCookie,
+  requireSession,
+  requireWritableSession,
+} from '@/lib/auth/session';
 import { normalizeIndianPhone } from '@/lib/domain/phone';
 import type { QueueAction } from '@/lib/domain/types';
 import { canMutateQueue, logout } from '@/lib/services/auth';
@@ -17,7 +22,9 @@ import {
 } from '@/lib/services/queue';
 
 async function authorize() {
-  const session = await requireSession();
+  // Writable, not merely signed in: a read-only support session must not move
+  // another hospital's queue.
+  const session = await requireWritableSession();
   if (!canMutateQueue(session.role)) throw new Error('Not allowed to change the queue');
   return session;
 }

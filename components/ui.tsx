@@ -239,16 +239,26 @@ export function EmptyState({ title, hint }: { title: string; hint?: string }) {
   );
 }
 
-export function Alert({ children, tone = 'warn' }: { children: ReactNode; tone?: 'warn' | 'error' }) {
+const ALERT_TONES = {
+  warn: 'bg-amber-50 text-amber-900 ring-amber-200',
+  error: 'bg-rose-50 text-rose-800 ring-rose-200',
+  // Added because the operator console confirms a great many things that went
+  // right, and amber for "done" trains people to ignore amber for "careful".
+  success: 'bg-emerald-50 text-emerald-900 ring-emerald-200',
+  info: 'bg-brand-50 text-brand-900 ring-brand-200',
+} as const;
+
+export function Alert({
+  children,
+  tone = 'warn',
+}: {
+  children: ReactNode;
+  tone?: keyof typeof ALERT_TONES;
+}) {
   return (
     <div
       role="alert"
-      className={cn(
-        'rounded-lg px-4 py-3 text-sm ring-1 ring-inset',
-        tone === 'error'
-          ? 'bg-rose-50 text-rose-800 ring-rose-200'
-          : 'bg-amber-50 text-amber-900 ring-amber-200',
-      )}
+      className={cn('rounded-lg px-4 py-3 text-sm ring-1 ring-inset', ALERT_TONES[tone])}
     >
       {children}
     </div>

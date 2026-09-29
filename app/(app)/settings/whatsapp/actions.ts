@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { requireSession } from '@/lib/auth/session';
+import { requireWritableSession } from '@/lib/auth/session';
 import { normalizeIndianPhone } from '@/lib/domain/phone';
 import { getProvider } from '@/lib/notify/provider';
 import { canConfigureHospital } from '@/lib/services/auth';
@@ -25,7 +25,7 @@ import { getHospitalNumber } from '@/lib/services/whatsapp-numbers';
  * it. Deriving it here means there is no field to distrust.
  */
 async function authorize(): Promise<{ hospitalId: string; actor: Actor }> {
-  const session = await requireSession();
+  const session = await requireWritableSession();
   if (!canConfigureHospital(session.role) && !session.isPlatformAdmin) {
     throw new IntegrationAuthError();
   }

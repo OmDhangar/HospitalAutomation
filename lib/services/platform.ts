@@ -7,6 +7,7 @@ import {
   doctorSchedules,
   hospitals,
   notificationOutbox,
+  payments,
   planTiers,
   providerInvoices,
   staffMemberships,
@@ -379,3 +380,101 @@ export async function createHospital(args: CreateHospitalParams): Promise<Create
   };
 }
 
+
+/* --------------------------------------------------------------- revenue */
+
+export type PlatformPayment = {
+  id: string;
+  hospitalId: string;
+  hospitalName: string;
+  purpose: string;
+  status: string;
+  amountPaise: number;
+  taxPaise: number;
+  paidAt: Date | null;
+  createdAt: Date;
+  failureReason: string | null;
+};
+
+/** Every collection attempt across the portfolio, newest first. */
+export async function listPlatformPayments(limit = 60): Promise<PlatformPayment[]> {
+  return getAdminDb()
+    .select({
+      id: payments.id,
+      hospitalId: payments.hospitalId,
+      hospitalName: hospitals.name,
+      purpose: payments.purpose,
+      status: payments.status,
+      amountPaise: payments.amountPaise,
+      taxPaise: payments.taxPaise,
+      paidAt: payments.paidAt,
+      createdAt: payments.createdAt,
+      failureReason: payments.failureReason,
+    })
+    .from(payments)
+    .innerJoin(hospitals, eq(hospitals.id, payments.hospitalId))
+    .orderBy(desc(payments.createdAt))
+    .limit(limit);
+}
+
+export type ProviderInvoiceRow = {
+  id: string;
+  provider: string;
+  periodMonth: string;
+  messagesBilled: number;
+  amountPaise: number;
+  notes: string | null;
+};
+
+export async function listProviderInvoices(limit = 18): Promise<ProviderInvoiceRow[]> {
+  const rows = await getAdminDb()
+    .select()
+    .from(providerInvoices)
+    .orderBy(desc(providerInvoices.periodMonth))
+    .limit(limit);
+
+  return rows.map((row) => ({
+    id: row.id,
+    provider: row.provider,
+    periodMonth: String(row.periodMonth),
+    messagesBilled: row.messagesBilled,
+    amountPaise: row.amountPaise,
+    notes: row.notes,
+  }));
+}
+
+/**
+ * Records what Meta actually charged for a month.
+ *
+ * Upserted on (provider, month) because a corrected invoice replaces the first
+ * one rather than sitting alongside it — two rows for August would make the
+ * cost-per-message reconciliation pick one arbitrarily.
+ */
+export async function recordProviderInvoice(args: {
+  periodMonth: string;
+  messagesBilled: number;
+  amountPaise: number;
+  provider?: string;
+  notes?: string | null;
+}) {
+  const provider = args.provider ?? 'meta';
+
+  await getAdminDb()
+    .insert(providerInvoices)
+    .values({
+      provider,
+      periodMonth: args.periodMonth,
+      messagesBilled: args.messagesBilled,
+      amountPaise: args.amountPaise,
+      notes: args.notes ?? null,
+    })
+    .onConflictDoUpdate({
+      target: [providerInvoices.provider, providerInvoices.periodMonth],
+      set: {
+        messagesBilled: args.messagesBilled,
+        amountPaise: args.amountPaise,
+        notes: args.notes ?? null,
+        recordedAt: new Date(),
+      },
+    });
+}
