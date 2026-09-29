@@ -5,7 +5,7 @@ import { cn } from '@/components/ui';
 import { formatTimeIn, formatWindowIn } from '@/lib/domain/time';
 import { isLocale, LOCALE_NAMES, LOCALES, t, type Locale } from '@/lib/i18n/patient';
 import { getPublicQueueView } from '@/lib/services/queue';
-import { cancelAppointment } from './actions';
+import { cancelAppointment, resumeAppointment } from './actions';
 
 export const metadata = { title: 'Your queue' };
 export const dynamic = 'force-dynamic';
@@ -66,27 +66,44 @@ export default async function PatientQueuePage({
 
   const isTurn = view.status === 'CALLED';
   const isInConsult = view.status === 'IN_CONSULTATION';
+  const isHeld = view.status === 'HELD' || view.isAppointmentPaused;
 
   return (
     <Shell locale={locale} token={token}>
       {/* Poll gently. The queue does not move faster than this, and these are
           metered mobile connections. */}
-      <AutoRefresh seconds={view.paused ? 180 : 45} />
+      <AutoRefresh seconds={view.paused || isHeld ? 180 : 45} />
 
-      {/**
-       * Status, estimate and what is being served are one card, not three.
-       *
-       * They were stacked separately, which pushed the cancel control to
-       * roughly 680px on a 375x812 handset — below the fold on every phone
-       * this product targets, so the one action a patient came to take needed
-       * a scroll to find. They are also a single thought: "where am I, and
-       * when". Grouping them costs nothing in clarity and buys the whole
-       * screen back.
-       */}
+      {query.resume === 'done' ? (
+        <Message title={s.resumeDone} hint={s.resumeDoneHint} tone="done" />
+      ) : null}
+
       {isTurn ? (
         <Message title={s.yourTurn} hint={s.yourTurnHint} tone="call" />
       ) : isInConsult ? (
         <Message title={s.withDoctor} tone="done" />
+      ) : isHeld ? (
+        <div className="space-y-4">
+          <Message
+            title={s.patientPaused}
+            hint={
+              view.resumeAt
+                ? `${s.patientPausedHint} (Auto-resumes at ${formatTimeIn(view.timezone, view.resumeAt)})`
+                : s.patientPausedHint
+            }
+            tone="warn"
+          />
+          <form action={resumeAppointment}>
+            <input type="hidden" name="token" value={token} />
+            <input type="hidden" name="lang" value={locale} />
+            <button
+              type="submit"
+              className="w-full rounded-2xl bg-emerald-600 px-5 py-4 text-center text-lg font-bold text-white shadow-md hover:bg-emerald-700 active:scale-[0.99] transition-all cursor-pointer"
+            >
+              {s.resumeAction}
+            </button>
+          </form>
+        </div>
       ) : view.paused ? (
         <Message title={s.paused} hint={s.pausedHint} tone="warn" />
       ) : (
@@ -105,12 +122,6 @@ export default async function PatientQueuePage({
 
       {/**
        * Token and appointment time, side by side.
-       *
-       * Stacked as a full-width token card above a separate tile grid, these
-       * two facts cost 176px and put the cancel control 43px below the fold on
-       * a 360x640 handset — the shape of the budget Android this product is
-       * most often opened on. The doctor's name moved into the hero, which is
-       * where the patient is already reading.
        */}
       <div className={cn('grid gap-3', view.scheduledSlotAt ? 'grid-cols-2' : 'grid-cols-1')}>
         <TokenCard label={s.yourToken} token={view.tokenNumber} />
@@ -136,7 +147,7 @@ export default async function PatientQueuePage({
       ) : null}
 
       {/* Advisory, so it sits below the action rather than in front of it. */}
-      {!isTurn && !isInConsult && !view.paused ? (
+      {!isTurn && !isInConsult && !view.paused && !isHeld ? (
         <p className="px-2 text-center text-base leading-relaxed text-ink-600">
           {s.leaveHint}
         </p>

@@ -1,8 +1,9 @@
-import { and, eq, gt, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, sql } from 'drizzle-orm';
 import { getDb, withTenant, type Tx } from '@/lib/db';
 import { auditLogs, branches, hospitals, sessions, staffMemberships, users } from '@/lib/db/schema';
 import { hashPassword, verifyPassword } from '@/lib/security/password';
 import { generateSessionToken, hashToken } from '@/lib/security/tokens';
+import { assertCanAdd } from './entitlements';
 
 const SESSION_TTL_DAYS = 14;
 
@@ -28,34 +29,52 @@ export type Session = {
  */
 export async function createStaffUser(args: {
   email: string;
-  password: string;
+  password?: string;
   name: string;
   hospitalId: string;
   role: StaffRole;
   branchId?: string | null;
 }) {
+  // Enforce staff limits for new staff additions
+  await assertCanAdd({ hospitalId: args.hospitalId, kind: 'staff' });
+
   const db = getDb();
-  const [user] = await db
-    .insert(users)
-    .values({
-      email: args.email.toLowerCase().trim(),
-      passwordHash: await hashPassword(args.password),
-      name: args.name,
-    })
-    .returning();
+  const rawPassword = args.password || 'Staff@123';
+  const email = args.email.toLowerCase().trim();
+
+  // Find existing user or insert
+  let [user] = await db
+    .select()
+    .from(users)
+    .where(eq(users.email, email));
+
+  if (!user) {
+    [user] = await db
+      .insert(users)
+      .values({
+        email,
+        passwordHash: await hashPassword(rawPassword),
+        name: args.name.trim(),
+      })
+      .returning();
+  }
 
   // `users` has no RLS, but `staff_memberships` does — it is the row that binds
   // a person to a hospital, so it has to be written inside that tenant's scope.
-  await withTenant(args.hospitalId, (tx) =>
-    tx.insert(staffMemberships).values({
-      userId: user.id,
-      hospitalId: args.hospitalId,
-      branchId: args.branchId ?? null,
-      role: args.role,
-    }),
+  const [membership] = await withTenant(args.hospitalId, (tx) =>
+    tx
+      .insert(staffMemberships)
+      .values({
+        userId: user.id,
+        hospitalId: args.hospitalId,
+        branchId: args.branchId ?? null,
+        role: args.role,
+        active: true,
+      })
+      .returning(),
   );
 
-  return user;
+  return { user, membership };
 }
 
 /**
@@ -211,3 +230,58 @@ export async function listBranchesInTx(tx: Tx) {
     .from(branches)
     .where(eq(branches.active, true));
 }
+
+export type StaffMemberItem = {
+  id: string; // membership id
+  userId: string;
+  name: string;
+  email: string;
+  role: StaffRole;
+  branchId: string | null;
+  branchName: string | null;
+  active: boolean;
+  createdAt: Date;
+};
+
+export async function listStaffMembers(hospitalId: string): Promise<StaffMemberItem[]> {
+  return withTenant(hospitalId, async (tx) => {
+    const rows = await tx
+      .select({
+        id: staffMemberships.id,
+        userId: staffMemberships.userId,
+        name: users.name,
+        email: users.email,
+        role: staffMemberships.role,
+        branchId: staffMemberships.branchId,
+        branchName: branches.name,
+        active: staffMemberships.active,
+        createdAt: staffMemberships.createdAt,
+      })
+      .from(staffMemberships)
+      .innerJoin(users, eq(users.id, staffMemberships.userId))
+      .leftJoin(branches, eq(branches.id, staffMemberships.branchId))
+      .where(eq(staffMemberships.hospitalId, hospitalId))
+      .orderBy(asc(users.name));
+
+    return rows;
+  });
+}
+
+export async function setStaffActive(args: {
+  hospitalId: string;
+  membershipId: string;
+  active: boolean;
+}) {
+  return withTenant(args.hospitalId, (tx) =>
+    tx
+      .update(staffMemberships)
+      .set({ active: args.active })
+      .where(
+        and(
+          eq(staffMemberships.id, args.membershipId),
+          eq(staffMemberships.hospitalId, args.hospitalId),
+        ),
+      ),
+  );
+}
+

@@ -21,6 +21,7 @@ async function main() {
   const sweeps = await runSweeps();
   console.log(
     `expired ${sweeps.appointmentsExpired} appointment(s), ` +
+      `resumed ${sweeps.appointmentsResumed} paused appointment(s), ` +
       `${sweeps.subscriptionsExpired} subscription(s), ` +
       `${sweeps.paymentLinksExpired} payment link(s)`,
   );

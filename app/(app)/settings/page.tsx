@@ -10,9 +10,16 @@ import {
   cn,
 } from '@/components/ui';
 import { requireSession } from '@/lib/auth/session';
-import { canConfigureHospital, listBranches } from '@/lib/services/auth';
+import { canConfigureHospital, listBranches, listStaffMembers } from '@/lib/services/auth';
+import { describeLimit } from '@/lib/services/entitlements';
 import { listDoctors } from '@/lib/services/hospital';
-import { addBranchAction, addDoctorAction, toggleDoctorAction } from './actions';
+import {
+  addBranchAction,
+  addDoctorAction,
+  addStaffAction,
+  toggleDoctorAction,
+  toggleStaffAction,
+} from './actions';
 
 import { serviceDateIn } from '@/lib/domain/time';
 import { DoctorScheduleManager } from './scheduling/doctor-schedule-manager';
@@ -23,6 +30,23 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
   const session = await requireSession();
   const params = await searchParams;
   const today = serviceDateIn(session.timezone, new Date());
+
+  /**
+   * Recomputed here rather than passed through the redirect, so the secret of
+   * what the plan allows is never a URL parameter somebody can edit, and the
+   * numbers shown are the ones true at render time.
+   */
+  const limitKind =
+    params.limit === 'branches'
+      ? 'branches'
+      : params.limit === 'doctors'
+        ? 'doctors'
+        : params.limit === 'staff'
+          ? 'staff'
+          : null;
+  const limitHit = limitKind
+    ? await describeLimit({ hospitalId: session.hospitalId, kind: limitKind })
+    : null;
 
   if (!canConfigureHospital(session.role)) {
     return (
@@ -35,12 +59,14 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
     );
   }
 
-  const [branches, doctors] = await Promise.all([
+  const [branches, doctors, staff] = await Promise.all([
     listBranches(session.hospitalId),
     listDoctors({ hospitalId: session.hospitalId, includeInactive: true }),
+    listStaffMembers(session.hospitalId),
   ]);
 
-  const activeCount = doctors.filter((d) => d.active).length;
+  const activeDoctorCount = doctors.filter((d) => d.active).length;
+  const activeStaffCount = staff.filter((s) => s.active).length;
 
   return (
     <div className="space-y-6">
@@ -55,6 +81,22 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
 
       {params.error === 'name' ? (
         <Alert tone="error">A name is required.</Alert>
+      ) : null}
+
+      {/*
+        A plan limit is reported with both numbers and the plan that lifts it.
+        "Upgrade your plan" on its own tells somebody they cannot do their job
+        and not what to do about it, which produces a phone call rather than an
+        upgrade. Nothing already set up is affected — the limit only stops the
+        next addition.
+      */}
+      {limitHit ? (
+        <Alert tone="warn">
+          {limitHit}{' '}
+          <Link href="/plans" className="font-semibold underline underline-offset-2">
+            See plans
+          </Link>
+        </Alert>
       ) : null}
 
       <Card>
@@ -143,7 +185,7 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
         <Card>
           <CardHeader
             title="Doctors"
-            hint={`${activeCount} active · ${doctors.length} total`}
+            hint={`${activeDoctorCount} active · ${doctors.length} total`}
             action={
               <a
                 href="#add-doctor"
@@ -307,6 +349,127 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
           ) : null}
         </Card>
       </div>
+
+      {/* Staff & User Accounts Card */}
+      <Card>
+        <CardHeader
+          title="Team & User Accounts"
+          hint={`${activeStaffCount} active ${activeStaffCount === 1 ? 'user' : 'users'} · Receptionists, Doctors, and Administrators`}
+        />
+
+        <div className="grid gap-6 lg:grid-cols-2 lg:items-start p-5">
+          {/* Staff List */}
+          <div>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-ink-500 mb-3">
+              Existing Staff Accounts
+            </h3>
+            {staff.length === 0 ? (
+              <EmptyState title="No staff accounts" hint="Add receptionists or doctors below." />
+            ) : (
+              <ul className="divide-y divide-ink-200 rounded-xl border border-ink-200 overflow-hidden bg-white">
+                {staff.map((member) => (
+                  <li
+                    key={member.id}
+                    className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 hover:bg-ink-50/50"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="font-semibold text-sm text-ink-900 truncate">
+                          {member.name}
+                        </p>
+                        <span
+                          className={cn(
+                            'rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider',
+                            member.role === 'owner'
+                              ? 'bg-purple-100 text-purple-800'
+                              : member.role === 'receptionist'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-blue-100 text-blue-800',
+                          )}
+                        >
+                          {member.role}
+                        </span>
+                        {!member.active ? (
+                          <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-900">
+                            Inactive
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="text-xs text-ink-500 mt-0.5">
+                        {member.email} {member.branchName ? `· 📍 ${member.branchName}` : ''}
+                      </p>
+                    </div>
+
+                    <form action={toggleStaffAction} className="shrink-0">
+                      <input type="hidden" name="membershipId" value={member.id} />
+                      <input
+                        type="hidden"
+                        name="active"
+                        value={member.active ? 'false' : 'true'}
+                      />
+                      <Button
+                        type="submit"
+                        size="sm"
+                        variant={member.active ? 'secondary' : 'primary'}
+                      >
+                        {member.active ? 'Deactivate' : 'Activate'}
+                      </Button>
+                    </form>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* Add Staff Form */}
+          <form
+            action={addStaffAction}
+            className="space-y-4 rounded-xl border border-ink-200 bg-ink-50/50 p-4"
+          >
+            <h3 className="text-xs font-bold uppercase tracking-wider text-ink-500">
+              Create New Staff User
+            </h3>
+            <Field label="Full Name">
+              <Input name="name" required placeholder="Priya Kulkarni" />
+            </Field>
+            <Field label="Email Address" hint="Used for dashboard sign-in">
+              <Input name="email" type="email" required placeholder="priya@hospital.com" />
+            </Field>
+            <Field label="Temporary Password" hint="Optional. Defaults to Staff@123">
+              <Input name="password" type="password" placeholder="••••••••" />
+            </Field>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Field label="Role">
+                <select
+                  name="role"
+                  defaultValue="receptionist"
+                  className="block w-full rounded-lg border-0 bg-white px-3 py-2.5 text-sm text-ink-900 ring-1 ring-inset ring-ink-300 focus:ring-2 focus:ring-inset focus:ring-brand-600 focus:outline-none cursor-pointer"
+                >
+                  <option value="receptionist">Receptionist</option>
+                  <option value="doctor">Doctor</option>
+                  <option value="owner">Hospital Owner / Admin</option>
+                </select>
+              </Field>
+              <Field label="Branch" hint="Optional">
+                <select
+                  name="branchId"
+                  className="block w-full rounded-lg border-0 bg-white px-3 py-2.5 text-sm text-ink-900 ring-1 ring-inset ring-ink-300 focus:ring-2 focus:ring-inset focus:ring-brand-600 focus:outline-none cursor-pointer"
+                >
+                  <option value="">All Branches / None</option>
+                  {branches.map((branch) => (
+                    <option key={branch.id} value={branch.id}>
+                      {branch.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <Button type="submit" variant="primary" className="w-full sm:w-auto">
+              Create Staff Account
+            </Button>
+          </form>
+        </div>
+      </Card>
 
       {/* Doctor Interactive Scheduling Management Section */}
       {doctors.length > 0 ? (

@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { withTenant, type Tx } from '@/lib/db';
 import { branches, doctorDayStates, doctors, doctorSchedules, hospitals } from '@/lib/db/schema';
 import type { DoctorScheduleMode } from '@/lib/domain/booking';
+import { assertCanAdd } from './entitlements';
 
 export type DoctorListItem = {
   id: string;
@@ -9,6 +10,7 @@ export type DoctorListItem = {
   specialty: string | null;
   branchId: string;
   branchName: string;
+  userId: string | null;
   defaultConsultMinutes: number;
   mode: DoctorScheduleMode;
   active: boolean;
@@ -46,6 +48,7 @@ export async function listDoctorsInTx(
     specialty: string | null;
     branch_id: string;
     branch_name: string;
+    user_id: string | null;
     default_consult_minutes: number;
     active: boolean;
     mode: DoctorScheduleMode;
@@ -56,6 +59,7 @@ export async function listDoctorsInTx(
       d.specialty,
       d.branch_id,
       b.name as branch_name,
+      d.user_id,
       d.default_consult_minutes,
       d.active,
       coalesce(
@@ -86,6 +90,7 @@ export async function listDoctorsInTx(
     specialty: r.specialty,
     branchId: r.branch_id,
     branchName: r.branch_name,
+    userId: r.user_id ?? null,
     defaultConsultMinutes: r.default_consult_minutes,
     active: r.active,
     mode: r.mode ?? 'queue',
@@ -127,6 +132,8 @@ export async function createBranch(args: {
   name: string;
   address?: string;
 }) {
+  await assertCanAdd({ hospitalId: args.hospitalId, kind: 'branches' });
+
   const result = await withTenant(args.hospitalId, async (tx) => {
     const [row] = await tx
       .insert(branches)
@@ -146,6 +153,8 @@ export async function createDoctor(args: {
   defaultConsultMinutes?: number;
   mode?: DoctorScheduleMode;
 }) {
+  await assertCanAdd({ hospitalId: args.hospitalId, kind: 'doctors' });
+
   const result = await withTenant(args.hospitalId, async (tx) => {
     const [row] = await tx
       .insert(doctors)

@@ -154,6 +154,23 @@ export const planTiers = pgTable('plan_tiers', {
   setupFeePaise: integer('setup_fee_paise').notNull().default(500_000),
   overagePaisePerAppointment: integer('overage_paise_per_appointment').notNull().default(100),
   overagePaisePerMessage: integer('overage_paise_per_message').notNull().default(25),
+  /**
+   * What the plan entitles a hospital to, beyond volume.
+   *
+   * `null` on a limit means unlimited, not zero — the top tier is sold on it,
+   * and it saves needing a sentinel number that someone later mistakes for a
+   * real cap. Every one of these is counted from a table that already exists,
+   * which is why these three axes were chosen over inventing new ones.
+   */
+  maxBranches: integer('max_branches'),
+  maxDoctors: integer('max_doctors'),
+  maxStaffLogins: integer('max_staff_logins'),
+  hasDisplayBoard: boolean('has_display_board').notNull().default(true),
+  hasOwnerReport: boolean('has_owner_report').notNull().default(true),
+  hasAdvancedReports: boolean('has_advanced_reports').notNull().default(true),
+  hasDataExport: boolean('has_data_export').notNull().default(true),
+  hasAuditLog: boolean('has_audit_log').notNull().default(true),
+  supportTier: text('support_tier').notNull().default('email'),
   sortOrder: smallint('sort_order').notNull().default(0),
   active: boolean('active').notNull().default(true),
 });
@@ -230,6 +247,23 @@ export const subscriptions = pgTable(
     dailyAppointmentCapacity: integer('daily_appointment_capacity').notNull(),
     includedAppointments: integer('included_appointments').notNull(),
     includedMessages: integer('included_messages').notNull(),
+
+    /**
+     * Entitlements as they stood when the subscription began, snapshotted for
+     * the same reason the allowances above are. Repricing a tier, or tightening
+     * a limit on the rate card, must not reach backwards and change what an
+     * existing customer was sold — "which plan covered this hospital, and what
+     * did that plan permit" has to be answerable from this row alone.
+     */
+    maxBranches: integer('max_branches'),
+    maxDoctors: integer('max_doctors'),
+    maxStaffLogins: integer('max_staff_logins'),
+    hasDisplayBoard: boolean('has_display_board').notNull().default(true),
+    hasOwnerReport: boolean('has_owner_report').notNull().default(true),
+    hasAdvancedReports: boolean('has_advanced_reports').notNull().default(true),
+    hasDataExport: boolean('has_data_export').notNull().default(true),
+    hasAuditLog: boolean('has_audit_log').notNull().default(true),
+    supportTier: text('support_tier').notNull().default('email'),
 
     /** Usage periods are monthly windows anchored on this date. */
     startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
@@ -496,6 +530,10 @@ export const appointments = pgTable(
     calledAt: timestamp('called_at', { withTimezone: true }),
     consultStartedAt: timestamp('consult_started_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
+    /** When the doctor paused this appointment. Null unless status is HELD. */
+    pausedAt: timestamp('paused_at', { withTimezone: true }),
+    /** Earliest time the scheduled resume job should fire. Null unless status is HELD. */
+    resumeAt: timestamp('resume_at', { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

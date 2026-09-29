@@ -13,6 +13,7 @@ import { estimateEta, type EtaEstimate } from '@/lib/domain/eta';
 import {
   applyAction,
   callNext,
+  canTransition,
   isActive,
   orderQueue,
   patientsAhead,
@@ -58,6 +59,8 @@ export type QueueRow = {
   enqueuedAt: Date | null;
   calledAt: Date | null;
   scheduledSlotAt?: Date | null;
+  pausedAt?: Date | null;
+  resumeAt?: Date | null;
 };
 
 export type QueueSnapshot = {
@@ -67,6 +70,8 @@ export type QueueSnapshot = {
   paused: boolean;
   pausedReason: string | null;
   currentToken: number | null;
+  currentPatientName?: string | null;
+  nextPatient?: { tokenNumber: number; patientName: string } | null;
   waitingCount: number;
   completedCount: number;
   rows: QueueRow[];
@@ -143,6 +148,8 @@ async function loadDayAppointments(
       enqueuedAt: appointments.enqueuedAt,
       calledAt: appointments.calledAt,
       createdAt: appointments.createdAt,
+      pausedAt: appointments.pausedAt,
+      resumeAt: appointments.resumeAt,
       patientId: appointments.patientId,
       patientName: patients.name,
       patientAge: patients.age,
@@ -576,6 +583,8 @@ export async function createWalkIn(args: {
       calledAt: row.appt_called_at ? new Date(row.appt_called_at) : null,
       consultStartedAt: row.appt_consult_started_at ? new Date(row.appt_consult_started_at) : null,
       completedAt: row.appt_completed_at ? new Date(row.appt_completed_at) : null,
+      pausedAt: null,
+      resumeAt: null,
       createdAt: new Date(row.appt_created_at),
       updatedAt: new Date(row.appt_updated_at),
     };
@@ -885,6 +894,155 @@ export async function setDoctorPaused(args: {
   });
 }
 
+export type PauseResult =
+  | { outcome: 'paused'; tokenNumber: number }
+  | { outcome: 'invalid_status'; currentStatus: AppointmentStatus };
+
+/**
+ * Pauses an appointment by moving it to HELD.
+ *
+ * "Patient stepped out for a test" is the canonical example. The appointment
+ * leaves the active queue so it is not called, but it keeps its slot, its
+ * token, and its place in history. `resume` brings it back.
+ *
+ * An optional `resumeAfterMinutes` schedules automatic resumption. Without
+ * it the doctor must resume manually. Either way the resume path is the same
+ * `applyQueueAction({ action: 'resume' })`, so the scheduled resume and the
+ * manual one are indistinguishable from the state machine's perspective.
+ */
+export async function pauseAppointment(args: {
+  hospitalId: string;
+  appointmentId: string;
+  doctorId: string;
+  timezone: string;
+  resumeAfterMinutes?: number | null;
+  reason?: string | null;
+  actorUserId?: string | null;
+  now?: Date;
+}): Promise<PauseResult> {
+  const now = args.now ?? new Date();
+  const serviceDate = serviceDateIn(args.timezone, now);
+
+  return withTenant(args.hospitalId, async (tx) => {
+    await lockDoctorDay(tx, {
+      hospitalId: args.hospitalId,
+      doctorId: args.doctorId,
+      serviceDate,
+    });
+
+    const [row] = await tx
+      .select({ status: appointments.status, tokenNumber: appointments.tokenNumber })
+      .from(appointments)
+      .where(eq(appointments.id, args.appointmentId));
+
+    if (!row) throw new Error('Appointment not found');
+
+    if (!canTransition(row.status, 'hold')) {
+      return { outcome: 'invalid_status' as const, currentStatus: row.status };
+    }
+    const toStatus = applyAction(row.status, 'hold');
+
+    const resumeAt = args.resumeAfterMinutes
+      ? new Date(now.getTime() + args.resumeAfterMinutes * 60_000)
+      : null;
+
+    await tx
+      .update(appointments)
+      .set({
+        status: toStatus,
+        pausedAt: now,
+        resumeAt,
+        updatedAt: now,
+      })
+      .where(eq(appointments.id, args.appointmentId));
+
+    await tx.insert(queueEvents).values({
+      hospitalId: args.hospitalId,
+      appointmentId: args.appointmentId,
+      doctorId: args.doctorId,
+      action: 'hold',
+      fromStatus: row.status,
+      toStatus,
+      actorUserId: args.actorUserId ?? null,
+      metadata: {
+        reason: args.reason ?? 'doctor_paused',
+        ...(args.resumeAfterMinutes
+          ? { resume_after_minutes: args.resumeAfterMinutes, resume_at: resumeAt!.toISOString() }
+          : {}),
+      },
+    });
+
+    return { outcome: 'paused' as const, tokenNumber: row.tokenNumber };
+  });
+}
+
+export type ResumeResult =
+  | { outcome: 'resumed'; tokenNumber: number }
+  | { outcome: 'invalid_status'; currentStatus: AppointmentStatus }
+  | { outcome: 'not_found' };
+
+/**
+ * Resumes a paused (HELD) appointment back into the waiting queue.
+ *
+ * Clears the pausedAt and resumeAt timestamps so the appointment no longer
+ * shows as paused and the sweep does not try to resume it again.
+ */
+export async function resumeAppointment(args: {
+  hospitalId: string;
+  appointmentId: string;
+  doctorId: string;
+  timezone: string;
+  actorUserId?: string | null;
+  now?: Date;
+}): Promise<ResumeResult> {
+  const now = args.now ?? new Date();
+  const serviceDate = serviceDateIn(args.timezone, now);
+
+  return withTenant(args.hospitalId, async (tx) => {
+    await lockDoctorDay(tx, {
+      hospitalId: args.hospitalId,
+      doctorId: args.doctorId,
+      serviceDate,
+    });
+
+    const [row] = await tx
+      .select({ status: appointments.status, tokenNumber: appointments.tokenNumber })
+      .from(appointments)
+      .where(eq(appointments.id, args.appointmentId));
+
+    if (!row) return { outcome: 'not_found' as const };
+
+    if (!canTransition(row.status, 'resume')) {
+      return { outcome: 'invalid_status' as const, currentStatus: row.status };
+    }
+    const toStatus = applyAction(row.status, 'resume');
+
+    await tx
+      .update(appointments)
+      .set({
+        status: toStatus,
+        pausedAt: null,
+        resumeAt: null,
+        enqueuedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(appointments.id, args.appointmentId));
+
+    await tx.insert(queueEvents).values({
+      hospitalId: args.hospitalId,
+      appointmentId: args.appointmentId,
+      doctorId: args.doctorId,
+      action: 'resume',
+      fromStatus: row.status,
+      toStatus,
+      actorUserId: args.actorUserId ?? null,
+      metadata: { reason: 'resumed' },
+    });
+
+    return { outcome: 'resumed' as const, tokenNumber: row.tokenNumber };
+  });
+}
+
 /* ----------------------------------------------------------------- queries */
 
 /**
@@ -963,6 +1121,9 @@ export async function getQueueSnapshotInTx(
   const serving = ordered.find(
     (e) => e.status === 'CALLED' || e.status === 'IN_CONSULTATION',
   );
+  const servingRow = serving ? byId.get(serving.appointmentId) : null;
+  const nextWaiting = ordered.find((e) => e.status === 'WAITING');
+  const nextWaitingRow = nextWaiting ? byId.get(nextWaiting.appointmentId) : null;
 
   return {
     doctorId: doctor.id,
@@ -971,6 +1132,10 @@ export async function getQueueSnapshotInTx(
     paused: day?.paused ?? false,
     pausedReason: day?.pausedReason ?? null,
     currentToken: serving?.tokenNumber ?? null,
+    currentPatientName: servingRow ? servingRow.patientName : null,
+    nextPatient: nextWaitingRow
+      ? { tokenNumber: nextWaitingRow.tokenNumber, patientName: nextWaitingRow.patientName }
+      : null,
     waitingCount: ordered.filter((e) => e.status === 'WAITING').length,
     completedCount: rows.filter((r) => r.status === 'COMPLETED').length,
     medianConsultMinutes: durations.length > 0 ? durations[Math.floor(durations.length / 2)] : null,
@@ -992,6 +1157,8 @@ export async function getQueueSnapshotInTx(
         enqueuedAt: row.enqueuedAt,
         calledAt: row.calledAt,
         scheduledSlotAt: row.scheduledSlotAt,
+        pausedAt: row.pausedAt ?? null,
+        resumeAt: row.resumeAt ?? null,
       };
     }),
     parked: rows
@@ -1008,6 +1175,8 @@ export async function getQueueSnapshotInTx(
         enqueuedAt: row.enqueuedAt,
         calledAt: row.calledAt,
         scheduledSlotAt: row.scheduledSlotAt,
+        pausedAt: row.pausedAt ?? null,
+        resumeAt: row.resumeAt ?? null,
       })),
   };
 }
@@ -1043,6 +1212,9 @@ export type PublicQueueView = {
   currentToken: number | null;
   patientsAhead: number | null;
   paused: boolean;
+  isAppointmentPaused: boolean;
+  pausedAt: Date | null;
+  resumeAt: Date | null;
   eta: EtaEstimate | null;
   timezone: string;
   locale: 'mr' | 'hi' | 'en';
@@ -1076,6 +1248,8 @@ export async function getPublicQueueView(
         serviceDate: appointments.serviceDate,
         scheduledSlotAt: appointments.scheduledSlotAt,
         expiresAt: appointments.publicTokenExpiresAt,
+        pausedAt: appointments.pausedAt,
+        resumeAt: appointments.resumeAt,
         patientName: patients.name,
         patientLocale: patients.locale,
         doctorName: doctors.name,
@@ -1123,12 +1297,15 @@ export async function getPublicQueueView(
       currentToken: serving?.tokenNumber ?? null,
       patientsAhead: ahead,
       paused: day?.paused ?? false,
+      isAppointmentPaused: appointment.status === 'HELD',
+      pausedAt: appointment.pausedAt ?? null,
+      resumeAt: appointment.resumeAt ?? null,
       timezone: 'Asia/Kolkata',
       locale: appointment.patientLocale ?? 'en',
       lastUpdatedAt: now,
       expired,
       eta:
-        ahead === null || expired || (day?.paused ?? false)
+        ahead === null || expired || (day?.paused ?? false) || appointment.status === 'HELD'
           ? null
           : estimateEta({
               patientsAhead: ahead,
@@ -1298,3 +1475,87 @@ export async function cancelByPublicToken(args: {
     return { outcome: 'cancelled', tokenNumber: appointment.tokenNumber };
   });
 }
+
+export type PatientResumeResult =
+  | { outcome: 'resumed'; tokenNumber: number }
+  | { outcome: 'not_paused' }
+  | { outcome: 'not_found' }
+  | { outcome: 'expired' };
+
+/**
+ * Lets a paused (HELD) patient rejoin the waiting line when they return.
+ */
+export async function resumeByPublicToken(args: {
+  publicToken: string;
+  now?: Date;
+}): Promise<PatientResumeResult> {
+  const now = args.now ?? new Date();
+
+  const [resolved] = await getDb().execute<{ hospital_id: string | null }>(
+    sql`select public.resolve_public_token(${args.publicToken}) as hospital_id`,
+  );
+  const hospitalId = resolved?.hospital_id;
+  if (!hospitalId) return { outcome: 'not_found' };
+
+  return withTenant(hospitalId, async (tx) => {
+    const [appointment] = await tx
+      .select({
+        id: appointments.id,
+        status: appointments.status,
+        tokenNumber: appointments.tokenNumber,
+        doctorId: appointments.doctorId,
+        serviceDate: appointments.serviceDate,
+        expiresAt: appointments.publicTokenExpiresAt,
+      })
+      .from(appointments)
+      .where(eq(appointments.publicToken, args.publicToken));
+
+    if (!appointment) return { outcome: 'not_found' };
+    if (appointment.expiresAt.getTime() < now.getTime()) {
+      return { outcome: 'expired' };
+    }
+    if (appointment.status !== 'HELD') {
+      return { outcome: 'not_paused' };
+    }
+
+    await lockDoctorDay(tx, {
+      hospitalId,
+      doctorId: appointment.doctorId,
+      serviceDate: appointment.serviceDate,
+    });
+
+    const [fresh] = await tx
+      .select({ status: appointments.status })
+      .from(appointments)
+      .where(eq(appointments.id, appointment.id));
+
+    if (fresh.status !== 'HELD') {
+      return { outcome: 'not_paused' };
+    }
+
+    await tx
+      .update(appointments)
+      .set({
+        status: 'WAITING',
+        pausedAt: null,
+        resumeAt: null,
+        enqueuedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(appointments.id, appointment.id));
+
+    await tx.insert(queueEvents).values({
+      hospitalId,
+      appointmentId: appointment.id,
+      doctorId: appointment.doctorId,
+      action: 'resume',
+      fromStatus: 'HELD',
+      toStatus: 'WAITING',
+      actorUserId: null,
+      metadata: { reason: 'patient_self_resumed' },
+    });
+
+    return { outcome: 'resumed', tokenNumber: appointment.tokenNumber };
+  });
+}
+

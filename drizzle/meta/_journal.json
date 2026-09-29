@@ -148,6 +148,20 @@
       "when": 1789260000000,
       "tag": "0020_payments",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1789300000000,
+      "tag": "0021_plan_entitlements",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1789350000000,
+      "tag": "0022_pause_resume",
+      "breakpoints": true
     }
   ]
 }

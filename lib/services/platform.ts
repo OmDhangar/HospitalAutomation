@@ -2,11 +2,19 @@ import { and, count, desc, eq, gte, sql } from 'drizzle-orm';
 import { getAdminDb } from '@/lib/db/admin';
 import {
   appointments,
+  branches,
+  doctors,
+  doctorSchedules,
   hospitals,
   notificationOutbox,
   planTiers,
   providerInvoices,
+  staffMemberships,
+  users,
 } from '@/lib/db/schema';
+import { hashPassword } from '@/lib/security/password';
+import { startSubscription } from './subscriptions';
+import { assignNumberToHospital } from './whatsapp-integration';
 import {
   calculateMonthlyBill,
   messageRatio,
@@ -199,3 +207,175 @@ export async function getRecentFailures(limit = 20): Promise<RecentFailure[]> {
 
   return rows.map(({ status: _status, ...row }) => row);
 }
+
+export type CreateHospitalParams = {
+  name: string;
+  slug?: string;
+  timezone?: string;
+  ownerName: string;
+  ownerEmail: string;
+  ownerPassword?: string;
+  ownerPhoneE164?: string;
+  branchName?: string;
+  branchAddress?: string;
+  planTierCode?: string;
+  billingCycle?: 'monthly' | 'annual';
+  initialDoctorName?: string;
+  initialDoctorSpecialty?: string;
+  initialDoctorMode?: 'queue' | 'slot' | 'both';
+  initialDoctorConsultMinutes?: number;
+  phoneNumberId?: string;
+  actorUserId?: string | null;
+};
+
+export type CreateHospitalResult = {
+  hospitalId: string;
+  hospitalName: string;
+  slug: string;
+  ownerUserId: string;
+  branchId: string;
+  doctorId?: string;
+};
+
+/**
+ * Creates a brand new hospital tenant with initial branch, owner user,
+ * subscription tier, optional initial doctor, and optional WhatsApp number assignment.
+ */
+export async function createHospital(args: CreateHospitalParams): Promise<CreateHospitalResult> {
+  const db = getAdminDb();
+  const slug = (
+    args.slug ||
+    args.name
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '')
+  ) + '-' + Math.random().toString(36).slice(2, 6);
+
+  const timezone = args.timezone || 'Asia/Kolkata';
+  const ownerEmail = args.ownerEmail.toLowerCase().trim();
+  const rawPassword = args.ownerPassword || 'Hospital@123';
+  const passwordHash = await hashPassword(rawPassword);
+
+  const [hospital] = await db
+    .insert(hospitals)
+    .values({
+      name: args.name.trim(),
+      slug,
+      timezone,
+      planTierCode: args.planTierCode || 'free',
+      ownerPhoneE164: args.ownerPhoneE164 || null,
+    })
+    .returning();
+
+  const [branch] = await db
+    .insert(branches)
+    .values({
+      hospitalId: hospital.id,
+      name: args.branchName?.trim() || 'Main Branch',
+      address: args.branchAddress?.trim() || null,
+    })
+    .returning();
+
+  // Create owner user (or find existing by email)
+  let [user] = await db
+    .select()
+    .from(users)
+    .where(eq(users.email, ownerEmail));
+
+  if (!user) {
+    [user] = await db
+      .insert(users)
+      .values({
+        name: args.ownerName.trim(),
+        email: ownerEmail,
+        passwordHash,
+      })
+      .returning();
+  }
+
+  // Create staff membership
+  await db
+    .insert(staffMemberships)
+    .values({
+      userId: user.id,
+      hospitalId: hospital.id,
+      branchId: branch.id,
+      role: 'owner',
+      active: true,
+    });
+
+  // Start subscription if plan tier specified
+  if (args.planTierCode) {
+    try {
+      await startSubscription({
+        hospitalId: hospital.id,
+        tierCode: args.planTierCode,
+        billingCycle: args.billingCycle ?? 'monthly',
+        changeReason: 'initial_onboarding',
+        changedByUserId: args.actorUserId ?? null,
+      });
+    } catch (err) {
+      console.warn('[platform:createHospital] startSubscription warning:', err);
+    }
+  }
+
+  // Create initial doctor if provided
+  let doctorId: string | undefined;
+  if (args.initialDoctorName?.trim()) {
+    const [doctor] = await db
+      .insert(doctors)
+      .values({
+        hospitalId: hospital.id,
+        branchId: branch.id,
+        name: args.initialDoctorName.trim(),
+        specialty: args.initialDoctorSpecialty?.trim() || null,
+        defaultConsultMinutes: args.initialDoctorConsultMinutes || 10,
+        active: true,
+      })
+      .returning();
+
+    doctorId = doctor.id;
+
+    if (args.initialDoctorMode) {
+      const today = new Date().toISOString().slice(0, 10);
+      const dow = new Date().getDay();
+      await db.insert(doctorSchedules).values({
+        hospitalId: hospital.id,
+        doctorId: doctor.id,
+        weekday: dow,
+        mode: args.initialDoctorMode,
+        startTime: '09:00',
+        endTime: '17:00',
+        effectiveFrom: today,
+      });
+    }
+  }
+
+  // Assign WhatsApp Number if phoneNumberId provided
+  if (args.phoneNumberId?.trim()) {
+    try {
+      await assignNumberToHospital({
+        hospitalId: hospital.id,
+        phoneNumberId: args.phoneNumberId.trim(),
+        actor: {
+          userId: args.actorUserId || user.id,
+          role: 'owner',
+          isPlatformAdmin: true,
+        },
+      });
+    } catch (err) {
+      console.warn('[platform:createHospital] assignNumber warning:', err);
+    }
+  }
+
+  return {
+    hospitalId: hospital.id,
+    hospitalName: hospital.name,
+    slug: hospital.slug,
+    ownerUserId: user.id,
+    branchId: branch.id,
+    doctorId,
+  };
+}
+

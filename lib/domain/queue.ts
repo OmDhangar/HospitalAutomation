@@ -102,6 +102,32 @@ export const isTerminal = (status: AppointmentStatus): boolean =>
 export const isActive = (status: AppointmentStatus): boolean =>
   ACTIVE.has(status);
 
+/**
+ * Whether an appointment in this status should count as occupying a booked
+ * slot for availability purposes.
+ *
+ * Terminal states release their slot — a cancellation should make the time
+ * bookable again. HELD does NOT release its slot: the appointment is
+ * temporarily paused but still "alive", and giving its slot away while the
+ * patient is getting a test done would be wrong.
+ */
+export const occupiesBookingSlot = (status: AppointmentStatus): boolean =>
+  !TERMINAL.has(status);
+
+/**
+ * Whether an appointment in this status can be cancelled.
+ * Terminal states cannot be cancelled (they already are, or are completed).
+ */
+export const canCancel = (status: AppointmentStatus): boolean =>
+  TRANSITIONS[status].cancel !== undefined;
+
+/**
+ * Whether a doctor can pause (hold) an appointment in this status.
+ * Only appointments currently being seen or waiting can be paused.
+ */
+export const canPause = (status: AppointmentStatus): boolean =>
+  TRANSITIONS[status].hold !== undefined;
+
 export const canTransition = (
   from: AppointmentStatus,
   action: QueueAction,
