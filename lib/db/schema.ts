@@ -304,6 +304,12 @@ export const users = pgTable('users', {
   name: text('name').notNull(),
   isPlatformAdmin: boolean('is_platform_admin').notNull().default(false),
   active: boolean('active').notNull().default(true),
+  /**
+   * Set when an operator issues a replacement password. The credential works
+   * exactly once, for the sign-in that changes it — a reset the customer never
+   * gets round to changing is otherwise a password we know indefinitely.
+   */
+  mustChangePassword: boolean('must_change_password').notNull().default(false),
   lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
   createdAt: createdAt(),
 });
@@ -330,9 +336,34 @@ export const sessions = pgTable(
       .references(() => hospitals.id, { onDelete: 'cascade' }),
     tokenHash: text('token_hash').notNull().unique(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    /**
+     * Who opened this session on someone else's behalf, null on an ordinary
+     * login. Support access is then distinguishable from the customer's own
+     * activity in the audit trail, which is the only reason it is tolerable to
+     * offer at all.
+     */
+    impersonatedByUserId: uuid('impersonated_by_user_id').references(() => users.id, {
+      onDelete: 'cascade',
+    }),
+    /**
+     * Read by the `app_read_only()` Postgres function through a transaction
+     * setting, and tested by a restrictive policy on every tenant table. The
+     * flag is enforced by the database, not by remembering to check it in each
+     * of the server actions that write.
+     */
+    readOnly: boolean('read_only').notNull().default(false),
+    /** Where ending an impersonation puts the operator back. */
+    returnHospitalId: uuid('return_hospital_id').references(() => hospitals.id, {
+      onDelete: 'set null',
+    }),
     createdAt: createdAt(),
   },
-  (t) => [index('sessions_user_idx').on(t.userId)],
+  (t) => [
+    index('sessions_user_idx').on(t.userId),
+    index('sessions_impersonation_idx')
+      .on(t.impersonatedByUserId)
+      .where(sql`impersonated_by_user_id is not null`),
+  ],
 );
 
 export const staffMemberships = pgTable(

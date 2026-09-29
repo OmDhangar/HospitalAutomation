@@ -54,6 +54,13 @@ async function main() {
     'public.resolve_public_token(text)',
     'public.resolve_user_hospital(uuid)',
     'public.resolve_whatsapp_number(text)',
+    /**
+     * Load-bearing for every write, not only for impersonation. The read-only
+     * policies call this function, policies are evaluated as the querying role,
+     * and the migration revokes it from PUBLIC — so without this grant the app
+     * role cannot insert, update or delete anything at all.
+     */
+    'public.app_read_only()',
   ];
 
   for (const fn of bootstrapFunctions) {

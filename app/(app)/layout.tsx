@@ -1,7 +1,9 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { Suspense } from 'react';
 import { ToastProvider } from '@/components/toast';
 import { ExpiryBanner } from '@/components/expiry-banner';
+import { ImpersonationBanner } from '@/components/impersonation-banner';
 import { MobileNav, type NavItem } from '@/components/mobile-nav';
 import { getSession, requireSession } from '@/lib/auth/session';
 import { daysUntilExpiry, expiryBucket } from '@/lib/domain/subscription';
@@ -16,6 +18,13 @@ import { signOutAction } from './dashboard/actions';
  */
 async function AppHeader() {
   const session = await requireSession();
+
+  /**
+   * An operator-issued password is a one-use credential. Until it is replaced
+   * nothing else in the app renders, because the alternative is a temporary
+   * password that quietly becomes the account's permanent one.
+   */
+  if (session.mustChangePassword) redirect('/change-password');
 
   const navItems: NavItem[] = [
     { label: 'Queue', href: '/dashboard' },
@@ -34,7 +43,9 @@ async function AppHeader() {
     );
   }
 
-  if (session.isPlatformAdmin) {
+  // Hidden while impersonating: the console is not reachable from a support
+  // session by design, so offering the link would only produce a dead end.
+  if (session.isPlatformAdmin && session.impersonatedByUserId === null) {
     navItems.push({ label: 'Platform', href: '/admin' });
   }
 
@@ -116,6 +127,20 @@ async function PlanExpiryNotice() {
   );
 }
 
+/**
+ * Rendered above the header's Suspense boundary rather than inside it, so the
+ * warning that this is somebody else's account is never the last thing to
+ * appear on the page.
+ */
+async function SupportNotice() {
+  const session = await getSession();
+  if (!session || session.impersonatedByUserId === null) return null;
+
+  return (
+    <ImpersonationBanner hospitalName={session.hospitalName} readOnly={session.readOnly} />
+  );
+}
+
 /** Lightweight placeholder while the session resolves. */
 function HeaderSkeleton() {
   return (
@@ -152,6 +177,10 @@ export default function AppLayout({ children }: LayoutProps<'/'>) {
       <div className="min-h-dvh w-full bg-ink-100 overflow-x-hidden">
         <Suspense fallback={<HeaderSkeleton />}>
           <AppHeader />
+        </Suspense>
+
+        <Suspense fallback={null}>
+          <SupportNotice />
         </Suspense>
 
         {/**

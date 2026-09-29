@@ -280,6 +280,24 @@ export async function startSubscription(args: {
         dailyAppointmentCapacity: tier.patientsPerDay,
         includedAppointments: tier.includedAppointments,
         includedMessages: tier.includedMessages,
+        /**
+         * Snapshotted from the rate card for the same reason the allowances
+         * above are, and easy to leave out: every one of these columns is
+         * nullable or defaulted, so omitting them produced a subscription with
+         * no limits at all rather than an error. Migration 0021 backfilled the
+         * terms that existed then; without this, every term opened since has
+         * been silently unlimited on all three axes and `assertCanAdd` has
+         * never refused anything.
+         */
+        maxBranches: tier.maxBranches,
+        maxDoctors: tier.maxDoctors,
+        maxStaffLogins: tier.maxStaffLogins,
+        hasDisplayBoard: tier.hasDisplayBoard,
+        hasOwnerReport: tier.hasOwnerReport,
+        hasAdvancedReports: tier.hasAdvancedReports,
+        hasDataExport: tier.hasDataExport,
+        hasAuditLog: tier.hasAuditLog,
+        supportTier: tier.supportTier,
         startsAt,
         endsAt: subscriptionEnd({ startsAt, cycle: args.billingCycle }),
         changeReason: args.changeReason,

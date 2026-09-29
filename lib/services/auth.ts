@@ -1,5 +1,6 @@
 import { and, asc, eq, gt, sql } from 'drizzle-orm';
 import { getDb, withTenant, type Tx } from '@/lib/db';
+import { markRequestReadOnly } from '@/lib/db/request-context';
 import { auditLogs, branches, hospitals, sessions, staffMemberships, users } from '@/lib/db/schema';
 import { hashPassword, verifyPassword } from '@/lib/security/password';
 import { generateSessionToken, hashToken } from '@/lib/security/tokens';
@@ -19,7 +20,23 @@ export type Session = {
   timezone: string;
   role: StaffRole;
   branchId: string | null;
+  /**
+   * True only on an impersonated session. Carried here so the UI can hide the
+   * controls it would be pointless to offer; the actual prohibition is a
+   * restrictive row-level policy on every tenant table, because a guard the
+   * interface enforces is a guard a direct POST skips.
+   */
+  readOnly: boolean;
+  /** The operator behind an impersonated session, null on an ordinary login. */
+  impersonatedByUserId: string | null;
+  /** Where ending an impersonation returns that operator. */
+  returnHospitalId: string | null;
+  /** Set by an operator-issued password reset; gates the rest of the app. */
+  mustChangePassword: boolean;
 };
+
+/** Impersonation is for looking at a problem, not for living in. */
+export const IMPERSONATION_TTL_MINUTES = 30;
 
 /**
  * `users` and `sessions` are the two tables without row-level security: a login
@@ -149,6 +166,9 @@ export async function resolveSession(token: string | undefined): Promise<Session
 
   const cached = sessionCache.get(tokenH);
   if (cached && cached.expiresAt > Date.now()) {
+    // Re-marked on every resolve, cache hit included: the flag lives for one
+    // request, the cached session for thirty seconds across many.
+    if (cached.session.readOnly) markRequestReadOnly();
     return cached.session;
   }
 
@@ -162,7 +182,11 @@ export async function resolveSession(token: string | undefined): Promise<Session
       email: users.email,
       isPlatformAdmin: users.isPlatformAdmin,
       active: users.active,
+      mustChangePassword: users.mustChangePassword,
       hospitalId: sessions.hospitalId,
+      impersonatedByUserId: sessions.impersonatedByUserId,
+      readOnly: sessions.readOnly,
+      returnHospitalId: sessions.returnHospitalId,
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
@@ -170,24 +194,52 @@ export async function resolveSession(token: string | undefined): Promise<Session
 
   if (!row || !row.active) return null;
 
-  // Step two runs inside that hospital's scope, so RLS applies normally.
-  const context = await withTenant(row.hospitalId, async (tx) => {
-    const [found] = await tx
-      .select({
-        role: staffMemberships.role,
-        branchId: staffMemberships.branchId,
-        hospitalName: hospitals.name,
-        timezone: hospitals.timezone,
-      })
-      .from(staffMemberships)
-      .innerJoin(hospitals, eq(hospitals.id, staffMemberships.hospitalId))
-      .where(
-        and(eq(staffMemberships.userId, row.userId), eq(staffMemberships.active, true)),
-      );
-    return found ?? null;
-  });
+  /**
+   * An impersonating operator is marked before anything else reads the
+   * database, so the very first tenant transaction of the request already
+   * carries `app.read_only`.
+   */
+  if (row.readOnly) markRequestReadOnly();
 
-  // Membership revoked since the session was issued.
+  const impersonating = row.impersonatedByUserId !== null;
+
+  /**
+   * Impersonation is the one case where the membership lookup below cannot
+   * work: an operator has no staff row at the hospital they are looking into,
+   * and giving them one would put them in that hospital's own staff list. The
+   * authority comes from `is_platform_admin`, re-checked here rather than
+   * trusted from the session row, so revoking it ends every support session in
+   * flight at the next resolve.
+   */
+  const context = impersonating
+    ? row.isPlatformAdmin
+      ? await withTenant(row.hospitalId, async (tx) => {
+          const [found] = await tx
+            .select({ hospitalName: hospitals.name, timezone: hospitals.timezone })
+            .from(hospitals)
+            .where(eq(hospitals.id, row.hospitalId));
+          return found
+            ? { ...found, role: 'owner' as StaffRole, branchId: null }
+            : null;
+        })
+      : null
+    : await withTenant(row.hospitalId, async (tx) => {
+        const [found] = await tx
+          .select({
+            role: staffMemberships.role,
+            branchId: staffMemberships.branchId,
+            hospitalName: hospitals.name,
+            timezone: hospitals.timezone,
+          })
+          .from(staffMemberships)
+          .innerJoin(hospitals, eq(hospitals.id, staffMemberships.hospitalId))
+          .where(
+            and(eq(staffMemberships.userId, row.userId), eq(staffMemberships.active, true)),
+          );
+        return found ?? null;
+      });
+
+  // Membership revoked since the session was issued, or platform admin dropped.
   if (!context) return null;
 
   const session: Session = {
@@ -200,10 +252,20 @@ export async function resolveSession(token: string | undefined): Promise<Session
     timezone: context.timezone,
     role: context.role,
     branchId: context.branchId,
+    readOnly: row.readOnly,
+    impersonatedByUserId: row.impersonatedByUserId,
+    returnHospitalId: row.returnHospitalId,
+    mustChangePassword: row.mustChangePassword,
   };
 
   sessionCache.set(tokenH, { session, expiresAt: Date.now() + SESSION_CACHE_TTL });
   return session;
+}
+
+/** Drops a token from the 30-second cache so a change takes effect at once. */
+export function invalidateSessionCache(token?: string) {
+  if (token) sessionCache.delete(hashToken(token));
+  else sessionCache.clear();
 }
 
 export async function logout(token: string | undefined) {

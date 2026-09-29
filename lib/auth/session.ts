@@ -37,3 +37,22 @@ export async function clearSessionCookie() {
   const store = await cookies();
   store.delete(COOKIE_NAME);
 }
+
+/**
+ * Refuses a write on a read-only support session.
+ *
+ * The prohibition is enforced by row-level security, which cannot be bypassed
+ * and does not depend on anybody remembering this call. This exists so that
+ * the refusal arrives as a sentence rather than as a Postgres policy violation
+ * halfway through a transaction, and so a mutation is rejected before it does
+ * any of the work that precedes the write.
+ */
+export async function requireWritableSession(): Promise<Session> {
+  const session = await requireSession();
+  if (session.readOnly) {
+    throw new Error(
+      'This is a read-only support session. Stop the support session to make changes.',
+    );
+  }
+  return session;
+}

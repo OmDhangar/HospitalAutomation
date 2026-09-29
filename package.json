@@ -18,6 +18,7 @@
     "db:seed": "tsx scripts/seed-demo.ts",
     "report:monthly": "tsx scripts/monthly-report.ts",
     "worker:tick": "tsx scripts/tick.ts",
+    "worker:daemon": "tsx scripts/worker-daemon.ts",
     "whatsapp:templates": "tsx scripts/whatsapp-templates.ts",
     "whatsapp:simulate": "tsx scripts/simulate-inbound.ts",
     "whatsapp:bootstrap": "tsx scripts/bootstrap-whatsapp.ts",

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { requireSession } from '@/lib/auth/session';
+import { requireWritableSession } from '@/lib/auth/session';
 import {
   PaymentError,
   reconcilePayment,
@@ -17,7 +17,7 @@ import {
  * is no field to tamper with. The action's only job is to produce a URL.
  */
 export async function renewPlan() {
-  const session = await requireSession();
+  const session = await requireWritableSession();
 
   const baseUrl = process.env.PUBLIC_BASE_URL;
   if (!baseUrl) {
@@ -74,7 +74,7 @@ export async function renewPlan() {
  * waiting for someone to notice.
  */
 export async function checkPaymentStatus(formData: FormData) {
-  const session = await requireSession();
+  const session = await requireWritableSession();
   const paymentId = String(formData.get('paymentId') ?? '').trim();
   if (!paymentId) redirect('/subscription');
 

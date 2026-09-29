@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
+import { isRequestReadOnly } from './request-context';
 import * as schema from './schema';
 
 let cachedClient: postgres.Sql | undefined;
@@ -61,6 +62,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export async function withTenant<T>(
   hospitalId: string,
   fn: (tx: Tx) => Promise<T>,
+  options: { readOnly?: boolean } = {},
 ): Promise<T> {
   if (!UUID_RE.test(hospitalId)) {
     throw new Error('withTenant requires a UUID hospital id');
@@ -69,7 +71,18 @@ export async function withTenant<T>(
   const t0 = performance.now();
   return getDb().transaction(async (tx) => {
     const tTx = performance.now();
-    await tx.execute(sql`select set_config('app.hospital_id', ${hospitalId}, true)`);
+    /**
+     * Both settings are written on every transaction, not only when read-only
+     * is wanted. `app.read_only` governs a restrictive policy on every tenant
+     * table, so leaving it to whatever the pooled connection last held is the
+     * one way this could fail open.
+     */
+    const readOnly = options.readOnly ?? isRequestReadOnly();
+    await tx.execute(
+      sql`select
+        set_config('app.hospital_id', ${hospitalId}, true),
+        set_config('app.read_only', ${readOnly ? 'true' : 'false'}, true)`,
+    );
     const tConfig = performance.now();
     const result = await fn(tx);
     const tEnd = performance.now();

@@ -162,6 +162,13 @@
       "when": 1789350000000,
       "tag": "0022_pause_resume",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1789400000000,
+      "tag": "0023_platform_console",
+      "breakpoints": true
     }
   ]
 }

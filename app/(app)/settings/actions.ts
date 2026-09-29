@@ -2,13 +2,13 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { requireSession } from '@/lib/auth/session';
+import { requireWritableSession } from '@/lib/auth/session';
 import { canConfigureHospital, createStaffUser, setStaffActive, type StaffRole } from '@/lib/services/auth';
 import { checkCanAdd } from '@/lib/services/entitlements';
 import { createBranch, createDoctor, setDoctorActive } from '@/lib/services/hospital';
 
 async function authorize() {
-  const session = await requireSession();
+  const session = await requireWritableSession();
   if (!canConfigureHospital(session.role)) {
     throw new Error('Only a hospital owner can change configuration');
   }
