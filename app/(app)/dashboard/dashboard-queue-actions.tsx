@@ -82,15 +82,26 @@ export function DoctorTabs({
 export function AddWalkInForm({
   doctorId,
   branchId,
+  doctorName,
+  canCollect,
+  feeKnown,
 }: {
   doctorId: string;
   branchId: string;
+  doctorName: string;
+  /** Whether this user may take money; otherwise the Paid choice is not offered. */
+  canCollect: boolean;
+  /** Without a consultation fee there is nothing to charge, so Paid is disabled. */
+  feeKnown: boolean;
 }) {
   const toast = useToast();
+  const nameRef = React.useRef<HTMLInputElement>(null);
 
   const [name, setName] = useState('');
   const [age, setAge] = useState('');
   const [phone, setPhone] = useState('');
+  const [address, setAddress] = useState('');
+  const [paid, setPaid] = useState(false);
   const [whatsappOptIn, setWhatsappOptIn] = useState(true);
   const [isPending, startTransition] = useTransition();
 
@@ -114,7 +125,9 @@ export function AddWalkInForm({
         name,
         age: parsedAge,
         phone,
+        address,
         whatsappOptIn,
+        paid: canCollect && feeKnown && paid,
       });
 
       if (res.ok) {
@@ -122,9 +135,14 @@ export function AddWalkInForm({
           `Token #${res.tokenNumber} Created!`,
           `${name.trim()}${parsedAge ? ` (${parsedAge}y)` : ''} added to the queue successfully.`,
         );
+        if (res.warning) toast.error('Payment not recorded', res.warning);
         setName('');
         setAge('');
         setPhone('');
+        setAddress('');
+        setPaid(false);
+        // Ready for the next person in line without reaching for the mouse.
+        nameRef.current?.focus();
       } else {
         toast.error('Could not add patient', res.error);
       }
@@ -137,6 +155,7 @@ export function AddWalkInForm({
         <div className="sm:col-span-2">
           <Field label="Patient name">
             <Input
+              ref={nameRef}
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -172,6 +191,63 @@ export function AddWalkInForm({
           autoComplete="off"
         />
       </Field>
+
+      {/*
+       * After the phone, so the common case — name, phone, Enter — never has
+       * to pass through it. Optional: many patients will not have it handy.
+       */}
+      <Field label="Address" hint="Optional. Helps reach family in an emergency.">
+        <Input
+          type="text"
+          value={address}
+          onChange={(e) => setAddress(e.target.value)}
+          maxLength={500}
+          placeholder="Village / area"
+          autoComplete="off"
+        />
+      </Field>
+
+      {canCollect ? (
+        <div>
+          <span className="mb-1.5 block text-sm font-medium text-ink-700">Payment</span>
+          <div className="inline-flex rounded-xl bg-ink-100 p-1 ring-1 ring-ink-200" role="radiogroup">
+            {[
+              { value: false, label: 'Unpaid', glyph: '○' },
+              { value: true, label: 'Paid', glyph: '✓' },
+            ].map((option) => {
+              const selected = paid === option.value;
+              const disabled = option.value && !feeKnown;
+              return (
+                <button
+                  key={option.label}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  disabled={disabled}
+                  onClick={() => setPaid(option.value)}
+                  className={cn(
+                    'inline-flex h-9 items-center gap-1.5 rounded-lg px-4 text-sm font-semibold transition-all',
+                    selected
+                      ? option.value
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'bg-white text-ink-900 shadow-xs ring-1 ring-ink-200'
+                      : 'text-ink-600 hover:text-ink-900',
+                    disabled && 'cursor-not-allowed opacity-50 hover:text-ink-600',
+                  )}
+                >
+                  <span aria-hidden="true">{option.glyph}</span>
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+          {!feeKnown ? (
+            <span className="mt-1 block text-xs text-ink-500">
+              No consultation fee is set for {doctorName} yet, so this visit is added as unpaid.
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       <label className="flex items-start gap-2.5 text-sm text-ink-700 cursor-pointer select-none">
         <input

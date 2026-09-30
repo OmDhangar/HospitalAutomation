@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from 'react';
+import type { ButtonHTMLAttributes, ComponentProps, ReactNode } from 'react';
 import type { AppointmentStatus } from '@/lib/domain/types';
 
 export const cn = (...parts: Array<string | false | null | undefined>): string =>
@@ -212,10 +212,11 @@ export function Field({
   );
 }
 
+/** `ComponentProps<'input'>` rather than the attribute type so `ref` passes through (React 19). */
 export function Input({
   className,
   ...props
-}: InputHTMLAttributes<HTMLInputElement>) {
+}: ComponentProps<'input'>) {
   return (
     <input
       {...props}

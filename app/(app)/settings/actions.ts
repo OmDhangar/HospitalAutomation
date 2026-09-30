@@ -4,8 +4,11 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { requireWritableSession } from '@/lib/auth/session';
 import { canConfigureHospital, createStaffUser, setStaffActive, type StaffRole } from '@/lib/services/auth';
+import { parseRupeesToPaise } from '@/lib/domain/patient-billing';
+import { can, isStaffRole } from '@/lib/domain/permissions';
 import { checkCanAdd } from '@/lib/services/entitlements';
 import { createBranch, createDoctor, setDoctorActive } from '@/lib/services/hospital';
+import { setDoctorConsultationFee } from '@/lib/services/patient-billing';
 
 async function authorize() {
   const session = await requireWritableSession();
@@ -66,6 +69,29 @@ export async function addDoctorAction(formData: FormData) {
   redirect('/settings');
 }
 
+/**
+ * A doctor's consultation fee. Changing it never touches a bill already
+ * issued: every bill line carries the price it was charged at.
+ */
+export async function setConsultationFeeAction(formData: FormData) {
+  const session = await authorize();
+  if (!can(session.role, 'billing.price')) redirect('/settings?error=fee');
+
+  const pricePaise = parseRupeesToPaise(String(formData.get('fee') ?? ''));
+  if (pricePaise === null) redirect('/settings?error=fee');
+
+  await setDoctorConsultationFee({
+    hospitalId: session.hospitalId,
+    doctorId: String(formData.get('doctorId') ?? ''),
+    pricePaise,
+    actorUserId: session.userId,
+  });
+
+  revalidatePath('/settings');
+  revalidatePath('/dashboard');
+  redirect('/settings?saved=fee');
+}
+
 export async function toggleDoctorAction(formData: FormData) {
   const session = await authorize();
 
@@ -84,7 +110,9 @@ export async function addStaffAction(formData: FormData) {
   const name = String(formData.get('name') ?? '').trim();
   const email = String(formData.get('email') ?? '').trim();
   const password = String(formData.get('password') ?? '').trim() || undefined;
-  const role = (String(formData.get('role') ?? 'receptionist') as StaffRole);
+  const rawRole = String(formData.get('role') ?? 'receptionist');
+  if (!isStaffRole(rawRole)) redirect('/settings?error=role');
+  const role: StaffRole = rawRole;
   const branchId = String(formData.get('branchId') ?? '').trim() || undefined;
 
   if (!name || !email) redirect('/settings?error=name');

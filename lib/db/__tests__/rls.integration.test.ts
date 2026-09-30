@@ -77,6 +77,17 @@ describe.skipIf(!enabled)('row-level security', () => {
         (${ids.queueEventA}, ${ids.hospitalA}, ${ids.appointmentA}, ${ids.doctorA},
          'enqueue', 'CONFIRMED', 'WAITING')
     `;
+    await admin`
+      insert into doctor_slot_overrides
+        (hospital_id, doctor_id, service_date, slot_time, is_available)
+      values (${ids.hospitalA}, ${ids.doctorA}, '2026-09-04', '10:00:00', false)
+    `;
+    await admin`
+      insert into doctor_interval_blocks
+        (hospital_id, doctor_id, service_date, start_time, end_time, reason)
+      values
+        (${ids.hospitalA}, ${ids.doctorA}, '2026-09-04', '11:00:00', '11:30:00', 'Emergency')
+    `;
   });
 
   afterAll(async () => {
@@ -114,6 +125,26 @@ describe.skipIf(!enabled)('row-level security', () => {
     ).rejects.toThrow(/row-level security/i);
   });
 
+  /**
+   * These two were unprotected until 0027. The queries that read them filter on
+   * doctor_id alone, so this asserts the backstop directly rather than trusting
+   * that every caller remembers to add a hospital filter.
+   */
+  it('scopes doctor availability overrides, which are read by doctor_id alone', async () => {
+    const [overrides, blocks] = await asTenant(ids.hospitalB, async (tx) => [
+      await tx`select id from doctor_slot_overrides where doctor_id = ${ids.doctorA}`,
+      await tx`select id from doctor_interval_blocks where doctor_id = ${ids.doctorA}`,
+    ]);
+    expect(overrides).toHaveLength(0);
+    expect(blocks).toHaveLength(0);
+
+    const own = await asTenant(
+      ids.hospitalA,
+      (tx) => tx`select id from doctor_slot_overrides where doctor_id = ${ids.doctorA}`,
+    );
+    expect(own).toHaveLength(1);
+  });
+
   it('scopes patients, appointments and queue events too, not just branches', async () => {
     const [patients, appointments, events] = await asTenant(ids.hospitalB, async (tx) => [
       await tx`select id from patients`,
@@ -123,6 +154,56 @@ describe.skipIf(!enabled)('row-level security', () => {
     expect(patients).toHaveLength(0);
     expect(appointments).toHaveLength(0);
     expect(events).toHaveLength(0);
+  });
+
+  /**
+   * The named tables above prove the mechanism works. This proves nobody has
+   * added a table that quietly sits outside it: any table carrying hospital_id
+   * must have row-level security enabled, FORCEd so it applies to the owner
+   * too, and a tenant_isolation policy. A new module forgetting one of those
+   * leaks every tenant's rows with no visible symptom, so the assertion is
+   * "the set of unprotected tables is empty" rather than a list to maintain.
+   *
+   * `hospitals` is keyed on `id` instead, and is covered by the cases above.
+   *
+   * `sessions` is the one deliberate exception, for the reason 0001 gives: a
+   * login has to be resolvable before any hospital is known, so it cannot be
+   * filtered by one. Its hospital_id is the *result* of authenticating, not a
+   * key to authorise by, and access to it is confined to lib/services/auth.ts.
+   */
+  it('leaves no tenant table outside row-level security', async () => {
+    const unprotected = await admin`
+      select c.relname,
+             c.relrowsecurity as enabled,
+             c.relforcerowsecurity as forced,
+             exists (
+               select 1 from pg_policies p
+               where p.schemaname = 'public'
+                 and p.tablename = c.relname
+                 and p.policyname = 'tenant_isolation'
+             ) as has_policy
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public'
+        and c.relkind = 'r'
+        and c.relname <> 'sessions'
+        and exists (
+          select 1 from pg_attribute a
+          where a.attrelid = c.oid and a.attname = 'hospital_id' and not a.attisdropped
+        )
+        and not (
+          c.relrowsecurity
+          and c.relforcerowsecurity
+          and exists (
+            select 1 from pg_policies p
+            where p.schemaname = 'public'
+              and p.tablename = c.relname
+              and p.policyname = 'tenant_isolation'
+          )
+        )
+      order by c.relname
+    `;
+    expect(unprotected.map((r) => r.relname)).toEqual([]);
   });
 
   it('proves RLS is what is stopping it: the bypassing role sees everything', async () => {

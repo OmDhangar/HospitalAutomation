@@ -10,8 +10,11 @@ import {
   Stat,
   cn,
 } from '@/components/ui';
+import { PaidToggle } from '@/components/paid-toggle';
 import { SubscriptionCard, UsageNotice } from '@/components/subscription';
 import { requireSession } from '@/lib/auth/session';
+import { can, canSwitchDashboardView, dashboardViewFor } from '@/lib/domain/permissions';
+import type { PaymentStatus } from '@/lib/domain/patient-billing';
 import { formatTimeIn, minutesBetween } from '@/lib/domain/time';
 import { loadDashboardData } from '@/lib/services/dashboard-loader';
 import type { QueueRow } from '@/lib/services/queue';
@@ -42,34 +45,28 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
   const now = new Date();
   const requestId = `page_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 
-  const isDoctorRole = session.role === 'doctor';
   const isOwner = session.role === 'owner';
+  const canSwitchView = canSwitchDashboardView(session.role);
+  const canCollect = can(session.role, 'billing.collect');
+  const canPrice = can(session.role, 'billing.price');
 
-  // Determine effective view: doctor role is always Doctor view; owner can toggle; receptionist is Reception view
   const requestedView = typeof params.view === 'string' ? params.view : null;
-  const effectiveView: 'doctor' | 'reception' = isDoctorRole
-    ? 'doctor'
-    : isOwner && requestedView === 'doctor'
-      ? 'doctor'
-      : isOwner && requestedView === 'reception'
-        ? 'reception'
-        : isOwner
-          ? 'reception' // Owners default to reception desk view with instant doctor switch
-          : 'reception';
+  const effectiveView = dashboardViewFor(session.role, requestedView);
 
   // Single consolidated loader — one transaction, parallel queries
-  const { branches, doctors, snapshot, usage, tiers } = await loadDashboardData({
-    hospitalId: session.hospitalId,
-    requestId,
-    branchId:
-      (typeof params.branch === 'string' ? params.branch : null) ??
-      session.branchId ??
-      null,
-    selectedDoctorId: typeof params.doctor === 'string' ? params.doctor : null,
-    timezone: session.timezone,
-    isOwner,
-    now,
-  });
+  const { branches, doctors, snapshot, usage, tiers, paymentStatuses, consultationFeePaise } =
+    await loadDashboardData({
+      hospitalId: session.hospitalId,
+      requestId,
+      branchId:
+        (typeof params.branch === 'string' ? params.branch : null) ??
+        session.branchId ??
+        null,
+      selectedDoctorId: typeof params.doctor === 'string' ? params.doctor : null,
+      timezone: session.timezone,
+      isOwner,
+      now,
+    });
 
   const branchId = branches[0]?.id ?? null;
 
@@ -111,6 +108,20 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
   );
   const waiting = snapshot?.rows.filter((row) => row.status === 'WAITING') ?? [];
   const scheduledToday = snapshot?.rows.filter((row) => Boolean(row.scheduledSlotAt)) ?? [];
+  const seenToday = snapshot?.completed ?? [];
+
+  /**
+   * Everything a payment pill needs except the row. The doctor view always
+   * gets a read-only pill: the doctor may be the owner, but in the consulting
+   * room they are not at the till.
+   */
+  const payment: PaymentPillContext = {
+    statuses: paymentStatuses,
+    readOnly: effectiveView === 'doctor' || !canCollect,
+    feeKnown: consultationFeePaise !== null,
+    canSetFee: canPrice,
+    doctorName: currentDoctor.name,
+  };
 
   return (
     <>
@@ -165,7 +176,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                 doctorId={selectedId!}
                 paused={snapshot?.paused ?? false}
               />
-              {isOwner ? (
+              {canSwitchView ? (
                 <ViewModeToggle currentView="doctor" doctorId={selectedId} />
               ) : null}
             </div>
@@ -215,6 +226,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                         </p>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <StatusPill status={serving.status} />
+                          <RowPaidToggle row={serving} payment={payment} />
                           <span className="text-sm text-ink-600 font-medium">
                             {serving.status === 'CALLED'
                               ? `Called ${waitedFor(serving.calledAt, now)} ago`
@@ -312,6 +324,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                         doctorId={selectedId!}
                         now={now}
                         timezone={session.timezone}
+                        payment={payment}
                       />
                     ))}
                   </ul>
@@ -349,6 +362,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                 parked={snapshot?.parked ?? []}
                 doctorId={selectedId!}
                 timezone={session.timezone}
+                payment={payment}
               />
 
               {/* Scheduled Appointments Preview */}
@@ -386,7 +400,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
           {/* Doctor selector tabs + View Toggle */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <DoctorTabs doctors={doctors} selectedId={selectedId!} />
-            {isOwner ? (
+            {canSwitchView ? (
               <div className="self-end sm:self-auto mb-5 shrink-0">
                 <ViewModeToggle currentView="reception" doctorId={selectedId} />
               </div>
@@ -473,6 +487,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                         </p>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <StatusPill status={serving.status} />
+                          <RowPaidToggle row={serving} payment={payment} />
                           <span className="text-sm text-ink-500">
                             {serving.status === 'CALLED'
                               ? `called ${waitedFor(serving.calledAt, now)} ago`
@@ -551,6 +566,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                         doctorId={selectedId!}
                         now={now}
                         timezone={session.timezone}
+                        payment={payment}
                       />
                     ))}
                   </ul>
@@ -562,8 +578,18 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
             <div className="space-y-5">
               <Card>
                 <CardHeader title="Add walk-in" hint="Issues a token and sends the queue link" />
-                <AddWalkInForm doctorId={selectedId ?? ''} branchId={branchId} />
+                <AddWalkInForm
+                  doctorId={selectedId ?? ''}
+                  branchId={branchId}
+                  doctorName={currentDoctor.name}
+                  canCollect={canCollect}
+                  feeKnown={consultationFeePaise !== null}
+                />
               </Card>
+
+              {seenToday.length > 0 ? (
+                <SeenTodayCard rows={seenToday} payment={payment} />
+              ) : null}
 
               <Card>
                 <CardHeader title="Today" hint={snapshot?.serviceDate} />
@@ -591,6 +617,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                 parked={snapshot?.parked ?? []}
                 doctorId={selectedId!}
                 timezone={session.timezone}
+                payment={payment}
               />
 
               {usage ? (
@@ -612,10 +639,12 @@ function ParkedPatientsCard({
   parked,
   doctorId,
   timezone,
+  payment,
 }: {
   parked: QueueRow[];
   doctorId: string;
   timezone: string;
+  payment: PaymentPillContext;
 }) {
   return (
     <Card>
@@ -644,6 +673,7 @@ function ParkedPatientsCard({
                   </p>
                   <div className="mt-0.5 flex flex-wrap items-center gap-2">
                     <StatusPill status={row.status} />
+                    <RowPaidToggle row={row} payment={payment} />
                     {row.status === 'HELD' && row.resumeAt ? (
                       <span className="text-xs text-amber-800 font-medium">
                         Auto-resumes at {formatTimeIn(timezone, row.resumeAt)}
@@ -685,12 +715,14 @@ function WaitingRow({
   doctorId,
   now,
   timezone,
+  payment,
 }: {
   row: QueueRow;
   position: number;
   doctorId: string;
   now: Date;
   timezone: string;
+  payment: PaymentPillContext;
 }) {
   return (
     <li className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 sm:px-5 sm:py-3.5 hover:bg-ink-50/50 transition-colors">
@@ -714,6 +746,7 @@ function WaitingRow({
                 🕒 {formatTimeIn(timezone, row.scheduledSlotAt)}
               </span>
             ) : null}
+            <RowPaidToggle row={row} payment={payment} />
           </div>
           <p className="text-xs text-ink-500 mt-0.5">
             #{position} in line · waiting {waitedFor(row.enqueuedAt, now)}
@@ -746,3 +779,53 @@ function WaitingRow({
   );
 }
 
+type PaymentPillContext = {
+  statuses: Record<string, PaymentStatus>;
+  readOnly: boolean;
+  feeKnown: boolean;
+  canSetFee: boolean;
+  doctorName: string;
+};
+
+function RowPaidToggle({ row, payment }: { row: QueueRow; payment: PaymentPillContext }) {
+  return (
+    <PaidToggle
+      appointmentId={row.appointmentId}
+      tokenNumber={row.tokenNumber}
+      status={payment.statuses[row.appointmentId] ?? 'unpaid'}
+      readOnly={payment.readOnly}
+      feeKnown={payment.feeKnown}
+      canSetFee={payment.canSetFee}
+      doctorName={payment.doctorName}
+    />
+  );
+}
+
+/**
+ * Patients the doctor has finished with. The queue forgets them; the desk
+ * cannot, because in most OPDs the fee is paid on the way out.
+ */
+function SeenTodayCard({ rows, payment }: { rows: QueueRow[]; payment: PaymentPillContext }) {
+  const unpaid = rows.filter((row) => (payment.statuses[row.appointmentId] ?? 'unpaid') !== 'paid');
+  return (
+    <Card>
+      <CardHeader
+        title="Seen today"
+        hint={unpaid.length > 0 ? `${unpaid.length} not paid yet` : 'All paid'}
+      />
+      <ul className="max-h-80 divide-y divide-ink-200 overflow-y-auto">
+        {rows.map((row) => (
+          <li key={row.appointmentId} className="flex items-center justify-between gap-3 px-4 py-2.5 sm:px-5">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="numeric flex size-8 shrink-0 items-center justify-center rounded-lg bg-ink-100 text-sm font-bold text-ink-600">
+                {row.tokenNumber}
+              </span>
+              <p className="truncate text-sm font-semibold text-ink-900">{row.patientName}</p>
+            </div>
+            <RowPaidToggle row={row} payment={payment} />
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}

@@ -77,6 +77,11 @@ export type QueueSnapshot = {
   rows: QueueRow[];
   /** Skipped and held patients: out of the line, but recoverable. */
   parked: QueueRow[];
+  /**
+   * Seen today, most recent first. The queue is done with them; the desk
+   * often is not, because many patients pay after the consultation.
+   */
+  completed: QueueRow[];
   medianConsultMinutes: number | null;
   delayMinutes: number;
 };
@@ -380,6 +385,8 @@ export async function createWalkIn(args: {
     name: string;
     age?: number | null;
     gender?: string | null;
+    /** Optional free text. A blank here never erases an address on file. */
+    address?: string | null;
     locale?: 'mr' | 'hi' | 'en';
   };
   actorUserId?: string | null;
@@ -434,6 +441,7 @@ export async function createWalkIn(args: {
       patient_name: string;
       patient_age: number | null;
       patient_gender: string | null;
+      patient_address: string | null;
       patient_locale: typeof patients.$inferSelect['locale'];
       patient_whatsapp_opt_in_at: Date | null;
       patient_created_at: Date;
@@ -450,13 +458,14 @@ export async function createWalkIn(args: {
           returning id, last_token_number
         ),
         upserted_patient as (
-          insert into patients (hospital_id, phone_e164, name, age, gender, locale, whatsapp_opt_in_at)
+          insert into patients (hospital_id, phone_e164, name, age, gender, address, locale, whatsapp_opt_in_at)
           values (
             ${args.hospitalId}::uuid,
             ${args.patient.phoneE164},
             ${args.patient.name},
             ${args.patient.age ?? null},
             ${args.patient.gender ?? null},
+            ${args.patient.address ?? null},
             ${args.patient.locale ?? 'en'},
             ${whatsappOptInAtIso ? sql`${whatsappOptInAtIso}::timestamptz` : sql`NULL`}
           )
@@ -465,6 +474,7 @@ export async function createWalkIn(args: {
             name = ${args.patient.name},
             age = coalesce(${args.patient.age ?? null}, patients.age),
             gender = coalesce(${args.patient.gender ?? null}, patients.gender),
+            address = coalesce(${args.patient.address ?? null}, patients.address),
             whatsapp_opt_in_at = case 
               when ${optedIn} then coalesce(patients.whatsapp_opt_in_at, excluded.whatsapp_opt_in_at)
               else patients.whatsapp_opt_in_at
@@ -548,6 +558,7 @@ export async function createWalkIn(args: {
         upserted_patient.name as patient_name,
         upserted_patient.age as patient_age,
         upserted_patient.gender as patient_gender,
+        upserted_patient.address as patient_address,
         upserted_patient.locale as patient_locale,
         upserted_patient.whatsapp_opt_in_at as patient_whatsapp_opt_in_at,
         upserted_patient.created_at as patient_created_at,
@@ -596,6 +607,7 @@ export async function createWalkIn(args: {
       name: row.patient_name,
       age: row.patient_age !== null && row.patient_age !== undefined ? Number(row.patient_age) : null,
       gender: row.patient_gender,
+      address: row.patient_address,
       locale: row.patient_locale,
       whatsappOptInAt: row.patient_whatsapp_opt_in_at ? new Date(row.patient_whatsapp_opt_in_at) : null,
       createdAt: new Date(row.patient_created_at),
@@ -1164,22 +1176,28 @@ export async function getQueueSnapshotInTx(
     parked: rows
       .filter((row) => row.status === 'SKIPPED' || row.status === 'HELD')
       .sort((a, b) => a.tokenNumber - b.tokenNumber)
-      .map((row) => ({
-        appointmentId: row.id,
-        tokenNumber: row.tokenNumber,
-        status: row.status,
-        priority: row.priority,
-        patientName: row.patientName,
-        patientAge: row.patientAge,
-        patientId: row.patientId,
-        enqueuedAt: row.enqueuedAt,
-        calledAt: row.calledAt,
-        scheduledSlotAt: row.scheduledSlotAt,
-        pausedAt: row.pausedAt ?? null,
-        resumeAt: row.resumeAt ?? null,
-      })),
+      .map(toQueueRow),
+    completed: rows
+      .filter((row) => row.status === 'COMPLETED')
+      .sort((a, b) => b.tokenNumber - a.tokenNumber)
+      .map(toQueueRow),
   };
 }
+
+const toQueueRow = (row: Awaited<ReturnType<typeof loadDayAppointments>>[number]): QueueRow => ({
+  appointmentId: row.id,
+  tokenNumber: row.tokenNumber,
+  status: row.status,
+  priority: row.priority,
+  patientName: row.patientName,
+  patientAge: row.patientAge,
+  patientId: row.patientId,
+  enqueuedAt: row.enqueuedAt,
+  calledAt: row.calledAt,
+  scheduledSlotAt: row.scheduledSlotAt,
+  pausedAt: row.pausedAt ?? null,
+  resumeAt: row.resumeAt ?? null,
+});
 
 export async function getQueueSnapshot(args: {
   hospitalId: string;
