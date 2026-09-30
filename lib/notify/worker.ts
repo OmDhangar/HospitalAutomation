@@ -128,7 +128,31 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
       .leftJoin(whatsappNumbers, eq(whatsappNumbers.hospitalId, notificationOutbox.hospitalId))
       .where(eq(notificationOutbox.id, id));
 
-    if (!row) continue;
+    /**
+     * Enrichment found nothing, which means one of the inner joins above did
+     * not match: a row with no patient, or none with no appointment.
+     *
+     * Previously this simply skipped the row, leaving it at `sending`. Five
+     * minutes later the stale-claim reset put it back to `pending`, it was
+     * claimed again, and it failed the same way — a message cycling forever,
+     * sending nothing and recording no reason. From the outside that is
+     * indistinguishable from a worker that is not running, which is the most
+     * expensive kind of silence to debug.
+     *
+     * Marked failed instead. It is a permanent condition: a missing patient or
+     * appointment row does not come back.
+     */
+    if (!row) {
+      await db
+        .update(notificationOutbox)
+        .set({
+          status: 'failed',
+          failedReason: 'orphaned: no patient or appointment row for this message',
+        })
+        .where(eq(notificationOutbox.id, id));
+      result.failed += 1;
+      continue;
+    }
 
     const templateCode = row.templateCode as TemplateCode;
 

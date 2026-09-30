@@ -10,6 +10,7 @@ import {
 } from '@/lib/db/schema';
 import {
   cleanDoctorName,
+  cleanProfileName,
   fitListTitle,
   formatDoctorName,
   nextBookingStep,
@@ -27,12 +28,21 @@ import { createWalkIn, getQueueSnapshot } from './queue';
 import { getDoctorSlotsForDate } from './scheduling';
 import { bookScheduledSlot } from './web-booking';
 
+/**
+ * Used only when a patient has never given a name, has no record, and set no
+ * WhatsApp profile name. Before the parser captured the profile name this was
+ * the common case rather than the rare one, and every booking landed under it.
+ */
+const FALLBACK_PATIENT_NAME = 'WhatsApp patient';
+
 export type InboundWhatsApp = {
   phoneNumberId: string;
   messageId: string;
   fromPhone: string;
   text?: string;
   replyId?: string;
+  /** The sender's WhatsApp display name, when Meta sent one. */
+  profileName?: string;
 };
 
 /** Copy for the conversation itself. Templates cover everything outbound-only. */
@@ -753,7 +763,9 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
       const pName =
         step.patientName ??
         transition.context.patientName ??
-        (await existingName(hospitalId, phoneE164));
+        (await existingName(hospitalId, phoneE164)) ??
+        cleanProfileName(inbound.profileName) ??
+        FALLBACK_PATIENT_NAME;
       const pAge = step.patientAge ?? transition.context.patientAge;
 
       const created = await createWalkIn({
@@ -905,7 +917,9 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
       const pName =
         step.patientName ??
         transition.context.patientName ??
-        (await existingName(hospitalId, phoneE164));
+        (await existingName(hospitalId, phoneE164)) ??
+        cleanProfileName(inbound.profileName) ??
+        FALLBACK_PATIENT_NAME;
       const pAge = step.patientAge ?? transition.context.patientAge;
       const patientDisplay = pAge ? `${pName} (${pAge} yrs)` : pName;
 
@@ -1090,7 +1104,14 @@ async function loadConversation(hospitalId: string, phoneE164: string) {
   });
 }
 
-async function existingName(hospitalId: string, phoneE164: string): Promise<string> {
+/**
+ * The name already on file for this number, or null.
+ *
+ * Returns null rather than a placeholder so the caller's fallback chain can
+ * tell "no record yet" from "a record that happens to be badly named" — the
+ * distinction that decides whether the WhatsApp profile name should be used.
+ */
+async function existingName(hospitalId: string, phoneE164: string): Promise<string | null> {
   const found = await withTenant(hospitalId, async (tx) => {
     const [patient] = await tx
       .select({ name: patients.name })
@@ -1101,7 +1122,21 @@ async function existingName(hospitalId: string, phoneE164: string): Promise<stri
     return patient?.name ?? null;
   });
 
-  return found ?? 'WhatsApp patient';
+  /**
+   * A stored placeholder counts as no name at all.
+   *
+   * Every booking made before the parser captured the profile name landed on
+   * this string, and treating it as a real record would make those numbers
+   * permanently anonymous — the profile name sits below the stored name in the
+   * fallback chain, so it would never get a chance. Discounting it here lets
+   * the next message from that number book under the patient's actual name.
+   *
+   * The old row is left alone rather than renamed. `patients` is keyed on
+   * (hospital, phone, name) so that one handset can hold a family's profiles,
+   * which means a rename is not an update but a collision risk — and those
+   * rows are attached to appointments that really did happen under that name.
+   */
+  return found === FALLBACK_PATIENT_NAME ? null : found;
 }
 
 async function saveConversation(args: {

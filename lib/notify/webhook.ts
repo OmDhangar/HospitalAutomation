@@ -39,6 +39,16 @@ export type InboundEvent = {
   fromPhone: string;
   text?: string;
   replyId?: string;
+  /**
+   * The sender's WhatsApp display name, from the `contacts` array Meta sends
+   * beside `messages`.
+   *
+   * Optional because a contact can be absent — a status-only payload carries
+   * none, and a sender who has set no profile name yields nothing useful. The
+   * caller decides what to do without it; this module only reports what
+   * arrived.
+   */
+  profileName?: string;
 };
 
 export type StatusEvent = {
@@ -53,6 +63,14 @@ export type ParsedWebhook = {
 
 type RawValue = {
   metadata?: { phone_number_id?: string };
+  /**
+   * Parallel to `messages`, correlated by `wa_id` against a message's `from`.
+   * Meta sends one entry per distinct sender in the batch.
+   */
+  contacts?: Array<{
+    wa_id?: string;
+    profile?: { name?: string };
+  }>;
   messages?: Array<{
     id?: string;
     from?: string;
@@ -87,11 +105,26 @@ export function parseWebhook(payload: unknown): ParsedWebhook {
       if (!value) continue;
 
       const phoneNumberId = value.metadata?.phone_number_id;
+      const contacts = value.contacts ?? [];
 
       for (const message of value.messages ?? []) {
         // Without an id we cannot de-duplicate, and without a sender we cannot
         // reply. Either missing makes the event unusable.
         if (!phoneNumberId || !message.id || !message.from) continue;
+
+        /**
+         * Matched on wa_id rather than taken positionally. The arrays are
+         * usually one-to-one, but nothing in Meta's contract says they are
+         * ordered together, and attaching one patient's name to another
+         * patient's booking is the kind of bug that reaches a consulting room.
+         *
+         * The single-contact fallback covers the ordinary case where wa_id and
+         * `from` differ in formatting; with more than one contact there is no
+         * safe guess, so the name is simply absent.
+         */
+        const contact =
+          contacts.find((entry) => entry.wa_id === message.from) ??
+          (contacts.length === 1 ? contacts[0] : undefined);
 
         result.messages.push({
           phoneNumberId,
@@ -100,6 +133,7 @@ export function parseWebhook(payload: unknown): ParsedWebhook {
           text: message.text?.body,
           replyId:
             message.interactive?.list_reply?.id ?? message.interactive?.button_reply?.id,
+          profileName: contact?.profile?.name,
         });
       }
 

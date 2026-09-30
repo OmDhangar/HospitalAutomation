@@ -437,3 +437,53 @@ export function formatDoctorName(name: string, locale: Locale = 'en'): string {
   return `Dr. ${cleaned}`;
 }
 
+
+/**
+ * The longest patient name worth keeping from a WhatsApp profile.
+ *
+ * Meta allows far more, and a display name is whatever the sender typed into
+ * their phone — it lands on a queue card, a token slip and a display board,
+ * none of which have room for a paragraph.
+ */
+export const MAX_PROFILE_NAME_LENGTH = 60;
+
+/**
+ * A WhatsApp display name, made fit to use as a patient name — or null.
+ *
+ * This is untrusted, user-controlled text arriving from a webhook and going
+ * straight onto a medical record, so it is narrowed rather than trusted:
+ * control characters removed, whitespace collapsed, length capped.
+ *
+ * Null rather than a placeholder when nothing usable survives. The caller
+ * already has a fallback chain, and returning "WhatsApp patient" from here
+ * would make an absent name indistinguishable from a patient who really is
+ * called that — which is exactly the confusion this function exists to end.
+ */
+export function cleanProfileName(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+
+  const cleaned = raw
+    /**
+     * Unicode categories rather than codepoint ranges: \p{C} covers control
+     * and format characters in one, including the zero-width joiners emoji
+     * are built from and the bidi overrides that can make a name render as
+     * something other than what is stored.
+     */
+    .replace(/[\p{C}\p{Zl}\p{Zp}]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) return null;
+
+  /**
+   * A name made entirely of punctuation or symbols is not a name. Digits are
+   * deliberately allowed through: "Anita 2" is a real thing people put in a
+   * profile to distinguish family members sharing a handset, and discarding it
+   * would lose the only distinguishing mark reception has.
+   */
+  if (!/\p{L}|\p{N}/u.test(cleaned)) return null;
+
+  return cleaned.length > MAX_PROFILE_NAME_LENGTH
+    ? cleaned.slice(0, MAX_PROFILE_NAME_LENGTH).trim()
+    : cleaned;
+}
