@@ -4,11 +4,12 @@ import { markRequestReadOnly } from '@/lib/db/request-context';
 import { auditLogs, branches, hospitals, sessions, staffMemberships, users } from '@/lib/db/schema';
 import { hashPassword, verifyPassword } from '@/lib/security/password';
 import { generateSessionToken, hashToken } from '@/lib/security/tokens';
+import { can, type StaffRole } from '@/lib/domain/permissions';
 import { assertCanAdd } from './entitlements';
 
 const SESSION_TTL_DAYS = 14;
 
-export type StaffRole = 'owner' | 'receptionist' | 'doctor';
+export type { StaffRole } from '@/lib/domain/permissions';
 
 export type Session = {
   userId: string;
@@ -276,10 +277,9 @@ export async function logout(token: string | undefined) {
 }
 
 /** Reception and owners may move the queue; doctors may move their own. */
-export const canMutateQueue = (role: StaffRole): boolean =>
-  role === 'owner' || role === 'receptionist' || role === 'doctor';
+export const canMutateQueue = (role: StaffRole): boolean => can(role, 'queue.mutate');
 
-export const canConfigureHospital = (role: StaffRole): boolean => role === 'owner';
+export const canConfigureHospital = (role: StaffRole): boolean => can(role, 'hospital.configure');
 
 /** Branches are tenant data, so this read goes through the RLS-scoped path. */
 export async function listBranches(hospitalId: string) {

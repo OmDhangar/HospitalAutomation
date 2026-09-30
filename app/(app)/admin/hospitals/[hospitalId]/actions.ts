@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { requirePlatformAdmin } from '@/lib/auth/platform';
 import { setSessionCookie } from '@/lib/auth/session';
 import { SUBSCRIPTION_STATUSES, type SubscriptionStatus } from '@/lib/domain/subscription';
+import { STAFF_ROLES } from '@/lib/domain/permissions';
 import { createStaffUser, type StaffRole } from '@/lib/services/auth';
 import { ImpersonationError, startImpersonation } from '@/lib/services/impersonation';
 import { bindHospitalWaba, WabaBindingError } from '@/lib/services/whatsapp-byo';
@@ -275,7 +276,7 @@ export async function setMembershipActiveAction(formData: FormData) {
   back(hospitalId, { done: active ? 'access_restored' : 'access_revoked' });
 }
 
-const ROLES: StaffRole[] = ['owner', 'receptionist', 'doctor'];
+const ROLES: readonly StaffRole[] = STAFF_ROLES;
 
 export async function addStaffAction(formData: FormData) {
   await requirePlatformAdmin();

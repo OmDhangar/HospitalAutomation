@@ -1,9 +1,11 @@
 import { withTenant } from '@/lib/db';
 import { listBranchesInTx } from '@/lib/services/auth';
 import { listDoctorsInTx, type DoctorListItem } from '@/lib/services/hospital';
+import { getConsultationFeesInTx, getPaymentStatusesInTx } from '@/lib/services/patient-billing';
 import { getQueueSnapshotInTx, type QueueSnapshot } from '@/lib/services/queue';
 import { getCurrentSubscriptionInTx, listActiveTiers, type Tier } from '@/lib/services/subscriptions';
 import { getHospitalUsageInTx, type HospitalUsage } from '@/lib/services/usage';
+import type { PaymentStatus } from '@/lib/domain/patient-billing';
 import { serviceDateIn } from '@/lib/domain/time';
 
 export type DashboardData = {
@@ -12,6 +14,10 @@ export type DashboardData = {
   snapshot: QueueSnapshot | null;
   usage: HospitalUsage | null;
   tiers: Tier[];
+  /** By appointment id. Absent means nothing has been charged or paid yet. */
+  paymentStatuses: Record<string, PaymentStatus>;
+  /** The selected doctor's fee in paise, or null if none is set. */
+  consultationFeePaise: number | null;
 };
 
 
@@ -118,14 +124,33 @@ export async function loadDashboardData(args: {
     ]);
     const tPhase2 = performance.now();
 
+    // Phase 3: payment pills for everyone on screen, and the fee the Paid
+    // toggle will charge. Needs the snapshot's appointment ids, so it follows.
+    const onScreen = snapshot
+      ? [...snapshot.rows, ...snapshot.parked, ...snapshot.completed].map((r) => r.appointmentId)
+      : [];
+    const [paymentStatuses, fees] = await Promise.all([
+      getPaymentStatusesInTx(tx, onScreen),
+      selectedId ? getConsultationFeesInTx(tx, [selectedId]) : Promise.resolve(new Map<string, number>()),
+    ]);
+    const tPhase3 = performance.now();
+
     console.log(
       `[PERF:dashboard:inTx] req=${reqId} ` +
       `Phase1(branches=${tBranches.toFixed(1)}ms, docs=${tDoctors.toFixed(1)}ms, sub=${tSub.toFixed(1)}ms -> wall=${(tPhase1 - t0).toFixed(1)}ms) | ` +
       `Phase2(snapshot=${tSnapshot.toFixed(1)}ms, usage=${tUsage.toFixed(1)}ms -> wall=${(tPhase2 - tPhase1).toFixed(1)}ms) | ` +
-      `totalInTx: ${(tPhase2 - t0).toFixed(1)}ms`
+      `Phase3(payments=${(tPhase3 - tPhase2).toFixed(1)}ms) | ` +
+      `totalInTx: ${(tPhase3 - t0).toFixed(1)}ms`
     );
 
-    return { branches, doctors, snapshot, usage };
+    return {
+      branches,
+      doctors,
+      snapshot,
+      usage,
+      paymentStatuses,
+      consultationFeePaise: selectedId ? (fees.get(selectedId) ?? null) : null,
+    };
   });
 
   const tBeforeTiers = performance.now();

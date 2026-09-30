@@ -13,10 +13,12 @@ import { requireSession } from '@/lib/auth/session';
 import { canConfigureHospital, listBranches, listStaffMembers } from '@/lib/services/auth';
 import { describeLimit } from '@/lib/services/entitlements';
 import { listDoctors } from '@/lib/services/hospital';
+import { getConsultationFees } from '@/lib/services/patient-billing';
 import {
   addBranchAction,
   addDoctorAction,
   addStaffAction,
+  setConsultationFeeAction,
   toggleDoctorAction,
   toggleStaffAction,
 } from './actions';
@@ -65,6 +67,10 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
     listStaffMembers(session.hospitalId),
   ]);
 
+  const fees = await getConsultationFees(
+    session.hospitalId,
+    doctors.map((d) => d.id),
+  );
   const activeDoctorCount = doctors.filter((d) => d.active).length;
   const activeStaffCount = staff.filter((s) => s.active).length;
 
@@ -81,6 +87,15 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
 
       {params.error === 'name' ? (
         <Alert tone="error">A name is required.</Alert>
+      ) : null}
+      {params.error === 'role' ? (
+        <Alert tone="error">Choose a role for the new staff member.</Alert>
+      ) : null}
+      {params.error === 'fee' ? (
+        <Alert tone="error">Enter the fee in rupees, like 300.</Alert>
+      ) : null}
+      {params.saved === 'fee' ? (
+        <Alert tone="success">Consultation fee saved. Bills already issued keep their old amount.</Alert>
       ) : null}
 
       {/*
@@ -262,6 +277,32 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                       </Button>
                     </form>
                   </div>
+
+                  <form
+                    action={setConsultationFeeAction}
+                    className="flex flex-wrap items-end gap-2"
+                  >
+                    <input type="hidden" name="doctorId" value={doctor.id} />
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-medium text-ink-600">
+                        Consultation fee (₹)
+                      </span>
+                      <Input
+                        name="fee"
+                        type="text"
+                        inputMode="decimal"
+                        defaultValue={
+                          fees.has(doctor.id) ? String(fees.get(doctor.id)! / 100) : ''
+                        }
+                        placeholder="Not set"
+                        className="w-32 py-1.5"
+                        required
+                      />
+                    </label>
+                    <Button type="submit" size="sm" variant="secondary">
+                      Save fee
+                    </Button>
+                  </form>
 
                   {/* Mode badge */}
                   <div className="pt-0.5">

@@ -6,6 +6,7 @@ import { ExpiryBanner } from '@/components/expiry-banner';
 import { ImpersonationBanner } from '@/components/impersonation-banner';
 import { MobileNav, type NavItem } from '@/components/mobile-nav';
 import { getSession, requireSession } from '@/lib/auth/session';
+import { can } from '@/lib/domain/permissions';
 import { daysUntilExpiry, expiryBucket } from '@/lib/domain/subscription';
 import { getCurrentSubscription } from '@/lib/services/subscriptions';
 import { signOutAction } from './dashboard/actions';
@@ -30,11 +31,11 @@ async function AppHeader() {
     { label: 'Queue', href: '/dashboard' },
   ];
 
-  if (session.role !== 'doctor') {
+  if (can(session.role, 'reports.view')) {
     navItems.push({ label: 'Reports', href: '/reports' });
   }
 
-  if (session.role === 'owner') {
+  if (can(session.role, 'hospital.configure')) {
     navItems.push(
       { label: 'Subscription', href: '/subscription' },
       { label: 'Pricing', href: '/pricing' },
@@ -111,7 +112,7 @@ async function AppHeader() {
  */
 async function PlanExpiryNotice() {
   const session = await getSession();
-  if (!session || session.role === 'doctor') return null;
+  if (!session || !can(session.role, 'subscription.notice')) return null;
 
   const subscription = await getCurrentSubscription(session.hospitalId);
   if (!subscription) return null;
@@ -122,7 +123,7 @@ async function PlanExpiryNotice() {
     <ExpiryBanner
       bucket={expiryBucket(subscription.endsAt, now)}
       daysRemaining={daysUntilExpiry(subscription.endsAt, now)}
-      canRenew={session.role === 'owner'}
+      canRenew={can(session.role, 'hospital.configure')}
     />
   );
 }

@@ -1,7 +1,9 @@
 import { sql } from 'drizzle-orm';
 import {
   boolean,
+  check,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -14,6 +16,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
+import { STAFF_ROLES } from '@/lib/domain/permissions';
 import { APPOINTMENT_STATUSES, QUEUE_ACTIONS } from '@/lib/domain/types';
 
 /**
@@ -23,7 +26,7 @@ import { APPOINTMENT_STATUSES, QUEUE_ACTIONS } from '@/lib/domain/types';
 export const appointmentStatus = pgEnum('appointment_status', APPOINTMENT_STATUSES);
 export const queueAction = pgEnum('queue_action', QUEUE_ACTIONS);
 
-export const staffRole = pgEnum('staff_role', ['owner', 'receptionist', 'doctor']);
+export const staffRole = pgEnum('staff_role', STAFF_ROLES);
 export const appointmentSource = pgEnum('appointment_source', ['walk_in', 'reception', 'whatsapp']);
 export const locale = pgEnum('locale', ['mr', 'hi', 'en']);
 export const notificationChannel = pgEnum('notification_channel', ['whatsapp', 'sms']);
@@ -518,6 +521,8 @@ export const patients = pgTable(
     name: text('name').notNull(),
     age: smallint('age'),
     gender: text('gender'),
+    /** Free text, for finding a family in an emergency. Bills snapshot it. */
+    address: text('address'),
     locale: locale('locale'),
     whatsappOptInAt: timestamp('whatsapp_opt_in_at', { withTimezone: true }),
     createdAt: createdAt(),
@@ -1078,5 +1083,239 @@ export const payments = pgTable(
       .on(t.providerLinkId)
       .where(sql`provider_link_id is not null`),
     index('payments_hospital_idx').on(t.hospitalId, t.createdAt),
+  ],
+);
+
+/* ------------------------------------------------------ patient billing */
+
+/**
+ * The patient side of money: what the hospital charges a patient, and what
+ * the patient paid. Separate from `payments`/`subscriptions` above, which are
+ * the hospital paying us. Migration 0026 carries the reasoning, the triggers
+ * that freeze recorded money, and the composite tenant keys; this mirrors it
+ * for typed queries.
+ */
+
+export const encounterStage = pgEnum('encounter_stage', ['opd', 'ipd']);
+export const encounterStatus = pgEnum('encounter_status', ['open', 'closed', 'cancelled']);
+export const encounterOrigin = pgEnum('encounter_origin', ['queue', 'emergency', 'direct']);
+export const serviceKind = pgEnum('service_kind', ['consultation']);
+export const billStatus = pgEnum('bill_status', ['draft', 'final', 'cancelled']);
+export const billItemType = pgEnum('bill_item_type', ['consultation', 'medicine', 'other']);
+export const patientPaymentKind = pgEnum('patient_payment_kind', ['payment', 'refund']);
+export const patientPaymentMethod = pgEnum('patient_payment_method', [
+  'cash',
+  'upi',
+  'card',
+  'bank',
+  'other',
+]);
+
+const voidColumns = () => ({
+  voidedAt: timestamp('voided_at', { withTimezone: true }),
+  voidedByUserId: uuid('voided_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  voidReason: text('void_reason'),
+});
+
+/** What the hospital charges for things that are not medicines. Today: consultation fees. */
+export const services = pgTable(
+  'services',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    kind: serviceKind('kind').notNull(),
+    name: text('name').notNull(),
+    doctorId: uuid('doctor_id').references(() => doctors.id),
+    sellingPricePaise: integer('selling_price_paise').notNull(),
+    taxRateBp: integer('tax_rate_bp').notNull().default(0),
+    active: boolean('active').notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('services_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('services_doctor_consultation_key')
+      .on(t.hospitalId, t.doctorId)
+      .where(sql`kind = 'consultation'`),
+  ],
+);
+
+/**
+ * One episode of care. It points at the appointment that started it; the
+ * appointment never points back, which is what keeps the queue untouched.
+ */
+export const encounters = pgTable(
+  'encounters',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id')
+      .notNull()
+      .references(() => branches.id),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id, { onDelete: 'cascade' }),
+    appointmentId: uuid('appointment_id').references(() => appointments.id, {
+      onDelete: 'set null',
+    }),
+    attendingDoctorId: uuid('attending_doctor_id')
+      .notNull()
+      .references(() => doctors.id),
+    origin: encounterOrigin('origin').notNull(),
+    stage: encounterStage('stage').notNull().default('opd'),
+    status: encounterStatus('status').notNull().default('open'),
+    openedByUserId: uuid('opened_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    openedAt: timestamp('opened_at', { withTimezone: true }).notNull().defaultNow(),
+    closedAt: timestamp('closed_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('encounters_tenant_patient_key').on(t.hospitalId, t.id, t.patientId),
+    uniqueIndex('encounters_appointment_key')
+      .on(t.appointmentId)
+      .where(sql`appointment_id is not null`),
+    index('encounters_patient_idx').on(t.patientId, t.openedAt),
+    index('encounters_open_idx')
+      .on(t.hospitalId, t.branchId, t.stage)
+      .where(sql`status = 'open'`),
+    check('encounters_closed_at', sql`(status = 'open') = (closed_at is null)`),
+  ],
+);
+
+/** A draft is the running bill; `final` is frozen by trigger. */
+export const bills = pgTable(
+  'bills',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    status: billStatus('status').notNull().default('draft'),
+    billNumber: text('bill_number'),
+    fiscalYear: text('fiscal_year'),
+    subtotalPaise: integer('subtotal_paise'),
+    discountPaise: integer('discount_paise'),
+    taxPaise: integer('tax_paise'),
+    totalPaise: integer('total_paise'),
+    patientName: text('patient_name'),
+    patientPhone: text('patient_phone'),
+    patientAddress: text('patient_address'),
+    createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    finalizedAt: timestamp('finalized_at', { withTimezone: true }),
+    finalizedByUserId: uuid('finalized_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    cancelledByUserId: uuid('cancelled_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    cancelReason: text('cancel_reason'),
+    supersedesBillId: uuid('supersedes_bill_id'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'bills_encounter_fk',
+      columns: [t.hospitalId, t.encounterId, t.patientId],
+      foreignColumns: [encounters.hospitalId, encounters.id, encounters.patientId],
+    }).onDelete('cascade'),
+    uniqueIndex('bills_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('bills_one_draft_key').on(t.encounterId).where(sql`status = 'draft'`),
+    uniqueIndex('bills_number_key')
+      .on(t.hospitalId, t.billNumber)
+      .where(sql`bill_number is not null`),
+    index('bills_encounter_idx').on(t.encounterId),
+  ],
+);
+
+/**
+ * One chargeable line, with the price it was charged at copied onto it.
+ * Items are only ever inserted or voided, and only while the bill is a draft.
+ */
+export const billItems = pgTable(
+  'bill_items',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    billId: uuid('bill_id').notNull(),
+    itemType: billItemType('item_type').notNull(),
+    serviceId: uuid('service_id'),
+    appointmentId: uuid('appointment_id').references(() => appointments.id),
+    description: text('description').notNull(),
+    quantity: integer('quantity').notNull(),
+    configuredUnitPricePaise: integer('configured_unit_price_paise'),
+    unitPricePaise: integer('unit_price_paise').notNull(),
+    priceOverrideReason: text('price_override_reason'),
+    subtotalPaise: integer('subtotal_paise').notNull(),
+    discountPaise: integer('discount_paise').notNull().default(0),
+    taxRateBp: integer('tax_rate_bp').notNull().default(0),
+    taxPaise: integer('tax_paise').notNull().default(0),
+    totalPaise: integer('total_paise').notNull(),
+    createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    ...voidColumns(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'bill_items_bill_fk',
+      columns: [t.hospitalId, t.billId],
+      foreignColumns: [bills.hospitalId, bills.id],
+    }).onDelete('cascade'),
+    foreignKey({
+      name: 'bill_items_service_fk',
+      columns: [t.hospitalId, t.serviceId],
+      foreignColumns: [services.hospitalId, services.id],
+    }),
+    index('bill_items_bill_idx').on(t.billId).where(sql`voided_at is null`),
+    uniqueIndex('bill_items_consultation_once')
+      .on(t.appointmentId)
+      .where(sql`appointment_id is not null and voided_at is null`),
+  ],
+);
+
+/** Money in, per encounter. Deposits are payments taken before a bill is final. */
+export const patientPayments = pgTable(
+  'patient_payments',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    billId: uuid('bill_id'),
+    kind: patientPaymentKind('kind').notNull().default('payment'),
+    amountPaise: integer('amount_paise').notNull(),
+    method: patientPaymentMethod('method').notNull().default('cash'),
+    reference: text('reference'),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+    receivedByUserId: uuid('received_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: createdAt(),
+    ...voidColumns(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'patient_payments_encounter_fk',
+      columns: [t.hospitalId, t.encounterId, t.patientId],
+      foreignColumns: [encounters.hospitalId, encounters.id, encounters.patientId],
+    }).onDelete('cascade'),
+    foreignKey({
+      name: 'patient_payments_bill_fk',
+      columns: [t.hospitalId, t.billId],
+      foreignColumns: [bills.hospitalId, bills.id],
+    }),
+    index('patient_payments_encounter_idx').on(t.encounterId).where(sql`voided_at is null`),
   ],
 );
