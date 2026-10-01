@@ -3,7 +3,13 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { requireWritableSession } from '@/lib/auth/session';
-import { canConfigureHospital, createStaffUser, setStaffActive, type StaffRole } from '@/lib/services/auth';
+import {
+  canConfigureHospital,
+  createStaffUser,
+  setStaffActive,
+  StaffAccountError,
+  type StaffRole,
+} from '@/lib/services/auth';
 import { parseRupeesToPaise } from '@/lib/domain/patient-billing';
 import { can, isStaffRole } from '@/lib/domain/permissions';
 import { checkCanAdd } from '@/lib/services/entitlements';
@@ -131,13 +137,15 @@ export async function addStaffAction(formData: FormData) {
   const session = await authorize();
   const name = String(formData.get('name') ?? '').trim();
   const email = String(formData.get('email') ?? '').trim();
-  const password = String(formData.get('password') ?? '').trim() || undefined;
+  // Required: the account is otherwise unusable, since there is no default.
+  const password = String(formData.get('password') ?? '').trim();
   const rawRole = String(formData.get('role') ?? 'receptionist');
   if (!isStaffRole(rawRole)) redirect('/settings?error=role');
   const role: StaffRole = rawRole;
   const branchId = String(formData.get('branchId') ?? '').trim() || undefined;
 
   if (!name || !email) redirect('/settings?error=name');
+  if (!password) redirect('/settings?error=weak_password');
 
   const check = await checkCanAdd({ hospitalId: session.hospitalId, kind: 'staff' });
   if (!check.allowed) redirect('/settings?limit=staff');
@@ -154,6 +162,9 @@ export async function addStaffAction(formData: FormData) {
   } catch (err: unknown) {
     if (err instanceof Error && err.name === 'PlanLimitError') {
       redirect('/settings?limit=staff');
+    }
+    if (err instanceof StaffAccountError) {
+      redirect(`/settings?error=${err.code === 'EMAIL_IN_USE' ? 'email_in_use' : 'weak_password'}`);
     }
     throw err;
   }

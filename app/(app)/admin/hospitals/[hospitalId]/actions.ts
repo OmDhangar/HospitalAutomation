@@ -6,7 +6,7 @@ import { requirePlatformAdmin } from '@/lib/auth/platform';
 import { setSessionCookie } from '@/lib/auth/session';
 import { SUBSCRIPTION_STATUSES, type SubscriptionStatus } from '@/lib/domain/subscription';
 import { STAFF_ROLES } from '@/lib/domain/permissions';
-import { createStaffUser, type StaffRole } from '@/lib/services/auth';
+import { createStaffUser, StaffAccountError, type StaffRole } from '@/lib/services/auth';
 import { ImpersonationError, startImpersonation } from '@/lib/services/impersonation';
 import { bindHospitalWaba, WabaBindingError } from '@/lib/services/whatsapp-byo';
 import {
@@ -289,8 +289,11 @@ export async function addStaffAction(formData: FormData) {
   if (!email || !name || !role) back(hospitalId, { error: 'INVALID_INPUT' });
 
   try {
+    // No password: the account is unusable until a temporary one is issued
+    // from the staff list, which shows it once and forces a change.
     await createStaffUser({ email, name, hospitalId, role });
   } catch (error) {
+    if (error instanceof StaffAccountError) back(hospitalId, { error: error.code });
     // The plan-limit path throws PlanLimitError; anything else is unexpected.
     if (error instanceof Error && error.name === 'PlanLimitError') {
       back(hospitalId, { error: 'PLAN_LIMIT' });

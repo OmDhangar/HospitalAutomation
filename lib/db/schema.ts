@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigserial,
   boolean,
   check,
   date,
@@ -316,6 +317,23 @@ export const users = pgTable('users', {
   lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
   createdAt: createdAt(),
 });
+
+/**
+ * Counted events for throttling sign-in and public booking (0030).
+ *
+ * Shared across server instances, which an in-memory limiter is not. Holds
+ * only a hash of each key, never the email, phone or IP itself. No RLS: these
+ * checks run before any hospital is known.
+ */
+export const rateLimitEvents = pgTable(
+  'rate_limit_events',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    keyHash: text('key_hash').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('rate_limit_events_key_idx').on(t.keyHash, t.createdAt)],
+);
 
 /**
  * Opaque session tokens are stored hashed, so a database leak cannot be

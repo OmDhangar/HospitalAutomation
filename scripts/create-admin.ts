@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import postgres from 'postgres';
-import { hashPassword } from '@/lib/security/password';
+import { hashPassword, passwordProblem } from '@/lib/security/password';
 
 /**
  * Creates or updates an admin/owner user and hospital on the platform.
@@ -19,6 +19,13 @@ async function main() {
 
   if (!email || !password) {
     console.error('Usage: npx tsx scripts/create-admin.ts <email> <password> [hospital_name] [user_name]');
+    process.exit(1);
+  }
+
+  // A platform operator can reach every hospital, so this is the one password
+  // that most needs to be strong. The same floor as everywhere else, at least.
+  if (passwordProblem(password)) {
+    console.error('Use a password of at least 10 characters that is not an old default.');
     process.exit(1);
   }
 

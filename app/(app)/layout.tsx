@@ -80,6 +80,12 @@ async function AppHeader() {
               {session.role}
             </p>
           </div>
+          <Link
+            href="/change-password"
+            className="hidden rounded-lg px-3 py-1.5 text-sm font-medium text-ink-600 transition-colors hover:bg-ink-100 sm:block"
+          >
+            Password
+          </Link>
           <form action={signOutAction} className="hidden sm:block">
             <button
               type="submit"
@@ -91,7 +97,7 @@ async function AppHeader() {
 
           {/* Mobile Hamburger Navigation */}
           <MobileNav
-            items={navItems}
+            items={[...navItems, { label: 'Change password', href: '/change-password' }]}
             userName={session.name}
             userRole={session.role}
             hospitalName={session.hospitalName}

@@ -47,6 +47,39 @@ export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+let roleCheck: Promise<void> | undefined;
+
+/**
+ * Refuses to serve tenant data on a connection that ignores row-level security.
+ *
+ * Every guarantee withTenant makes rests on DATABASE_URL being the restricted
+ * app role. Point it at the owner/admin role — an easy slip, since both strings
+ * look alike — and RLS silently stops applying: every hospital can read every
+ * other hospital's patients, and nothing errors. So the app asks Postgres once,
+ * on first use, and in production stops rather than run unprotected.
+ */
+function assertRestrictedRole(): Promise<void> {
+  roleCheck ??= (async () => {
+    const [role] = await getDb().execute<{ name: string; bypass: boolean }>(
+      sql`select current_user as name, (rolsuper or rolbypassrls) as bypass
+          from pg_roles where rolname = current_user`,
+    );
+    if (!role?.bypass) return;
+
+    const message =
+      `DATABASE_URL connects as "${role.name}", which bypasses row-level security. ` +
+      'Tenant isolation would not apply. Use the restricted app role (see .env.example).';
+    if (process.env.NODE_ENV === 'production') throw new Error(message);
+    console.warn(`[DB:role] ${message}`);
+  })().catch((error) => {
+    // Never cache a failure: a misconfigured role keeps failing every request
+    // until fixed, and a transient connection error is simply retried.
+    roleCheck = undefined;
+    throw error;
+  });
+  return roleCheck;
+}
+
 /**
  * Runs `fn` inside a transaction scoped to one hospital.
  *
@@ -77,6 +110,8 @@ export async function withTenant<T>(
   if (!UUID_RE.test(hospitalId)) {
     throw new Error('withTenant requires a UUID hospital id');
   }
+
+  await assertRestrictedRole();
 
   const t0 = performance.now();
   return getDb().transaction(async (tx) => {
