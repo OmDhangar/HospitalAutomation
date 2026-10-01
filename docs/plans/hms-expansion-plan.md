@@ -1,6 +1,10 @@
 # HMS expansion plan: walk-in, clinical & billing foundation, OPD → IPD → discharge, lab, waiting-room translation
 
-**Status: draft v2 for sign-off. No code has been written.**
+**Status: v2, being implemented.** Phases 0 and 1 are shipped, and Phase 2 is built.
+See [../architecture/progress.md](../architecture/progress.md) for what exists, and
+[../architecture/decisions.md](../architecture/decisions.md) for where the build
+departed from this plan. Migration numbers here are the *planned* ones; the real
+ones are in [../architecture/migrations.md §5](../architecture/migrations.md).
 
 Changes in v2:
 - **Phone number stays mandatory.** Phone-less walk-ins are removed from scope.

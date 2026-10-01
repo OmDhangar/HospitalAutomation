@@ -10,6 +10,7 @@ import {
   Stat,
   cn,
 } from '@/components/ui';
+import { ConsultationGateProvider } from '@/components/clinical/consultation-gate';
 import { PaidToggle } from '@/components/paid-toggle';
 import { SubscriptionCard, UsageNotice } from '@/components/subscription';
 import { requireSession } from '@/lib/auth/session';
@@ -18,6 +19,7 @@ import type { PaymentStatus } from '@/lib/domain/patient-billing';
 import { formatTimeIn, minutesBetween } from '@/lib/domain/time';
 import { loadDashboardData } from '@/lib/services/dashboard-loader';
 import type { QueueRow } from '@/lib/services/queue';
+import { ConsultationPanel } from './consultation-panel';
 import {
   AddWalkInForm,
   CallNextButton,
@@ -49,6 +51,8 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
   const canSwitchView = canSwitchDashboardView(session.role);
   const canCollect = can(session.role, 'billing.collect');
   const canPrice = can(session.role, 'billing.price');
+  // Support sessions are read-only and never see clinical records (0028).
+  const showConsultation = can(session.role, 'clinical.write') && !session.readOnly;
 
   const requestedView = typeof params.view === 'string' ? params.view : null;
   const effectiveView = dashboardViewFor(session.role, requestedView);
@@ -193,6 +197,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
           {/* Main Grid: Left = Consultation & Waiting Queue, Right = Attention & Stats */}
           <div className="grid items-start gap-5 lg:grid-cols-3">
             {/* Main Clinical Focus Area */}
+            <ConsultationGateProvider>
             <div className="space-y-5 lg:col-span-2">
               {/* NOW SERVING CARD (Large, High-Contrast with the 3 Core Clinical Actions) */}
               <Card>
@@ -303,6 +308,14 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                 </div>
               </Card>
 
+              {/*
+               * Keyed by appointment so a new patient gets a fresh panel, and
+               * so the panel is never re-initialised from props mid-typing.
+               */}
+              {serving && showConsultation ? (
+                <ConsultationPanel key={serving.appointmentId} appointmentId={serving.appointmentId} />
+              ) : null}
+
               {/* WAITING QUEUE LIST */}
               <Card>
                 <CardHeader
@@ -331,6 +344,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                 )}
               </Card>
             </div>
+            </ConsultationGateProvider>
 
             {/* Sidebar: Stats & Needs Attention (Skipped & Paused) */}
             <div className="space-y-5">

@@ -3,6 +3,7 @@
 import React, { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button, Field, Input, cn } from '@/components/ui';
+import { useConsultationGate } from '@/components/clinical/consultation-gate';
 import { useToast } from '@/components/toast';
 import { playChime } from '@/lib/utils/sound';
 import type { QueueAction } from '@/lib/domain/types';
@@ -289,11 +290,15 @@ export function CallNextButton({
   size?: 'md' | 'lg' | 'xl';
 }) {
   const toast = useToast();
+  const gate = useConsultationGate();
   const [isPending, startTransition] = useTransition();
 
   const handleCallNext = () => {
-    playChime();
     startTransition(async () => {
+      // In the doctor view, an unsaved consultation is saved first. If that
+      // fails the queue stays put, and the panel says why.
+      if (gate && !(await gate.run())) return;
+      playChime();
       const res = await advanceQueueDynamic({ doctorId });
       if (res.ok) {
         toast.success('Queue Advanced', 'Next patient called successfully.');

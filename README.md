@@ -55,6 +55,10 @@ Everything below describes what is built and tested, not results it has produced
 
 ## Architecture
 
+> **New to the codebase?** Read [docs/architecture/](docs/architecture/README.md)
+> first. It covers the layers, the data model, the security model, how to write a
+> migration safely, the decision log, and what has been built so far.
+
 One Next.js application, one Postgres database, one deploy unit. No Redis, no
 websockets, no message broker, no Kubernetes. At the scale this product operates
 at — roughly 40 requests/second across a hundred hospitals — each of those would

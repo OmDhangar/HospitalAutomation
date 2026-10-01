@@ -37,6 +37,26 @@ describe('can', () => {
   });
 });
 
+describe('clinical permissions', () => {
+  it('lets doctors and owners write, and never reception', () => {
+    expect(can('doctor', 'clinical.write')).toBe(true);
+    expect(can('owner', 'clinical.write')).toBe(true);
+    expect(can('receptionist', 'clinical.write')).toBe(false);
+  });
+
+  it('lets every current role read, because every read is logged', () => {
+    for (const role of STAFF_ROLES) expect(can(role, 'clinical.read')).toBe(true);
+  });
+
+  it('keeps medicine prices with the owner, but lets a doctor add a missing medicine', () => {
+    expect(can('owner', 'medicines.manage')).toBe(true);
+    expect(can('doctor', 'medicines.manage')).toBe(false);
+    expect(can('receptionist', 'medicines.manage')).toBe(false);
+    expect(can('doctor', 'medicines.quickAdd')).toBe(true);
+    expect(can('receptionist', 'medicines.quickAdd')).toBe(false);
+  });
+});
+
 describe('dashboardViewFor', () => {
   it('always puts a doctor in the doctor view', () => {
     expect(dashboardViewFor('doctor', null)).toBe('doctor');

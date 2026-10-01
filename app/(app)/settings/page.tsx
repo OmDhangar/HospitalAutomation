@@ -18,6 +18,7 @@ import {
   addBranchAction,
   addDoctorAction,
   addStaffAction,
+  linkDoctorAccountAction,
   setConsultationFeeAction,
   toggleDoctorAction,
   toggleStaffAction,
@@ -94,6 +95,14 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
       {params.error === 'fee' ? (
         <Alert tone="error">Enter the fee in rupees, like 300.</Alert>
       ) : null}
+      {params.error === 'link' ? (
+        <Alert tone="error">
+          {typeof params.message === 'string' ? params.message : 'Could not link that login.'}
+        </Alert>
+      ) : null}
+      {params.saved === 'link' ? (
+        <Alert tone="success">Doctor login updated.</Alert>
+      ) : null}
       {params.saved === 'fee' ? (
         <Alert tone="success">Consultation fee saved. Bills already issued keep their old amount.</Alert>
       ) : null}
@@ -128,6 +137,25 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
           <Link href="/settings/whatsapp" className="w-full sm:w-auto">
             <Button variant="primary" className="w-full sm:w-auto justify-center">
               Configure WhatsApp
+            </Button>
+          </Link>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 sm:p-5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">💊</span>
+              <h2 className="text-base font-bold text-ink-900">Medicines</h2>
+            </div>
+            <p className="mt-0.5 text-xs text-ink-500">
+              What doctors can prescribe, and the price the billing desk charges for each.
+            </p>
+          </div>
+          <Link href="/settings/medicines" className="w-full sm:w-auto">
+            <Button variant="secondary" className="w-full sm:w-auto justify-center">
+              Manage medicines
             </Button>
           </Link>
         </div>
@@ -301,6 +329,36 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                     </label>
                     <Button type="submit" size="sm" variant="secondary">
                       Save fee
+                    </Button>
+                  </form>
+
+                  {/*
+                    Which login is this doctor. It decides who may write this
+                    doctor's consultations and whose name goes on a prescription.
+                  */}
+                  <form action={linkDoctorAccountAction} className="flex flex-wrap items-end gap-2">
+                    <input type="hidden" name="doctorId" value={doctor.id} />
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-medium text-ink-600">
+                        Doctor&apos;s login
+                      </span>
+                      <select
+                        name="userId"
+                        defaultValue={doctor.userId ?? ''}
+                        className="block w-56 rounded-lg border-0 bg-white px-3 py-1.5 text-sm text-ink-900 ring-1 ring-inset ring-ink-300 focus:ring-2 focus:ring-inset focus:ring-brand-600"
+                      >
+                        <option value="">Not linked — cannot write prescriptions</option>
+                        {staff
+                          .filter((member) => member.active || member.userId === doctor.userId)
+                          .map((member) => (
+                            <option key={member.userId} value={member.userId}>
+                              {member.name} ({member.role})
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <Button type="submit" size="sm" variant="secondary">
+                      Save login
                     </Button>
                   </form>
 

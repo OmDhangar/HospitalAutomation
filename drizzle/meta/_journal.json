@@ -197,6 +197,13 @@
       "when": 1789600000000,
       "tag": "0027_schedule_override_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1789650000000,
+      "tag": "0028_clinical_opd",
+      "breakpoints": true
     }
   ]
 }

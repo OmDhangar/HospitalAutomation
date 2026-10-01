@@ -410,7 +410,14 @@ export const doctors = pgTable(
     active: boolean('active').notNull().default(true),
     createdAt: createdAt(),
   },
-  (t) => [index('doctors_hospital_idx').on(t.hospitalId), index('doctors_branch_idx').on(t.branchId)],
+  (t) => [
+    index('doctors_hospital_idx').on(t.hospitalId),
+    index('doctors_branch_idx').on(t.branchId),
+    /** One login is at most one doctor per hospital (0028). */
+    uniqueIndex('doctors_hospital_user_key')
+      .on(t.hospitalId, t.userId)
+      .where(sql`user_id is not null`),
+  ],
 );
 
 export const doctorSchedules = pgTable(
@@ -1317,5 +1324,229 @@ export const patientPayments = pgTable(
       foreignColumns: [bills.hospitalId, bills.id],
     }),
     index('patient_payments_encounter_idx').on(t.encounterId).where(sql`voided_at is null`),
+  ],
+);
+
+/* ---------------------------------------------------- OPD clinical records */
+
+/**
+ * The medicine catalogue (configuration) and the OPD clinical record:
+ * diagnoses, notes and prescriptions. Migration 0028 carries the reasoning.
+ *
+ * Every clinical table here is also behind the `clinical_access` policy: it
+ * is invisible unless withTenant() was called with `{ clinical: true }` on a
+ * request that is not a read-only support session.
+ */
+
+export const clinicalNoteKind = pgEnum('clinical_note_kind', ['consultation']);
+export const prescriptionStatus = pgEnum('prescription_status', ['final', 'superseded']);
+
+/** What the hospital offers. Not patient data, so not behind the clinical key. */
+export const medicines = pgTable(
+  'medicines',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    genericName: text('generic_name'),
+    strength: text('strength'),
+    form: text('form'),
+    /** The billing unit: what one unit of quantity on a bill means. */
+    unit: text('unit').notNull().default('unit'),
+    /** Null = not priced yet: prescribable, but refused on a bill. */
+    sellingPricePaise: integer('selling_price_paise'),
+    taxRateBp: integer('tax_rate_bp').notNull().default(0),
+    active: boolean('active').notNull().default(true),
+    createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('medicines_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('medicines_identity_key').on(
+      t.hospitalId,
+      sql`lower(name)`,
+      sql`coalesce(lower(strength), '')`,
+      sql`coalesce(lower(form), '')`,
+    ),
+  ],
+);
+
+/** Unsaved work: scratch space, not part of the record. Deleted at Save. */
+export const consultationDrafts = pgTable(
+  'consultation_drafts',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    doctorId: uuid('doctor_id')
+      .notNull()
+      .references(() => doctors.id),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+    version: integer('version').notNull().default(1),
+    updatedByUserId: uuid('updated_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'consultation_drafts_encounter_fk',
+      columns: [t.hospitalId, t.encounterId, t.patientId],
+      foreignColumns: [encounters.hospitalId, encounters.id, encounters.patientId],
+    }).onDelete('cascade'),
+    uniqueIndex('consultation_drafts_encounter_key').on(t.encounterId),
+  ],
+);
+
+export const diagnoses = pgTable(
+  'diagnoses',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    doctorId: uuid('doctor_id')
+      .notNull()
+      .references(() => doctors.id),
+    text: text('text').notNull(),
+    /** ICD-10 later; free text today. */
+    code: text('code'),
+    recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: createdAt(),
+    ...voidColumns(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'diagnoses_encounter_fk',
+      columns: [t.hospitalId, t.encounterId, t.patientId],
+      foreignColumns: [encounters.hospitalId, encounters.id, encounters.patientId],
+    }).onDelete('cascade'),
+    index('diagnoses_encounter_idx').on(t.encounterId).where(sql`voided_at is null`),
+  ],
+);
+
+export const clinicalNotes = pgTable(
+  'clinical_notes',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    kind: clinicalNoteKind('kind').notNull(),
+    body: text('body').notNull(),
+    authorUserId: uuid('author_user_id').references(() => users.id, { onDelete: 'set null' }),
+    doctorId: uuid('doctor_id').references(() => doctors.id),
+    createdAt: createdAt(),
+    ...voidColumns(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'clinical_notes_encounter_fk',
+      columns: [t.hospitalId, t.encounterId, t.patientId],
+      foreignColumns: [encounters.hospitalId, encounters.id, encounters.patientId],
+    }).onDelete('cascade'),
+    index('clinical_notes_encounter_idx').on(t.encounterId).where(sql`voided_at is null`),
+  ],
+);
+
+/** Born final; the only change it can undergo is being superseded by a revision. */
+export const prescriptions = pgTable(
+  'prescriptions',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    prescriberDoctorId: uuid('prescriber_doctor_id')
+      .notNull()
+      .references(() => doctors.id),
+    prescriberName: text('prescriber_name').notNull(),
+    status: prescriptionStatus('status').notNull().default('final'),
+    advice: text('advice'),
+    followUpOn: date('follow_up_on'),
+    supersedesPrescriptionId: uuid('supersedes_prescription_id'),
+    createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'prescriptions_encounter_fk',
+      columns: [t.hospitalId, t.encounterId, t.patientId],
+      foreignColumns: [encounters.hospitalId, encounters.id, encounters.patientId],
+    }).onDelete('cascade'),
+    uniqueIndex('prescriptions_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('prescriptions_one_current_key').on(t.encounterId).where(sql`status = 'final'`),
+    index('prescriptions_patient_idx').on(t.patientId, t.createdAt).where(sql`status = 'final'`),
+    index('prescriptions_doctor_idx').on(t.prescriberDoctorId, t.createdAt),
+  ],
+);
+
+/** Written with their prescription, never again. Snapshots survive a catalogue rename. */
+export const prescriptionItems = pgTable(
+  'prescription_items',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    prescriptionId: uuid('prescription_id').notNull(),
+    medicineId: uuid('medicine_id').notNull(),
+    medicineName: text('medicine_name').notNull(),
+    strength: text('strength'),
+    form: text('form'),
+    dose: text('dose').notNull(),
+    frequency: text('frequency').notNull(),
+    durationDays: smallint('duration_days'),
+    route: text('route'),
+    instructions: text('instructions'),
+    sortOrder: smallint('sort_order').notNull(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'prescription_items_prescription_fk',
+      columns: [t.hospitalId, t.prescriptionId],
+      foreignColumns: [prescriptions.hospitalId, prescriptions.id],
+    }).onDelete('cascade'),
+    foreignKey({
+      name: 'prescription_items_medicine_fk',
+      columns: [t.hospitalId, t.medicineId],
+      foreignColumns: [medicines.hospitalId, medicines.id],
+    }),
+    index('prescription_items_prescription_idx').on(t.prescriptionId, t.sortOrder),
+    index('prescription_items_medicine_idx').on(t.medicineId),
+  ],
+);
+
+/** Who opened whose history and who printed what. Append-only. */
+export const recordAccessLogs = pgTable(
+  'record_access_logs',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    actorUserId: uuid('actor_user_id').references(() => users.id, { onDelete: 'set null' }),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id, { onDelete: 'cascade' }),
+    encounterId: uuid('encounter_id').references(() => encounters.id, { onDelete: 'cascade' }),
+    action: text('action').$type<'view_history' | 'print_prescription'>().notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('record_access_logs_patient_idx').on(t.patientId, t.createdAt),
+    index('record_access_logs_hospital_idx').on(t.hospitalId, t.createdAt),
   ],
 );

@@ -7,7 +7,7 @@ import { canConfigureHospital, createStaffUser, setStaffActive, type StaffRole }
 import { parseRupeesToPaise } from '@/lib/domain/patient-billing';
 import { can, isStaffRole } from '@/lib/domain/permissions';
 import { checkCanAdd } from '@/lib/services/entitlements';
-import { createBranch, createDoctor, setDoctorActive } from '@/lib/services/hospital';
+import { createBranch, createDoctor, setDoctorActive, setDoctorUser } from '@/lib/services/hospital';
 import { setDoctorConsultationFee } from '@/lib/services/patient-billing';
 
 async function authorize() {
@@ -90,6 +90,28 @@ export async function setConsultationFeeAction(formData: FormData) {
   revalidatePath('/settings');
   revalidatePath('/dashboard');
   redirect('/settings?saved=fee');
+}
+
+/**
+ * Links a doctor to the login they use. Only then can they write their own
+ * patients' consultations — see lib/services/consultations.ts.
+ */
+export async function linkDoctorAccountAction(formData: FormData) {
+  const session = await authorize();
+  const userId = String(formData.get('userId') ?? '') || null;
+  try {
+    await setDoctorUser({
+      hospitalId: session.hospitalId,
+      doctorId: String(formData.get('doctorId') ?? ''),
+      userId,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Could not link that login';
+    redirect(`/settings?error=link&message=${encodeURIComponent(message)}`);
+  }
+  revalidatePath('/settings');
+  revalidatePath('/dashboard');
+  redirect('/settings?saved=link');
 }
 
 export async function toggleDoctorAction(formData: FormData) {

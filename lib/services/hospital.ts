@@ -1,6 +1,13 @@
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { withTenant, type Tx } from '@/lib/db';
-import { branches, doctorDayStates, doctors, doctorSchedules, hospitals } from '@/lib/db/schema';
+import {
+  branches,
+  doctorDayStates,
+  doctors,
+  doctorSchedules,
+  hospitals,
+  staffMemberships,
+} from '@/lib/db/schema';
 import type { DoctorScheduleMode } from '@/lib/domain/booking';
 import { assertCanAdd } from './entitlements';
 
@@ -197,6 +204,50 @@ export async function updateWhatsAppSettings(args: {
       .set({ ownerPhoneE164: args.ownerPhoneE164, updatedAt: new Date() })
       .where(eq(hospitals.id, args.hospitalId)),
   );
+}
+
+/**
+ * Links a doctor profile to the login that belongs to that doctor.
+ *
+ * This is how the system knows who wrote a prescription, and it is the check
+ * that lets a doctor write their own patients' consultations and nobody
+ * else's. Null unlinks. The login must belong to this hospital — read under
+ * row-level security — and a unique index stops one login being two doctors.
+ */
+export async function setDoctorUser(args: {
+  hospitalId: string;
+  doctorId: string;
+  userId: string | null;
+}) {
+  await withTenant(args.hospitalId, async (tx) => {
+    if (args.userId) {
+      const [member] = await tx
+        .select({ id: staffMemberships.id })
+        .from(staffMemberships)
+        .where(
+          and(
+            eq(staffMemberships.userId, args.userId),
+            eq(staffMemberships.hospitalId, args.hospitalId),
+            eq(staffMemberships.active, true),
+          ),
+        );
+      if (!member) throw new Error('That login is not an active member of this hospital');
+
+      const [taken] = await tx
+        .select({ name: doctors.name })
+        .from(doctors)
+        .where(and(eq(doctors.userId, args.userId), sql`${doctors.id} <> ${args.doctorId}`));
+      if (taken) throw new Error(`That login is already linked to ${taken.name}`);
+    }
+
+    const [updated] = await tx
+      .update(doctors)
+      .set({ userId: args.userId })
+      .where(eq(doctors.id, args.doctorId))
+      .returning({ id: doctors.id });
+    if (!updated) throw new Error('Doctor not found');
+  });
+  clearDoctorCache(args.hospitalId);
 }
 
 export async function setDoctorActive(args: {

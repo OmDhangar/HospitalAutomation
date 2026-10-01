@@ -39,6 +39,27 @@ const PERMISSIONS = {
    * person at the desk should not be the person who decides the price.
    */
   'billing.price': ['owner'],
+  /**
+   * Read a patient's diagnoses, notes and prescriptions. Reception is included
+   * because in a small hospital the desk handles follow-ups and IPD care
+   * (decision D9). Every read of a history is logged in record_access_logs.
+   */
+  'clinical.read': ['owner', 'receptionist', 'doctor'],
+  /**
+   * Write or revise a consultation. Necessary but not sufficient: the service
+   * also requires the user to be linked to the visit's attending doctor
+   * (doctors.user_id), so an owner can write their own patients' records and
+   * nobody else's. If the pilot decides staff will type prescriptions from
+   * the paper slip, this line and that check are the two places to change.
+   */
+  'clinical.write': ['owner', 'doctor'],
+  /** Add, price, rename and deactivate medicines in the catalogue. */
+  'medicines.manage': ['owner'],
+  /**
+   * Add a missing medicine from the prescription screen, without a price, so
+   * a doctor is never blocked by an incomplete catalogue. The owner prices it.
+   */
+  'medicines.quickAdd': ['owner', 'doctor'],
 } as const satisfies Record<string, readonly StaffRole[]>;
 
 export type Permission = keyof typeof PERMISSIONS;

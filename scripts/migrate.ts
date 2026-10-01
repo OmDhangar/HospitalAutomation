@@ -61,6 +61,12 @@ async function main() {
      * role cannot insert, update or delete anything at all.
      */
     'public.app_read_only()',
+    /**
+     * Called by the clinical_access policy on every clinical table, as the
+     * querying role. Revoked from PUBLIC in 0028, so without this grant the
+     * app role cannot read or write a single diagnosis or prescription.
+     */
+    'public.app_clinical_access()',
   ];
 
   for (const fn of bootstrapFunctions) {

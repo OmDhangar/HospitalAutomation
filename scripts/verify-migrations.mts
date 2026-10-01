@@ -92,6 +92,7 @@ for (const fn of [
   'public.resolve_user_hospital(uuid)',
   'public.resolve_whatsapp_number(text)',
   'public.app_read_only()',
+  'public.app_clinical_access()',
 ]) {
   await run(`GRANT EXECUTE ON FUNCTION ${fn} TO %I`, appRole);
 }

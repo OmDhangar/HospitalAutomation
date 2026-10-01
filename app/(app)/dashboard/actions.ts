@@ -13,6 +13,7 @@ import { can } from '@/lib/domain/permissions';
 import { normalizeIndianPhone } from '@/lib/domain/phone';
 import type { QueueAction } from '@/lib/domain/types';
 import { canMutateQueue, logout } from '@/lib/services/auth';
+import { EncounterError } from '@/lib/services/encounters';
 import {
   ConsultationFeeMissingError,
   PatientBillingError,
@@ -210,7 +211,9 @@ export async function togglePaidDynamic(args: {
     if (err instanceof ConsultationFeeMissingError) {
       return { ok: false, error: err.message, code: 'fee_missing' };
     }
-    if (err instanceof PatientBillingError) return { ok: false, error: err.message };
+    if (err instanceof PatientBillingError || err instanceof EncounterError) {
+      return { ok: false, error: err.message };
+    }
     return { ok: false, error: 'Could not update payment. Try again.' };
   }
 }
