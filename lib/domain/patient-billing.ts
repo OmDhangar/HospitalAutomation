@@ -116,10 +116,24 @@ export function paymentStatus(args: {
  * most two decimals, so the caller can say "enter an amount like 300".
  */
 export function parseRupeesToPaise(input: string): number | null {
-  const cleaned = input.trim().replace(/[,\s₹]/g, '');
+  return parseTwoDecimals(input.replace(/₹/g, ''));
+}
+
+/**
+ * A tax rate as typed ("12", "2.5", "18%") in basis points (1200, 250, 1800),
+ * or null. Capped at 100%.
+ */
+export function parsePercentToBasisPoints(input: string): number | null {
+  const bp = parseTwoDecimals(input.replace(/%/g, ''));
+  return bp !== null && bp <= MAX_TAX_RATE_BP ? bp : null;
+}
+
+/** "1,250.5" → 125050: a non-negative decimal with at most two places, scaled by 100. */
+function parseTwoDecimals(input: string): number | null {
+  const cleaned = input.trim().replace(/[,\s]/g, '');
   const match = /^(\d{1,7})(?:\.(\d{1,2}))?$/.exec(cleaned);
   if (!match) return null;
-  const rupees = Number(match[1]);
-  const paise = Number((match[2] ?? '').padEnd(2, '0'));
-  return rupees * 100 + paise;
+  const whole = Number(match[1]);
+  const hundredths = Number((match[2] ?? '').padEnd(2, '0'));
+  return whole * 100 + hundredths;
 }

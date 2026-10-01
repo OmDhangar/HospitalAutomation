@@ -105,7 +105,34 @@ export default async function PatientQueuePage({
           </form>
         </div>
       ) : view.paused ? (
-        <Message title={s.paused} hint={s.pausedHint} tone="warn" />
+        /**
+         * The break, and still the patient's place in line.
+         *
+         * Without the count the page would say only "wait", which is the one
+         * thing they are already doing. No estimate and no "now serving": the
+         * window would be computed as if the doctor were in the room, and the
+         * serving token is the number that has stopped moving — the thing that
+         * made patients think the queue was stuck rather than on a break.
+         */
+        <>
+          <Message
+            title={s.paused}
+            hint={
+              view.breakStartedAt
+                ? `${s.pausedSince} ${formatTimeIn(view.timezone, view.breakStartedAt)}. ${s.pausedHint}`
+                : s.pausedHint
+            }
+            tone="warn"
+          />
+          <AheadHero
+            ahead={view.patientsAhead ?? 0}
+            strings={s}
+            doctorName={view.doctorName}
+            eta={null}
+            currentToken={null}
+            onBreak
+          />
+        </>
       ) : (
         <AheadHero
           ahead={view.patientsAhead ?? 0}
@@ -299,6 +326,7 @@ function AheadHero({
   doctorName,
   eta,
   currentToken,
+  onBreak = false,
 }: {
   ahead: number;
   strings: (typeof t)[Locale];
@@ -306,6 +334,8 @@ function AheadHero({
   /** Pre-formatted window, or null when no estimate can be trusted. */
   eta: string | null;
   currentToken: number | null;
+  /** Hides the serving token, which does not move while the doctor is away. */
+  onBreak?: boolean;
 }) {
   const next = ahead === 0;
 
@@ -369,17 +399,19 @@ function AheadHero({
         </div>
       ) : null}
 
-      <p
-        className={cn(
-          'mt-3 text-sm',
-          next ? 'text-white/80' : 'text-ink-500',
-        )}
-      >
-        {strings.nowServing}{' '}
-        <span className="numeric font-semibold">
-          {currentToken !== null ? currentToken : '—'}
-        </span>
-      </p>
+      {onBreak ? null : (
+        <p
+          className={cn(
+            'mt-3 text-sm',
+            next ? 'text-white/80' : 'text-ink-500',
+          )}
+        >
+          {strings.nowServing}{' '}
+          <span className="numeric font-semibold">
+            {currentToken !== null ? currentToken : '—'}
+          </span>
+        </p>
+      )}
     </div>
   );
 }

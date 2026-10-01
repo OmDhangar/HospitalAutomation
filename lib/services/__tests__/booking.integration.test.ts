@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import postgres from 'postgres';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, withTenant } from '@/lib/db';
-import { appointments, notificationOutbox } from '@/lib/db/schema';
+import { appointments, notificationOutbox, patients } from '@/lib/db/schema';
 import type {
   InteractiveButtonMessage,
   InteractiveListMessage,
@@ -118,10 +118,15 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
       tx.select().from(appointments).where(eq(appointments.hospitalId, hospitalId)),
     );
 
+  /**
+   * One doctor, so no doctor menu: language, who it is for, queue or slot, then
+   * the confirmation. The patient question replaced the doctor question rather
+   * than adding to it.
+   */
   it('books a first-time patient in four business messages', async () => {
     await inbound(1, { text: 'Hi' });
     await inbound(2, { replyId: 'lang:mr' });
-    await inbound(3, { replyId: `doc:${doctorId}` });
+    await inbound(3, { replyId: 'patient:self' });
     await inbound(4, { replyId: 'queue_choice:join' });
 
     // Two interactive list prompts, one button prompt, then the confirmation with the queue link.
@@ -137,6 +142,49 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
     // The link is in the confirmation the patient actually received.
     expect(spy.texts[0].body).toContain(created[0].publicToken);
     expect(spy.texts[0].body).toContain(String(created[0].tokenNumber));
+
+    // The second list is the patient question, not a doctor menu.
+    expect(spy.lists[1].rows.map((r) => r.id)).toEqual(['patient:self', 'patient:new']);
+    expect(spy.lists.some((m) => m.rows.some((r) => r.id.startsWith('doc:')))).toBe(false);
+  });
+
+  /**
+   * Typing the name at the patient list skips the "send the patient's name"
+   * prompt, so booking for someone else costs no more than booking for oneself.
+   */
+  it('books for someone else in four messages when the name is typed at the list', async () => {
+    await inbound(1, { text: 'Hi' });
+    await inbound(2, { replyId: 'lang:en' });
+    await inbound(3, { text: 'Aarav Sharma 7' });
+    await inbound(4, { replyId: 'queue_choice:join' });
+
+    expect(spy.lists).toHaveLength(2);
+    expect(spy.buttons).toHaveLength(1);
+    expect(spy.texts).toHaveLength(1);
+    expect(spy.totalSent).toBe(4);
+
+    const [created] = await appointmentsFor();
+    const [patient] = await withTenant(hospitalId, (tx) =>
+      tx.select().from(patients).where(eq(patients.id, created.patientId)),
+    );
+    expect(patient.name).toBe('Aarav Sharma');
+    expect(patient.age).toBe(7);
+  });
+
+  it('lets a first booking be for someone other than the sender', async () => {
+    await inbound(1, { text: 'Hi' });
+    await inbound(2, { replyId: 'lang:en' });
+    await inbound(3, { replyId: 'patient:new' });
+    await inbound(4, { text: 'Aarav Sharma 7' });
+    await inbound(5, { replyId: 'queue_choice:join' });
+
+    const [created] = await appointmentsFor();
+    const [patient] = await withTenant(hospitalId, (tx) =>
+      tx.select().from(patients).where(eq(patients.id, created.patientId)),
+    );
+    expect(patient.name).toBe('Aarav Sharma');
+    expect(patient.age).toBe(7);
+    expect(spy.texts.at(-1)?.body).toContain('Aarav Sharma');
   });
 
   /**
@@ -146,7 +194,7 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
   it('does not leave the queue link template pending after confirming', async () => {
     await inbound(1, { text: 'Hi' });
     await inbound(2, { replyId: 'lang:en' });
-    await inbound(3, { replyId: `doc:${doctorId}` });
+    await inbound(3, { replyId: 'patient:self' });
     await inbound(4, { replyId: 'queue_choice:join' });
 
     const [created] = await appointmentsFor();
@@ -169,7 +217,7 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
   it('books a returning patient in three, having remembered their language', async () => {
     await inbound(1, { text: 'Hi' });
     await inbound(2, { replyId: 'lang:mr' });
-    await inbound(3, { replyId: `doc:${doctorId}` });
+    await inbound(3, { replyId: 'patient:self' });
     await inbound(4, { replyId: 'queue_choice:join' });
 
     const firstVisitSends = spy.lists.length + spy.buttons.length;
@@ -180,9 +228,12 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
     // Same patient, a later visit. Clear the day's appointment first so the
     // one-active-token constraint does not reject the second booking.
     await admin`delete from appointments where hospital_id = ${hospitalId}`;
+    const [saved] = await admin<{ id: string }[]>`
+      select id from patients where hospital_id = ${hospitalId}
+    `;
 
     await inbound(5, { text: 'Hi' });
-    await inbound(6, { replyId: `doc:${doctorId}` });
+    await inbound(6, { replyId: `patient:${saved.id}` });
     await inbound(7, { replyId: 'queue_choice:join' });
 
     expect(firstVisitSends).toBe(3);
@@ -213,7 +264,7 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
     await inbound(3, { replyId: 'lang:en' });
     expect(spy.lists).toHaveLength(2);
 
-    await inbound(4, { replyId: `doc:${doctorId}` });
+    await inbound(4, { replyId: 'patient:self' });
     expect(spy.buttons).toHaveLength(1);
 
     await inbound(5, { replyId: 'queue_choice:join' });
@@ -270,15 +321,15 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
   it('refuses a doctor id belonging to another hospital', async () => {
     await inbound(1, { text: 'Hi' });
     await inbound(2, { replyId: 'lang:en' });
-    const doctorMenus = spy.lists.length;
+    const menus = spy.lists.length;
 
     await inbound(3, { replyId: `doc:${uuid()}` });
 
     // Nothing is booked against an id we cannot vouch for. No new menu goes out
-    // either: the transition falls back to ask_doctor, which the patient was
-    // just sent and still has on screen.
+    // either: the transition falls back to the patient question, which the
+    // patient was just sent and still has on screen.
     expect(await appointmentsFor()).toHaveLength(0);
-    expect(spy.lists).toHaveLength(doctorMenus);
-    expect(spy.lists.at(-1)?.rows.every((r) => r.id.startsWith('doc:'))).toBe(true);
+    expect(spy.lists).toHaveLength(menus);
+    expect(spy.lists.at(-1)?.rows.every((r) => r.id.startsWith('patient:'))).toBe(true);
   });
 });

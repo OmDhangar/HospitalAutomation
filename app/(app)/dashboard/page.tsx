@@ -10,6 +10,7 @@ import {
   Stat,
   cn,
 } from '@/components/ui';
+import { ConsultationGateProvider } from '@/components/clinical/consultation-gate';
 import { PaidToggle } from '@/components/paid-toggle';
 import { SubscriptionCard, UsageNotice } from '@/components/subscription';
 import { requireSession } from '@/lib/auth/session';
@@ -18,6 +19,7 @@ import type { PaymentStatus } from '@/lib/domain/patient-billing';
 import { formatTimeIn, minutesBetween } from '@/lib/domain/time';
 import { loadDashboardData } from '@/lib/services/dashboard-loader';
 import type { QueueRow } from '@/lib/services/queue';
+import { ConsultationPanel } from './consultation-panel';
 import {
   AddWalkInForm,
   CallNextButton,
@@ -49,6 +51,8 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
   const canSwitchView = canSwitchDashboardView(session.role);
   const canCollect = can(session.role, 'billing.collect');
   const canPrice = can(session.role, 'billing.price');
+  // Support sessions are read-only and never see clinical records (0028).
+  const showConsultation = can(session.role, 'clinical.write') && !session.readOnly;
 
   const requestedView = typeof params.view === 'string' ? params.view : null;
   const effectiveView = dashboardViewFor(session.role, requestedView);
@@ -162,7 +166,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                         snapshot?.paused ? 'bg-amber-600' : 'bg-emerald-600 animate-pulse',
                       )}
                     />
-                    {snapshot?.paused ? 'Room Paused' : 'Live Consultations'}
+                    {snapshot?.paused ? 'On a break' : 'Live Consultations'}
                   </span>
                 </div>
                 <p className="text-xs text-ink-500 mt-0.5">
@@ -184,15 +188,23 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
 
           {snapshot?.paused ? (
             <Alert tone="warn">
-              <strong>Your consultation queue is currently on hold.</strong>{' '}
+              <strong>
+                You are on a break
+                {snapshot.breakStartedAt
+                  ? ` since ${formatTimeIn(session.timezone, snapshot.breakStartedAt)}`
+                  : ''}
+                .
+              </strong>{' '}
               {snapshot.pausedReason ? `${snapshot.pausedReason}. ` : ''}
-              Patients are informed that the doctor is temporarily away. Click &quot;Resume Room&quot; when ready.
+              Patients see that you are on a break. Click &quot;End break&quot; when you are back;
+              the break is not counted in the current patient&apos;s consultation time.
             </Alert>
           ) : null}
 
           {/* Main Grid: Left = Consultation & Waiting Queue, Right = Attention & Stats */}
           <div className="grid items-start gap-5 lg:grid-cols-3">
             {/* Main Clinical Focus Area */}
+            <ConsultationGateProvider>
             <div className="space-y-5 lg:col-span-2">
               {/* NOW SERVING CARD (Large, High-Contrast with the 3 Core Clinical Actions) */}
               <Card>
@@ -303,6 +315,14 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                 </div>
               </Card>
 
+              {/*
+               * Keyed by appointment so a new patient gets a fresh panel, and
+               * so the panel is never re-initialised from props mid-typing.
+               */}
+              {serving && showConsultation ? (
+                <ConsultationPanel key={serving.appointmentId} appointmentId={serving.appointmentId} />
+              ) : null}
+
               {/* WAITING QUEUE LIST */}
               <Card>
                 <CardHeader
@@ -331,6 +351,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                 )}
               </Card>
             </div>
+            </ConsultationGateProvider>
 
             {/* Sidebar: Stats & Needs Attention (Skipped & Paused) */}
             <div className="space-y-5">
@@ -419,9 +440,15 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
 
           {snapshot?.paused ? (
             <Alert tone="warn">
-              <strong>{snapshot.doctorName} is paused.</strong>{' '}
+              <strong>
+                {snapshot.doctorName} is on a break
+                {snapshot.breakStartedAt
+                  ? ` since ${formatTimeIn(session.timezone, snapshot.breakStartedAt)}`
+                  : ''}
+                .
+              </strong>{' '}
               {snapshot.pausedReason ? `${snapshot.pausedReason}. ` : ''}
-              Patients are told the queue is on hold, and no reminders are sent.
+              Patients see a break notice, and no reminders are sent.
             </Alert>
           ) : null}
 

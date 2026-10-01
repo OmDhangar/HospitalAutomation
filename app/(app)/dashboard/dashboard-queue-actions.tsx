@@ -3,6 +3,7 @@
 import React, { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button, Field, Input, cn } from '@/components/ui';
+import { useConsultationGate } from '@/components/clinical/consultation-gate';
 import { useToast } from '@/components/toast';
 import { playChime } from '@/lib/utils/sound';
 import type { QueueAction } from '@/lib/domain/types';
@@ -289,11 +290,15 @@ export function CallNextButton({
   size?: 'md' | 'lg' | 'xl';
 }) {
   const toast = useToast();
+  const gate = useConsultationGate();
   const [isPending, startTransition] = useTransition();
 
   const handleCallNext = () => {
-    playChime();
     startTransition(async () => {
+      // In the doctor view, an unsaved consultation is saved first. If that
+      // fails the queue stays put, and the panel says why.
+      if (gate && !(await gate.run())) return;
+      playChime();
       const res = await advanceQueueDynamic({ doctorId });
       if (res.ok) {
         toast.success('Queue Advanced', 'Next patient called successfully.');
@@ -534,7 +539,10 @@ export function TogglePauseButton({
     startTransition(async () => {
       const res = await togglePauseDynamic({ doctorId, paused: !paused });
       if (res.ok) {
-        toast.info(paused ? 'Queue Resumed' : 'Queue Paused');
+        toast.info(
+          paused ? 'Break ended' : 'Break started',
+          paused ? undefined : 'Patients now see that the doctor is on a break.',
+        );
       } else {
         toast.error('Pause operation failed', res.error);
       }
@@ -545,10 +553,18 @@ export function TogglePauseButton({
     <Button
       type="button"
       size="sm"
+      // Named for what the doctor is doing, not what the software does to the
+      // queue. "Pause queue" read as a setting, so doctors stepped out without
+      // pressing it and patients watched a token that never moved.
+      title={
+        paused
+          ? 'Doctor is back: the queue moves again'
+          : 'Doctor is stepping out: patients see a break notice'
+      }
       onClick={handleTogglePause}
       isLoading={isPending}
     >
-      {paused ? 'Resume queue' : 'Pause queue'}
+      {paused ? 'End break' : 'Start break'}
     </Button>
   );
 }

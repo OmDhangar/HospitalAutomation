@@ -29,8 +29,11 @@ type Strings = {
   estimatedTime: string;
   estimateHint: string;
   doctor: string;
+  /** The doctor is on a break. */
   paused: string;
   pausedHint: string;
+  /** Prefix for the time the break began: "On a break since" 1:10 PM. */
+  pausedSince: string;
   patientPaused: string;
   patientPausedHint: string;
   resumeAction: string;
@@ -79,8 +82,9 @@ export const t: Record<Locale, Strings> = {
     estimatedTime: 'अंदाजे वेळ',
     estimateHint: 'रांग पुढे सरकेल तसा हा अंदाज बदलू शकतो.',
     doctor: 'डॉक्टर',
-    paused: 'रांग तात्पुरती थांबली आहे',
-    pausedHint: 'डॉक्टर लवकरच पुन्हा सुरू करतील. तुमचा टोकन सुरक्षित आहे.',
+    paused: 'डॉक्टर विश्रांतीवर आहेत',
+    pausedHint: 'डॉक्टर परत आल्यावर रांग पुन्हा सुरू होईल. तुमचा टोकन आणि क्रमांक सुरक्षित आहेत.',
+    pausedSince: 'विश्रांती सुरू:',
     patientPaused: 'तुमचा नंबर होल्डवर (थांबवून) ठेवला आहे',
     patientPausedHint: 'तुम्ही टेस्ट किंवा कामासाठी बाहेर गेला असल्यास, परत आल्यावर खालील बटण दाबा.',
     resumeAction: 'मी परत आलो आहे / रांगेत पुन्हा या',
@@ -125,8 +129,9 @@ export const t: Record<Locale, Strings> = {
     estimatedTime: 'अनुमानित समय',
     estimateHint: 'कतार आगे बढ़ने पर यह अनुमान बदल सकता है।',
     doctor: 'डॉक्टर',
-    paused: 'कतार कुछ देर के लिए रुकी है',
-    pausedHint: 'डॉक्टर जल्द ही दोबारा शुरू करेंगे। आपका टोकन सुरक्षित है।',
+    paused: 'डॉक्टर ब्रेक पर हैं',
+    pausedHint: 'डॉक्टर के लौटते ही कतार फिर से चलेगी। आपका टोकन और नंबर सुरक्षित है।',
+    pausedSince: 'ब्रेक शुरू:',
     patientPaused: 'आपकी बारी होल्ड पर रखी गई है',
     patientPausedHint: 'यदि आप जाँच या किसी काम से बाहर हैं, तो लौटने पर नीचे दिया बटन दबाएँ।',
     resumeAction: 'मैं वापस आ गया हूँ / कतार में जुड़ें',
@@ -171,8 +176,9 @@ export const t: Record<Locale, Strings> = {
     estimatedTime: 'Estimated time',
     estimateHint: 'This estimate changes as the queue moves.',
     doctor: 'Doctor',
-    paused: 'The queue is paused',
-    pausedHint: 'The doctor will resume shortly. Your token is safe.',
+    paused: 'The doctor is on a break',
+    pausedHint: 'The queue will move again when the doctor is back. Your token and your place are safe.',
+    pausedSince: 'On a break since',
     patientPaused: 'Your turn is temporarily on hold',
     patientPausedHint: 'If you stepped out for tests, tap below when you are back in the waiting room.',
     resumeAction: 'I am back / Rejoin queue',

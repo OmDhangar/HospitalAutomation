@@ -1,7 +1,6 @@
 import { and, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import { withTenant, type Tx } from '@/lib/db';
 import {
-  appointments,
   auditLogs,
   billItems,
   bills,
@@ -10,6 +9,7 @@ import {
   patientPayments,
   services,
 } from '@/lib/db/schema';
+import { openEncounterForAppointmentInTx, type EncounterRow } from '@/lib/services/encounters';
 import {
   calculateBillItem,
   paymentStatus,
@@ -136,58 +136,6 @@ export async function setDoctorConsultationFeeInTx(
       toPaise: args.pricePaise,
     },
   });
-}
-
-/* ------------------------------------------------------------- encounters */
-
-type EncounterRow = typeof encounters.$inferSelect;
-
-/**
- * The encounter for a queue appointment, created on first use and locked for
- * the rest of the transaction.
- *
- * Creation is an insert that does nothing on conflict with the one-per-
- * appointment index, so two receptionists tapping at once both end up with
- * the same encounter. The row lock then serialises everything that follows —
- * the same way `doctor_day_states` serialises the queue.
- */
-export async function openEncounterForAppointmentInTx(
-  tx: Tx,
-  args: { appointmentId: string; actorUserId: string | null },
-): Promise<EncounterRow> {
-  const [appointment] = await tx
-    .select({
-      hospitalId: appointments.hospitalId,
-      branchId: appointments.branchId,
-      doctorId: appointments.doctorId,
-      patientId: appointments.patientId,
-    })
-    .from(appointments)
-    .where(eq(appointments.id, args.appointmentId));
-  if (!appointment) throw new PatientBillingError('Appointment not found');
-
-  await tx
-    .insert(encounters)
-    .values({
-      hospitalId: appointment.hospitalId,
-      branchId: appointment.branchId,
-      patientId: appointment.patientId,
-      appointmentId: args.appointmentId,
-      attendingDoctorId: appointment.doctorId,
-      origin: 'queue',
-      openedByUserId: args.actorUserId,
-    })
-    .onConflictDoNothing({
-      target: encounters.appointmentId,
-      where: sql`appointment_id is not null`,
-    });
-
-  const [encounter] = await tx
-    .select()
-    .from(encounters)
-    .where(eq(encounters.appointmentId, args.appointmentId))
-    .for('update');
-  return encounter;
 }
 
 /* ------------------------------------------------------------------ bills */

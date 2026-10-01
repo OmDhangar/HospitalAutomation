@@ -69,6 +69,8 @@ export type QueueSnapshot = {
   serviceDate: string;
   paused: boolean;
   pausedReason: string | null;
+  /** When the doctor's current break began, or null when not on a break. */
+  breakStartedAt: Date | null;
   currentToken: number | null;
   currentPatientName?: string | null;
   nextPatient?: { tokenNumber: number; patientName: string } | null;
@@ -874,7 +876,22 @@ export async function setPriority(args: {
   });
 }
 
-/** Toggles doctor pause on the active day state. */
+/**
+ * Starts or ends a doctor's break for the day.
+ *
+ * Ending a break also takes the break back out of whichever consultation was
+ * open when it began. A doctor routinely steps out with a patient still CALLED
+ * or IN_CONSULTATION — often one they have actually finished with but not yet
+ * clicked past — and that patient is only completed after the break. Left
+ * alone, their "consultation" spans the whole break: a 45-minute sample that
+ * pushes the median, and with it every patient's estimate, up for the rest of
+ * the day. Shifting the start forward by the length of the break keeps the
+ * minutes the doctor really spent with them and drops the ones they did not.
+ *
+ * CALLED rows shift `calledAt`, because completing straight from CALLED uses
+ * the call time as the consultation start. IN_CONSULTATION rows shift only
+ * `consultStartedAt`, leaving `calledAt` as the true end of their wait.
+ */
 export async function setDoctorPaused(args: {
   hospitalId: string;
   doctorId: string;
@@ -894,11 +911,44 @@ export async function setDoctorPaused(args: {
       serviceDate,
     });
 
+    if (!args.paused && day.paused && day.pausedAt) {
+      const breakStartedAt = day.pausedAt;
+      const breakMs = now.getTime() - breakStartedAt.getTime();
+
+      if (breakMs > 0) {
+        const shift = sql`make_interval(secs => ${breakMs / 1000}::double precision)`;
+        // Only timestamps from before the break moved: anything stamped during
+        // it was real activity, not time the doctor was away.
+        await tx
+          .update(appointments)
+          .set({
+            calledAt: sql`case
+              when ${appointments.status} = 'CALLED' and ${appointments.calledAt} <= ${breakStartedAt}::timestamptz
+              then ${appointments.calledAt} + ${shift}
+              else ${appointments.calledAt} end`,
+            consultStartedAt: sql`case
+              when ${appointments.status} = 'IN_CONSULTATION' and ${appointments.consultStartedAt} <= ${breakStartedAt}::timestamptz
+              then ${appointments.consultStartedAt} + ${shift}
+              else ${appointments.consultStartedAt} end`,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(appointments.doctorId, args.doctorId),
+              eq(appointments.serviceDate, serviceDate),
+              inArray(appointments.status, ['CALLED', 'IN_CONSULTATION']),
+            ),
+          );
+      }
+    }
+
     await tx
       .update(doctorDayStates)
       .set({
         paused: args.paused,
         pausedReason: args.paused ? (args.reason ?? null) : null,
+        // Pressing "Start break" twice must not move the start of the break.
+        pausedAt: args.paused ? (day.paused ? (day.pausedAt ?? now) : now) : null,
         sessionStartedAt: day.sessionStartedAt ?? (args.paused ? null : now),
         updatedAt: now,
       })
@@ -1143,6 +1193,7 @@ export async function getQueueSnapshotInTx(
     serviceDate: args.serviceDate,
     paused: day?.paused ?? false,
     pausedReason: day?.pausedReason ?? null,
+    breakStartedAt: day?.paused ? (day.pausedAt ?? null) : null,
     currentToken: serving?.tokenNumber ?? null,
     currentPatientName: servingRow ? servingRow.patientName : null,
     nextPatient: nextWaitingRow
@@ -1229,7 +1280,10 @@ export type PublicQueueView = {
   patientFirstName: string;
   currentToken: number | null;
   patientsAhead: number | null;
+  /** The doctor is on a break. */
   paused: boolean;
+  /** When the doctor's current break began, when known. */
+  breakStartedAt: Date | null;
   isAppointmentPaused: boolean;
   pausedAt: Date | null;
   resumeAt: Date | null;
@@ -1315,6 +1369,7 @@ export async function getPublicQueueView(
       currentToken: serving?.tokenNumber ?? null,
       patientsAhead: ahead,
       paused: day?.paused ?? false,
+      breakStartedAt: day?.paused ? (day.pausedAt ?? null) : null,
       isAppointmentPaused: appointment.status === 'HELD',
       pausedAt: appointment.pausedAt ?? null,
       resumeAt: appointment.resumeAt ?? null,
