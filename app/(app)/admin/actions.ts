@@ -6,6 +6,7 @@ import { requirePlatformAdmin } from '@/lib/auth/platform';
 import { clearSessionCookie, readSessionCookie, setSessionCookie } from '@/lib/auth/session';
 import { isPlausiblePhoneNumberId } from '@/lib/domain/whatsapp-integration';
 import { endImpersonation, ImpersonationError } from '@/lib/services/impersonation';
+import { StaffAccountError } from '@/lib/services/auth';
 import { createHospital } from '@/lib/services/platform';
 import { WabaBindingError } from '@/lib/services/whatsapp-byo';
 import {
@@ -187,6 +188,9 @@ export async function createHospitalAction(formData: FormData) {
     });
     hospitalId = result.hospitalId;
   } catch (error) {
+    if (error instanceof StaffAccountError) {
+      redirect(`/admin/onboard?error=${error.code}`);
+    }
     if (error instanceof WabaBindingError) {
       // The hospital exists by this point; only the binding failed. Naming the
       // reason matters because every one of these is a typo in a pasted key.

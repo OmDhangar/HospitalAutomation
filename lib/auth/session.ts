@@ -54,5 +54,14 @@ export async function requireWritableSession(): Promise<Session> {
       'This is a read-only support session. Stop the support session to make changes.',
     );
   }
+  /**
+   * A temporary password buys a password change and nothing else. The layout
+   * already redirects such a session to /change-password, but a layout is not
+   * a security boundary — a server action is reachable by POST whether it ran
+   * or not — so the refusal lives here, where every write passes.
+   */
+  if (session.mustChangePassword) {
+    throw new Error('Choose your own password before making changes.');
+  }
   return session;
 }

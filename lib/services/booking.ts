@@ -26,7 +26,7 @@ import { getProvider, type InteractiveButton, type ListRow } from '@/lib/notify/
 import { listDoctors } from './hospital';
 import { createWalkIn, getQueueSnapshot } from './queue';
 import { getDoctorSlotsForDate } from './scheduling';
-import { bookScheduledSlot } from './web-booking';
+import { bookScheduledSlot, BookingError } from './web-booking';
 
 /**
  * Used only when a patient has never given a name, has no record, and set no
@@ -474,7 +474,20 @@ function dropped(
 /**
  * Handles one inbound WhatsApp message.
  */
-export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<void> {
+export async function handleInboundMessage(
+  inbound: InboundWhatsApp,
+  options: {
+    /**
+     * Set by the per-hospital webhook. Its signature proves the payload came
+     * from that hospital's own Meta app — and nothing more. The phone number
+     * id inside is whatever that app put there, so a hospital controlling its
+     * own app secret could otherwise sign a message naming another hospital's
+     * number and have it booked into that hospital's queue, with replies sent
+     * from that hospital's number.
+     */
+    expectedHospitalId?: string;
+  } = {},
+): Promise<void> {
   const db = getDb();
 
   const [resolved] = await db.execute<{ hospital_id: string | null }>(
@@ -486,10 +499,18 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
       hint: 'whatsapp_numbers row must be status=registered on an active hospital',
     });
   }
+  if (options.expectedHospitalId && options.expectedHospitalId !== hospitalId) {
+    return dropped(inbound, 'number_not_owned_by_signing_hospital', {
+      signing_hospital: options.expectedHospitalId,
+    });
+  }
 
   const phoneE164 = normalizeIndianPhone(inbound.fromPhone);
   if (!phoneE164) {
-    return dropped(inbound, 'unparseable_sender', { from: inbound.fromPhone });
+    return dropped(inbound, 'unparseable_sender', {
+      // Masked: logs are not where patient phone numbers belong.
+      from_masked: `${inbound.fromPhone.slice(0, 3)}…${inbound.fromPhone.slice(-2)}`,
+    });
   }
 
   const claimed = await withTenant(hospitalId, async (tx) => {
@@ -1030,15 +1051,41 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
         break;
       }
 
-      const booked = await bookScheduledSlot({
-        hospitalId,
-        doctorId: doctor.id,
-        patientName: pName,
-        patientAge: pAge,
-        phoneE164,
-        slotDatetimeIso: slotIso,
-        locale,
-      });
+      let booked: Awaited<ReturnType<typeof bookScheduledSlot>>;
+      try {
+        booked = await bookScheduledSlot({
+          hospitalId,
+          doctorId: doctor.id,
+          patientName: pName,
+          patientAge: pAge,
+          phoneE164,
+          slotDatetimeIso: slotIso,
+          locale,
+        });
+      } catch (error) {
+        if (!(error instanceof BookingError)) throw error;
+        // The slot went between showing the list and the tap. Send the booking
+        // page rather than silence, so the patient can pick another time.
+        const bookUrl = `${baseUrl}/book?doctor=${doctor.id}&phone=${encodeURIComponent(phoneE164)}&hospital=${hospitalId}&locale=${locale}`;
+        const sent = await provider.sendText({
+          phoneNumberId: inbound.phoneNumberId,
+          toPhoneE164: phoneE164,
+          body: REDIRECT_WEB[locale](doctor.name, bookUrl),
+        });
+        await withTenant(hospitalId, (tx) =>
+          tx.insert(notificationOutbox).values({
+            hospitalId,
+            milestone: 'conversation:redirect_web_slot',
+            templateCode: 'conversation',
+            locale,
+            payload: { doctorId: doctor.id, url: bookUrl, reason: error.code },
+            status: 'sent',
+            providerMessageId: sent.providerMessageId,
+            sentAt: new Date(),
+          }),
+        );
+        break;
+      }
 
       const formattedTime = slotDisplayTime ?? booked.slotTimeFormatted;
       const timeString =

@@ -92,6 +92,18 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
       {params.error === 'role' ? (
         <Alert tone="error">Choose a role for the new staff member.</Alert>
       ) : null}
+      {params.error === 'email_in_use' ? (
+        <Alert tone="error">
+          That email already has a login. Each login belongs to one hospital — use a different
+          email address.
+        </Alert>
+      ) : null}
+      {params.error === 'weak_password' ? (
+        <Alert tone="error">
+          Give a temporary password of at least 10 characters. They will choose their own when
+          they first sign in.
+        </Alert>
+      ) : null}
       {params.error === 'fee' ? (
         <Alert tone="error">Enter the fee in rupees, like 300.</Alert>
       ) : null}
@@ -534,8 +546,18 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
             <Field label="Email Address" hint="Used for dashboard sign-in">
               <Input name="email" type="email" required placeholder="priya@hospital.com" />
             </Field>
-            <Field label="Temporary Password" hint="Optional. Defaults to Staff@123">
-              <Input name="password" type="password" placeholder="••••••••" />
+            <Field
+              label="Temporary Password"
+              hint="At least 10 characters. They must choose their own at first sign-in"
+            >
+              <Input
+                name="password"
+                type="text"
+                autoComplete="off"
+                required
+                minLength={10}
+                placeholder="Tell them this once"
+              />
             </Field>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Role">

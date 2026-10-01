@@ -12,6 +12,8 @@ import {
   setDoctorPaused,
   setPriority,
 } from '@/lib/services/queue';
+import { markStaleAppointmentsNoShowForHospital } from '@/lib/services/sweeps';
+import { serviceDateIn } from '@/lib/domain/time';
 
 const adminUrl = process.env.DATABASE_ADMIN_URL;
 const enabled = Boolean(adminUrl && process.env.DATABASE_URL);
@@ -354,6 +356,83 @@ describe.skipIf(!enabled)('queue engine', () => {
       const after = (await getPublicQueueView(second.publicToken))!;
       expect(after.paused).toBe(false);
       expect(after.breakStartedAt).toBeNull();
+    });
+  });
+
+  describe('end of day', () => {
+    /** One appointment in a given status on a given date, each for its own patient. */
+    const seed = async (status: string, serviceDate: string, token: number) => {
+      const patientId = uuid();
+      const appointmentId = uuid();
+      await admin`
+        insert into patients (id, hospital_id, phone_e164, name)
+        values (${patientId}, ${hospitalId}, ${`+91980000${String(token).padStart(4, '0')}`}, ${`EOD ${token}`})
+      `;
+      await admin`
+        insert into appointments
+          (id, hospital_id, branch_id, doctor_id, patient_id, service_date,
+           token_number, status, source, public_token, public_token_expires_at)
+        values
+          (${appointmentId}, ${hospitalId}, ${branchId}, ${doctorId}, ${patientId},
+           ${serviceDate}, ${token}, ${status}, 'walk_in', ${'eod-' + appointmentId},
+           now() + interval '1 day')
+      `;
+      return appointmentId;
+    };
+
+    const statusOf = async (id: string) => {
+      const [row] = await admin<{ status: string }[]>`select status from appointments where id = ${id}`;
+      return row.status;
+    };
+
+    it('marks everyone still waiting yesterday as a no-show, and leaves the rest', async () => {
+      const yesterday = serviceDateIn(TZ, new Date(Date.now() - 24 * 60 * 60 * 1000));
+      const today = serviceDateIn(TZ, new Date());
+
+      const waiting = await seed('WAITING', yesterday, 1);
+      const held = await seed('HELD', yesterday, 2);
+      const skipped = await seed('SKIPPED', yesterday, 3);
+      // The doctor's last patient: seen, never clicked past. Not a no-show.
+      const inRoom = await seed('IN_CONSULTATION', yesterday, 4);
+      const called = await seed('CALLED', yesterday, 5);
+      const done = await seed('COMPLETED', yesterday, 6);
+      // Today is not over.
+      const todayWaiting = await seed('WAITING', today, 7);
+
+      const marked = await markStaleAppointmentsNoShowForHospital(hospitalId);
+      expect(marked).toBe(3);
+
+      expect(await statusOf(waiting)).toBe('NO_SHOW');
+      expect(await statusOf(held)).toBe('NO_SHOW');
+      expect(await statusOf(skipped)).toBe('NO_SHOW');
+      expect(await statusOf(inRoom)).toBe('IN_CONSULTATION');
+      expect(await statusOf(called)).toBe('CALLED');
+      expect(await statusOf(done)).toBe('COMPLETED');
+      expect(await statusOf(todayWaiting)).toBe('WAITING');
+
+      // The history records what each one actually was, not a blanket WAITING.
+      const events = await admin<{ appointment_id: string; from_status: string; action: string }[]>`
+        select appointment_id, from_status::text, action::text from queue_events
+        where hospital_id = ${hospitalId} and to_status = 'NO_SHOW'
+      `;
+      expect(events).toHaveLength(3);
+      expect(events.every((e) => e.action === 'mark_no_show')).toBe(true);
+      expect(events.find((e) => e.appointment_id === held)?.from_status).toBe('HELD');
+      expect(events.find((e) => e.appointment_id === skipped)?.from_status).toBe('SKIPPED');
+
+      // Running again changes nothing: the sweep fires every minute.
+      expect(await markStaleAppointmentsNoShowForHospital(hospitalId)).toBe(0);
+    });
+
+    it('sends the patients no message', async () => {
+      const yesterday = serviceDateIn(TZ, new Date(Date.now() - 24 * 60 * 60 * 1000));
+      await seed('WAITING', yesterday, 1);
+      await markStaleAppointmentsNoShowForHospital(hospitalId);
+
+      const queued = await withTenant(hospitalId, (tx) =>
+        tx.select().from(notificationOutbox).where(eq(notificationOutbox.hospitalId, hospitalId)),
+      );
+      expect(queued.filter((row) => row.templateCode === 'appointment_cancelled')).toHaveLength(0);
     });
   });
 

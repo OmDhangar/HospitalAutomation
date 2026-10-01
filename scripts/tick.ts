@@ -20,7 +20,7 @@ async function main() {
   // delay a message a patient is waiting on right now.
   const sweeps = await runSweeps();
   console.log(
-    `expired ${sweeps.appointmentsExpired} appointment(s), ` +
+    `marked ${sweeps.appointmentsMarkedNoShow} appointment(s) no-show, ` +
       `resumed ${sweeps.appointmentsResumed} paused appointment(s), ` +
       `${sweeps.subscriptionsExpired} subscription(s), ` +
       `${sweeps.paymentLinksExpired} payment link(s)`,

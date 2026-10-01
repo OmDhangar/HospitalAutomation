@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { withTenant } from '@/lib/db';
 import { getAdminDb } from '@/lib/db/admin';
 import {
@@ -16,6 +16,7 @@ import { formatDoctorName } from '@/lib/domain/booking';
 import { formatTimeIn, serviceDateIn } from '@/lib/domain/time';
 import type { Locale } from '@/lib/i18n/patient';
 import { getProvider } from '@/lib/notify/provider';
+import { getDoctorSlotsForDate } from './scheduling';
 
 export type TimeSlot = {
   timeStr: string;
@@ -43,6 +44,32 @@ export type DoctorBookingDetails = {
   serviceDate: string;
   slots: TimeSlot[];
 };
+
+/** A booking refused for a reason the patient can be told. */
+export class BookingError extends Error {
+  constructor(
+    readonly code: 'INVALID_SLOT' | 'SLOT_UNAVAILABLE' | 'TOO_FAR_AHEAD',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'BookingError';
+  }
+}
+
+/** How far ahead a slot can be booked. */
+const MAX_BOOKING_DAYS_AHEAD = 60;
+
+/** Statuses that hold a slot. A cancelled or finished visit frees it. */
+const SLOT_HOLDING_STATUSES = [
+  'CREATED',
+  'CONFIRMED',
+  'ARRIVED',
+  'WAITING',
+  'HELD',
+  'SKIPPED',
+  'CALLED',
+  'IN_CONSULTATION',
+] as const;
 
 /**
  * Which hospital a doctor belongs to, for a link that only carries the doctor.
@@ -112,8 +139,7 @@ export async function getDoctorBookingDetails(args: {
     const now = new Date();
     const serviceDate = args.serviceDate || serviceDateIn(timezone, now);
 
-    // Fetch dynamically calculated slots from scheduling service
-    const { getDoctorSlotsForDate } = await import('./scheduling');
+    // Slots as the scheduler computes them
     const scheduleResult = await getDoctorSlotsForDate({
       hospitalId: args.hospitalId,
       doctorId: args.doctorId,
@@ -164,10 +190,42 @@ export async function bookScheduledSlot(args: {
 }) {
   const slotDate = new Date(args.slotDatetimeIso);
   if (isNaN(slotDate.getTime())) {
-    throw new Error('Invalid slot date');
+    throw new BookingError('INVALID_SLOT', 'That appointment time is not valid.');
   }
 
   const now = new Date();
+
+  if (slotDate.getTime() > now.getTime() + MAX_BOOKING_DAYS_AHEAD * 24 * 60 * 60 * 1000) {
+    throw new BookingError(
+      'TOO_FAR_AHEAD',
+      `Appointments can be booked up to ${MAX_BOOKING_DAYS_AHEAD} days ahead.`,
+    );
+  }
+
+  /**
+   * Only a slot the schedule actually offers, and that is free right now.
+   *
+   * This used to accept any timestamp at all — the past, a Sunday the doctor
+   * does not work, 3am, the year 2099 — because the only thing checking it
+   * was the booking page's own slot picker, and the endpoint behind it is
+   * public. The scheduler already knows working hours, breaks, blocked
+   * windows, disabled slots, past times and existing bookings, so asking it
+   * is the whole check. The slot generator works in IST, so the date is too.
+   */
+  const { slots } = await getDoctorSlotsForDate({
+    hospitalId: args.hospitalId,
+    doctorId: args.doctorId,
+    serviceDate: serviceDateIn('Asia/Kolkata', slotDate),
+  });
+  const offered = slots.some(
+    (slot) => slot.available && new Date(slot.datetimeIso).getTime() === slotDate.getTime(),
+  );
+  if (!offered) {
+    throw new BookingError(
+      'SLOT_UNAVAILABLE',
+      'That time is no longer available. Please choose another slot.',
+    );
+  }
 
   return withTenant(args.hospitalId, async (tx) => {
     const [doctor] = await tx
@@ -221,8 +279,18 @@ export async function bookScheduledSlot(args: {
       })
       .returning();
 
-    // Lock and get lastTokenNumber
-    const [existingDay] = await tx
+    /**
+     * Lock the doctor's day, creating it first if needed, so the lock is
+     * always taken. It used to be taken only when the row already existed,
+     * which left the first bookings of a day unserialised — two of them could
+     * share a token number, or a slot.
+     */
+    await tx
+      .insert(doctorDayStates)
+      .values({ hospitalId: args.hospitalId, doctorId: doctor.id, serviceDate })
+      .onConflictDoNothing();
+
+    const [day] = await tx
       .select()
       .from(doctorDayStates)
       .where(
@@ -233,24 +301,31 @@ export async function bookScheduledSlot(args: {
       )
       .for('update');
 
-    let tokenNumber = 1;
-    if (existingDay) {
-      tokenNumber = existingDay.lastTokenNumber + 1;
-      await tx
-        .update(doctorDayStates)
-        .set({ lastTokenNumber: tokenNumber, updatedAt: now })
-        .where(eq(doctorDayStates.id, existingDay.id));
-    } else {
-      await tx
-        .insert(doctorDayStates)
-        .values({
-          hospitalId: args.hospitalId,
-          doctorId: doctor.id,
-          serviceDate,
-          lastTokenNumber: tokenNumber,
-        })
-        .onConflictDoNothing();
+    // Re-checked under the lock: two people can pick the same free slot in
+    // the same second, and the check above ran before either was booked.
+    const [taken] = await tx
+      .select({ id: appointments.id })
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.doctorId, doctor.id),
+          eq(appointments.scheduledSlotAt, slotDate),
+          inArray(appointments.status, [...SLOT_HOLDING_STATUSES]),
+        ),
+      )
+      .limit(1);
+    if (taken) {
+      throw new BookingError(
+        'SLOT_UNAVAILABLE',
+        'That time was just taken. Please choose another slot.',
+      );
     }
+
+    const tokenNumber = day.lastTokenNumber + 1;
+    await tx
+      .update(doctorDayStates)
+      .set({ lastTokenNumber: tokenNumber, updatedAt: now })
+      .where(eq(doctorDayStates.id, day.id));
 
     const publicToken = generatePublicToken();
     const publicTokenExpiresAt = new Date(slotDate.getTime() + 24 * 60 * 60 * 1000);

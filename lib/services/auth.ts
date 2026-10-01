@@ -2,7 +2,13 @@ import { and, asc, eq, gt, sql } from 'drizzle-orm';
 import { getDb, withTenant, type Tx } from '@/lib/db';
 import { markRequestReadOnly } from '@/lib/db/request-context';
 import { auditLogs, branches, hospitals, sessions, staffMemberships, users } from '@/lib/db/schema';
-import { hashPassword, verifyPassword } from '@/lib/security/password';
+import {
+  hashPassword,
+  MIN_PASSWORD_LENGTH,
+  passwordProblem,
+  unguessablePassword,
+  verifyPassword,
+} from '@/lib/security/password';
 import { generateSessionToken, hashToken } from '@/lib/security/tokens';
 import { can, type StaffRole } from '@/lib/domain/permissions';
 import { assertCanAdd } from './entitlements';
@@ -39,6 +45,46 @@ export type Session = {
 /** Impersonation is for looking at a problem, not for living in. */
 export const IMPERSONATION_TTL_MINUTES = 30;
 
+export class StaffAccountError extends Error {
+  constructor(
+    readonly code: 'EMAIL_IN_USE' | 'WEAK_PASSWORD',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'StaffAccountError';
+  }
+}
+
+/**
+ * Refuses an email that already has a login.
+ *
+ * Adding staff used to look the email up and, if a login existed, attach it
+ * to the new hospital with its password unchanged. That made an account
+ * claimable in advance: an owner at one hospital could create a login for an
+ * email they expected another hospital to use, wait for it to be attached
+ * there, deactivate it at their own hospital, and sign in — landing as staff
+ * (or owner) of the other hospital, on a password they had chosen.
+ *
+ * A login therefore belongs to exactly one hospital, which is also all the
+ * session model supports. Someone who genuinely works at two places uses two
+ * email addresses.
+ */
+export async function assertEmailUnclaimed(
+  db: { select: ReturnType<typeof getDb>['select'] },
+  email: string,
+): Promise<void> {
+  const [existing] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, email.toLowerCase().trim()));
+  if (existing) {
+    throw new StaffAccountError(
+      'EMAIL_IN_USE',
+      'That email already has a login. Use a different email address.',
+    );
+  }
+}
+
 /**
  * `users` and `sessions` are the two tables without row-level security: a login
  * has to be resolvable before any hospital is known. Authorisation for them is
@@ -53,44 +99,69 @@ export async function createStaffUser(args: {
   role: StaffRole;
   branchId?: string | null;
 }) {
+  const db = getDb();
+  const email = args.email.toLowerCase().trim();
+
+  /**
+   * The password given here is someone else's to replace, never theirs to
+   * keep: the person adding the account knows it. So it is always marked
+   * must-change, and with none given the account gets one that nobody knows,
+   * to be replaced through an operator-issued temporary password.
+   *
+   * There used to be a fixed default ("Staff@123") that was never forced to
+   * change — a password anyone could guess for any account created without
+   * one.
+   */
+  if (args.password !== undefined) {
+    const problem = passwordProblem(args.password);
+    if (problem) {
+      throw new StaffAccountError(
+        'WEAK_PASSWORD',
+        problem === 'too_short'
+          ? `Use a temporary password of at least ${MIN_PASSWORD_LENGTH} characters.`
+          : 'That password was a public default. Choose another.',
+      );
+    }
+  }
+
+  await assertEmailUnclaimed(db, email);
+
   // Enforce staff limits for new staff additions
   await assertCanAdd({ hospitalId: args.hospitalId, kind: 'staff' });
 
-  const db = getDb();
-  const rawPassword = args.password || 'Staff@123';
-  const email = args.email.toLowerCase().trim();
-
-  // Find existing user or insert
-  let [user] = await db
-    .select()
-    .from(users)
-    .where(eq(users.email, email));
-
-  if (!user) {
-    [user] = await db
-      .insert(users)
-      .values({
-        email,
-        passwordHash: await hashPassword(rawPassword),
-        name: args.name.trim(),
-      })
-      .returning();
-  }
+  const [user] = await db
+    .insert(users)
+    .values({
+      email,
+      passwordHash: await hashPassword(args.password ?? unguessablePassword()),
+      name: args.name.trim(),
+      mustChangePassword: true,
+    })
+    .returning();
 
   // `users` has no RLS, but `staff_memberships` does — it is the row that binds
   // a person to a hospital, so it has to be written inside that tenant's scope.
-  const [membership] = await withTenant(args.hospitalId, (tx) =>
-    tx
-      .insert(staffMemberships)
-      .values({
-        userId: user.id,
-        hospitalId: args.hospitalId,
-        branchId: args.branchId ?? null,
-        role: args.role,
-        active: true,
-      })
-      .returning(),
-  );
+  let membership;
+  try {
+    [membership] = await withTenant(args.hospitalId, (tx) =>
+      tx
+        .insert(staffMemberships)
+        .values({
+          userId: user.id,
+          hospitalId: args.hospitalId,
+          branchId: args.branchId ?? null,
+          role: args.role,
+          active: true,
+        })
+        .returning(),
+    );
+  } catch (error) {
+    // Two connections, so not one transaction. Without this a failed
+    // membership would leave a login with no hospital, and the email could
+    // never be added again.
+    await db.delete(users).where(eq(users.id, user.id));
+    throw error;
+  }
 
   return { user, membership };
 }
@@ -334,7 +405,7 @@ export async function setStaffActive(args: {
   membershipId: string;
   active: boolean;
 }) {
-  return withTenant(args.hospitalId, (tx) =>
+  const result = await withTenant(args.hospitalId, (tx) =>
     tx
       .update(staffMemberships)
       .set({ active: args.active })
@@ -345,5 +416,9 @@ export async function setStaffActive(args: {
         ),
       ),
   );
+  // Removing someone takes effect now, not when this process's 30-second
+  // session cache happens to expire.
+  if (!args.active) invalidateSessionCache();
+  return result;
 }
 

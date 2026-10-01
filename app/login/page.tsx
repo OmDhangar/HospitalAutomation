@@ -1,19 +1,46 @@
 import { redirect } from 'next/navigation';
 import { Alert, Button, Field, Input } from '@/components/ui';
 import { getSession, setSessionCookie } from '@/lib/auth/session';
+import { clearEvents, clientIp, ipRules, isThrottled, recordEvent } from '@/lib/security/throttle';
 import { login } from '@/lib/services/auth';
+
+const WINDOW_MS = 15 * 60 * 1000;
 
 export const metadata = { title: 'Sign in · Qurio' };
 
 async function signIn(formData: FormData) {
   'use server';
 
-  const email = String(formData.get('email') ?? '');
+  const email = String(formData.get('email') ?? '').toLowerCase().trim();
   const password = String(formData.get('password') ?? '');
+
+  /**
+   * Failed sign-ins are counted per account and per IP, in the database.
+   *
+   * Per account stops a guesser working through passwords for one owner;
+   * five tries in fifteen minutes is generous for a person and useless for a
+   * script. Per IP stops one machine spraying a common password across many
+   * accounts. Only failures count, so a busy reception desk sharing one IP
+   * never locks itself out by signing in.
+   *
+   * The refusal happens before the password is checked, so a locked account
+   * gives a guesser no signal about whether their guess was right.
+   */
+  const emailRule = { key: `login:email:${email}`, limit: 5, windowMs: WINDOW_MS };
+  const rules = [
+    emailRule,
+    ...ipRules(await clientIp(), { prefix: 'login:ip', limit: 30, windowMs: WINDOW_MS }),
+  ];
+  if (await isThrottled(rules)) redirect('/login?error=locked');
 
   const token = await login(email, password);
   // Deliberately one message for both wrong email and wrong password.
-  if (!token) redirect('/login?error=invalid');
+  if (!token) {
+    await recordEvent(rules.map((rule) => rule.key));
+    redirect('/login?error=invalid');
+  }
+
+  await clearEvents([emailRule.key]);
 
   await setSessionCookie(token);
   redirect('/dashboard');
@@ -40,7 +67,13 @@ export default async function LoginPage({
           action={signIn}
           className="space-y-4 rounded-xl border border-ink-200 bg-white p-6 shadow-[var(--shadow-raised)]"
         >
-          {error ? <Alert tone="error">Incorrect email or password.</Alert> : null}
+          {error === 'locked' ? (
+            <Alert tone="error">
+              Too many failed attempts. Wait 15 minutes and try again.
+            </Alert>
+          ) : error ? (
+            <Alert tone="error">Incorrect email or password.</Alert>
+          ) : null}
 
           <Field label="Email">
             <Input

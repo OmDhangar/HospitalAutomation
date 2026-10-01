@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { requireSession } from '@/lib/auth/session';
+import { requireSession, requireWritableSession } from '@/lib/auth/session';
+import { can } from '@/lib/domain/permissions';
 import { serviceDateIn } from '@/lib/domain/time';
 import { blockIntervalAndNotify, previewDisruption } from '@/lib/services/disruption';
 import {
@@ -9,9 +10,32 @@ import {
   toggleSlotOverride,
 } from '@/lib/services/scheduling';
 
+/**
+ * Doctor schedules are hospital configuration, so this endpoint is the owner's,
+ * like the Settings page that calls it.
+ *
+ * It used to accept any signed-in staff member. The page is owner-only, but an
+ * endpoint is reachable without its page: a receptionist or doctor could POST
+ * here directly to rewrite any doctor's hours, or block a window — which
+ * cancels everyone booked in it and messages each of them.
+ */
+const forbidden = () => NextResponse.json({ error: 'Not allowed' }, { status: 403 });
+
+/**
+ * Errors are logged in full and answered in general. A raw database message
+ * names tables and constraints, which is reconnaissance for anyone probing.
+ */
+function failure(err: unknown, fallback: string) {
+  // redirect() from requireSession signals by throwing; let Next handle it.
+  if (err && typeof err === 'object' && 'digest' in err) throw err;
+  console.error('[api:doctor-schedule]', err);
+  return NextResponse.json({ error: fallback }, { status: 500 });
+}
+
 export async function GET(request: Request) {
   try {
     const session = await requireSession();
+    if (!can(session.role, 'hospital.configure')) return forbidden();
     const { searchParams } = new URL(request.url);
     const doctorId = searchParams.get('doctorId');
     const dateParam = searchParams.get('date');
@@ -29,14 +53,15 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ ok: true, data: result, serviceDate });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unauthorized or error occurred';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return failure(err, 'Could not load the schedule');
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const session = await requireSession();
+    // Writable as well: refuses read-only support sessions and temporary passwords.
+    const session = await requireWritableSession();
+    if (!can(session.role, 'hospital.configure')) return forbidden();
     const body = await request.json();
     const { action, doctorId } = body;
 
@@ -134,7 +159,6 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to perform schedule operation';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return failure(err, 'Could not update the schedule');
   }
 }

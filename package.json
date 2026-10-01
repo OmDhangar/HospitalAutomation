@@ -27,7 +27,7 @@
   "dependencies": {
     "date-fns": "^4.4.0",
     "drizzle-orm": "^0.45.2",
-    "next": "16.3.4",
+    "next": "16.3.8",
     "postgres": "^3.4.9",
     "react": "19.2.8",
     "react-dom": "19.2.8",
@@ -42,7 +42,7 @@
     "dotenv": "^17.4.2",
     "drizzle-kit": "^0.31.10",
     "eslint": "^9",
-    "eslint-config-next": "16.3.4",
+    "eslint-config-next": "16.3.8",
     "postcss-preset-env": "^11.5.4",
     "tailwindcss": "^4",
     "tsx": "^4.23.13",

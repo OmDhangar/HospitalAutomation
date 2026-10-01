@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { drainOutbox } from '@/lib/notify/worker';
+import { safeEqual } from '@/lib/security/tokens';
 import { runSweeps } from '@/lib/services/sweeps';
 
 export const dynamic = 'force-dynamic';
@@ -34,8 +35,9 @@ async function handleTick(request: Request) {
   if (!secret) {
     return NextResponse.json({ error: 'INTERNAL_TICK_SECRET is not set' }, { status: 503 });
   }
-  const authHeader = request.headers.get('authorization');
-  if (authHeader !== `Bearer ${secret}`) {
+  // Constant-time, so response timing cannot be used to guess the secret.
+  const authHeader = request.headers.get('authorization') ?? '';
+  if (!safeEqual(authHeader, `Bearer ${secret}`)) {
     return new NextResponse('unauthorized', { status: 401 });
   }
 

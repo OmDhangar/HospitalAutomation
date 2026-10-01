@@ -13,7 +13,8 @@ import {
   staffMemberships,
   users,
 } from '@/lib/db/schema';
-import { hashPassword } from '@/lib/security/password';
+import { hashPassword, passwordProblem, unguessablePassword } from '@/lib/security/password';
+import { assertEmailUnclaimed, StaffAccountError } from './auth';
 import { startSubscription } from './subscriptions';
 import { bindHospitalWaba } from './whatsapp-byo';
 import { assignNumberToHospital } from './whatsapp-integration';
@@ -282,8 +283,32 @@ export async function createHospital(args: CreateHospitalParams): Promise<Create
 
   const timezone = args.timezone || 'Asia/Kolkata';
   const ownerEmail = args.ownerEmail.toLowerCase().trim();
-  const rawPassword = args.ownerPassword || 'Hospital@123';
-  const passwordHash = await hashPassword(rawPassword);
+
+  /**
+   * Checked before anything is created, so a refused email leaves no
+   * half-onboarded hospital behind. See assertEmailUnclaimed for the takeover
+   * this closes: an existing login used to be attached to the new hospital
+   * with whatever password it already had.
+   */
+  await assertEmailUnclaimed(db, ownerEmail);
+
+  /**
+   * No more fixed default ("Hospital@123", never forced to change). A typed
+   * password is temporary; with none, the owner gets a password nobody knows
+   * and the operator issues a temporary one from the account page.
+   */
+  if (args.ownerPassword) {
+    const problem = passwordProblem(args.ownerPassword);
+    if (problem) {
+      throw new StaffAccountError(
+        'WEAK_PASSWORD',
+        problem === 'too_short'
+          ? 'The initial password must be at least 10 characters.'
+          : 'That password was a public default. Choose another.',
+      );
+    }
+  }
+  const passwordHash = await hashPassword(args.ownerPassword || unguessablePassword());
 
   const [hospital] = await db
     .insert(hospitals)
@@ -305,22 +330,16 @@ export async function createHospital(args: CreateHospitalParams): Promise<Create
     })
     .returning();
 
-  // Create owner user (or find existing by email)
-  let [user] = await db
-    .select()
-    .from(users)
-    .where(eq(users.email, ownerEmail));
-
-  if (!user) {
-    [user] = await db
-      .insert(users)
-      .values({
-        name: args.ownerName.trim(),
-        email: ownerEmail,
-        passwordHash,
-      })
-      .returning();
-  }
+  // The email was checked as unclaimed above.
+  const [user] = await db
+    .insert(users)
+    .values({
+      name: args.ownerName.trim(),
+      email: ownerEmail,
+      passwordHash,
+      mustChangePassword: true,
+    })
+    .returning();
 
   // Create staff membership
   await db

@@ -99,13 +99,13 @@ export async function POST(request: Request, ctx: RouteContext<'/api/whatsapp/we
       try {
         /**
          * Routed by phone_number_id through `resolve_whatsapp_number`, exactly
-         * as the shared route does — not by the hospital id in the URL. The
-         * signature proves the payload came from this hospital's app; it does
-         * not prove the sender number belongs to them, and trusting the path
-         * over the number would let a misconfigured app write into the wrong
+         * as the shared route does — and then required to resolve to the
+         * hospital in the URL. The signature proves the payload came from this
+         * hospital's app; it does not prove the number inside belongs to them.
+         * Trusting either one alone would let this app write into another
          * tenant's queue.
          */
-        await handleInboundMessage(message);
+        await handleInboundMessage(message, { expectedHospitalId: hospitalId });
       } catch (error) {
         // One bad message must not abandon the rest of the batch.
         console.error('whatsapp inbound failed', message.messageId, error);

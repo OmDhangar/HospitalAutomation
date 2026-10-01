@@ -1,6 +1,7 @@
-import { and, eq, inArray, lt, lte, sql } from 'drizzle-orm';
+import { and, eq, lt, lte, sql } from 'drizzle-orm';
 import { getAdminDb } from '@/lib/db/admin';
-import { appointments, queueEvents } from '@/lib/db/schema';
+import { appointments, queueEvents, rateLimitEvents } from '@/lib/db/schema';
+import type { AppointmentStatus } from '@/lib/domain/types';
 import { expireStalePaymentLinks } from './payments';
 import { expireLapsedSubscriptions } from './subscriptions';
 
@@ -18,56 +19,88 @@ import { expireLapsedSubscriptions } from './subscriptions';
  */
 
 /**
- * Closes off appointments left open when a clinic simply went home.
+ * Statuses that mean the patient was still waiting to be seen when the day
+ * ended. CALLED and IN_CONSULTATION are deliberately not here: at closing time
+ * those are almost always the doctor's last patient, who was seen but never
+ * clicked past, and calling them a no-show would be false.
+ */
+const NOT_SEEN_STATUSES = ['CREATED', 'CONFIRMED', 'ARRIVED', 'WAITING', 'HELD', 'SKIPPED'] as const;
+
+/**
+ * Marks every appointment still waiting when its day ended as a no-show.
  *
  * A queue is scoped to a service date, so an appointment still WAITING on a
- * past date will never be called — nobody is looking at yesterday's queue. Left
- * alone those rows sit there permanently, and because reports count by status
- * they quietly corrupt every no-show and completion figure the hospital is
- * shown.
+ * past date will never be called — nobody is looking at yesterday's queue.
+ * The hospital's rule is that a patient not seen by the end of their day did
+ * not show, so that is what they become, and the no-show figures in reports
+ * count them.
  *
- * EXPIRED rather than NO_SHOW, deliberately. A no-show is a claim that the
- * patient failed to arrive, which is a thing to say about a person and may
- * simply be untrue — the doctor may have run out of time. EXPIRED says only
- * that the day ended with this unresolved, which is all that is actually known.
+ * "End of day" is midnight in India: the sweep runs every minute, and from
+ * 00:00 IST anything on an earlier date is closed.
+ *
+ * No WhatsApp message goes out. Marking a no-show by hand sends the patient an
+ * "appointment cancelled" note; doing that for every leftover patient at
+ * midnight would spend a message each to tell people, hours late, about a day
+ * that is already over.
  */
-export async function expireStaleAppointments(now: Date = new Date()): Promise<number> {
+export async function markStaleAppointmentsNoShow(
+  now: Date = new Date(),
+  options: { hospitalId?: string } = {},
+): Promise<number> {
   const db = getAdminDb();
+  const statuses = sql.join(
+    NOT_SEEN_STATUSES.map((status) => sql`${status}`),
+    sql`, `,
+  );
+  const hospitalFilter = options.hospitalId
+    ? sql`and hospital_id = ${options.hospitalId}::uuid`
+    : sql``;
 
-  // Date arithmetic in the database: service_date is a date, and comparing it
-  // to a JS timestamp would drag the server's timezone into a decision that
-  // has nothing to do with it.
-  const rows = await db
-    .update(appointments)
-    .set({ status: 'EXPIRED', updatedAt: now })
-    .where(
-      and(
-        inArray(appointments.status, ['CREATED', 'CONFIRMED', 'ARRIVED', 'WAITING', 'HELD', 'SKIPPED']),
-        lt(appointments.serviceDate, sql`(${now.toISOString()}::timestamptz at time zone 'Asia/Kolkata')::date`),
-      ),
+  /**
+   * One statement, returning each row's status from before the update, so the
+   * queue event records what actually changed — the old version could not see
+   * it and wrote WAITING for every row. Date arithmetic stays in the database:
+   * service_date is a date, and comparing it to a JS timestamp would drag the
+   * server's timezone into a decision that has nothing to do with it.
+   * SKIP LOCKED leaves a row a receptionist is acting on right now for the
+   * next tick instead of waiting on it.
+   */
+  const rows = await db.execute<{
+    id: string;
+    hospital_id: string;
+    doctor_id: string;
+    from_status: string;
+  }>(sql`
+    with stale as (
+      select id, status
+      from appointments
+      where status::text in (${statuses})
+        and service_date < (${now.toISOString()}::timestamptz at time zone 'Asia/Kolkata')::date
+        ${hospitalFilter}
+      for update skip locked
     )
-    .returning({
-      id: appointments.id,
-      hospitalId: appointments.hospitalId,
-      doctorId: appointments.doctorId,
-      status: appointments.status,
-    });
+    update appointments a
+    set status = 'NO_SHOW', updated_at = ${now.toISOString()}::timestamptz
+    from stale
+    where a.id = stale.id
+    returning a.id, a.hospital_id, a.doctor_id, stale.status::text as from_status
+  `);
 
   // Queue history stays complete: an appointment that changes status without
   // an event is a gap in the only record that answers "what happened to me".
-  for (const row of rows) {
-    await db.insert(queueEvents).values({
-      hospitalId: row.hospitalId,
-      appointmentId: row.id,
-      doctorId: row.doctorId,
-      action: 'expire',
-      // The row already carries the new status, so the previous one is not
-      // readable here. Recorded as the closest honest description.
-      fromStatus: 'WAITING',
-      toStatus: 'EXPIRED',
-      actorUserId: null,
-      metadata: { reason: 'service_date_passed', swept_at: now.toISOString() },
-    });
+  if (rows.length > 0) {
+    await db.insert(queueEvents).values(
+      rows.map((row) => ({
+        hospitalId: row.hospital_id,
+        appointmentId: row.id,
+        doctorId: row.doctor_id,
+        action: 'mark_no_show' as const,
+        fromStatus: row.from_status as AppointmentStatus,
+        toStatus: 'NO_SHOW' as const,
+        actorUserId: null,
+        metadata: { reason: 'day_ended', swept_at: now.toISOString() },
+      })),
+    );
   }
 
   return rows.length;
@@ -122,7 +155,7 @@ export async function resumePausedAppointments(now: Date = new Date()): Promise<
 }
 
 export type SweepResult = {
-  appointmentsExpired: number;
+  appointmentsMarkedNoShow: number;
   appointmentsResumed: number;
   subscriptionsExpired: number;
   paymentLinksExpired: number;
@@ -137,16 +170,16 @@ export type SweepResult = {
  */
 export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
   const result: SweepResult = {
-    appointmentsExpired: 0,
+    appointmentsMarkedNoShow: 0,
     appointmentsResumed: 0,
     subscriptionsExpired: 0,
     paymentLinksExpired: 0,
   };
 
   try {
-    result.appointmentsExpired = await expireStaleAppointments(now);
+    result.appointmentsMarkedNoShow = await markStaleAppointmentsNoShow(now);
   } catch (error) {
-    console.error('[sweeps] appointment expiry failed', error);
+    console.error('[sweeps] end-of-day no-show sweep failed', error);
   }
 
   try {
@@ -169,8 +202,18 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
     console.error('[sweeps] payment link expiry failed', error);
   }
 
+  try {
+    // Throttle counts only matter inside their window, the longest of which
+    // is a day. Older rows are dead weight on the index every sign-in reads.
+    await getAdminDb()
+      .delete(rateLimitEvents)
+      .where(lt(rateLimitEvents.createdAt, new Date(now.getTime() - 24 * 60 * 60 * 1000)));
+  } catch (error) {
+    console.error('[sweeps] throttle pruning failed', error);
+  }
+
   const total =
-    result.appointmentsExpired + result.appointmentsResumed +
+    result.appointmentsMarkedNoShow + result.appointmentsResumed +
     result.subscriptionsExpired + result.paymentLinksExpired;
   if (total > 0) {
     console.log('[sweeps] completed', JSON.stringify(result));
@@ -183,22 +226,9 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
 export { expireLapsedSubscriptions, expireStalePaymentLinks };
 
 /** Kept for the rare case a single hospital needs sweeping by hand. */
-export async function expireStaleAppointmentsForHospital(
+export function markStaleAppointmentsNoShowForHospital(
   hospitalId: string,
   now: Date = new Date(),
 ): Promise<number> {
-  const db = getAdminDb();
-  const rows = await db
-    .update(appointments)
-    .set({ status: 'EXPIRED', updatedAt: now })
-    .where(
-      and(
-        eq(appointments.hospitalId, hospitalId),
-        inArray(appointments.status, ['CREATED', 'CONFIRMED', 'ARRIVED', 'WAITING', 'HELD', 'SKIPPED']),
-        lt(appointments.serviceDate, sql`(${now}::timestamptz at time zone 'Asia/Kolkata')::date`),
-      ),
-    )
-    .returning({ id: appointments.id });
-
-  return rows.length;
+  return markStaleAppointmentsNoShow(now, { hospitalId });
 }

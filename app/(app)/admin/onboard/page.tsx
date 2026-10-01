@@ -13,7 +13,11 @@ const SELECT_CLASS =
 
 const ERRORS: Record<string, string> = {
   REQUIRED_FIELDS: 'Hospital name, owner name and owner email are all required.',
-  CREATION_FAILED: 'Onboarding failed. Check the details — the email may already be in use.',
+  CREATION_FAILED: 'Onboarding failed. Check the details and try again.',
+  EMAIL_IN_USE:
+    'That email already has a login. Each login belongs to one hospital — use a different email for this owner.',
+  WEAK_PASSWORD:
+    'The initial password must be at least 10 characters and not an old default. Or leave it blank.',
   WABA_INCOMPLETE:
     'Give all five WhatsApp fields or none. A partial binding cannot receive messages.',
   INVALID_PHONE_NUMBER_ID: 'That phone number ID does not look like one of Meta’s.',
@@ -95,8 +99,17 @@ export default async function OnboardPage({ searchParams }: PageProps<'/admin/on
             <Field label="Email" hint="This is their sign-in">
               <Input name="ownerEmail" type="email" required placeholder="admin@sanjeevani.in" />
             </Field>
-            <Field label="Initial password" hint="Leave blank for the default, then reset it">
-              <Input name="ownerPassword" type="text" autoComplete="off" placeholder="optional" />
+            <Field
+              label="Initial password"
+              hint="Optional, 10+ characters. Leave blank and issue one from the account page"
+            >
+              <Input
+                name="ownerPassword"
+                type="text"
+                autoComplete="off"
+                minLength={10}
+                placeholder="optional"
+              />
             </Field>
           </fieldset>
 
@@ -201,8 +214,9 @@ export default async function OnboardPage({ searchParams }: PageProps<'/admin/on
 
           <div className="flex items-center justify-between gap-4 border-t border-ink-200 pt-4">
             <p className="text-xs text-ink-500">
-              The owner is created on the password above, or on the default if it is blank.
-              Either way, issue a proper one from the account page before handing it over.
+              Either way the owner must choose their own password at first sign-in. With the
+              field blank, nobody can sign in until you issue a temporary password from the
+              account page.
             </p>
             <Button type="submit" variant="primary" size="lg" className="shrink-0">
               Onboard hospital

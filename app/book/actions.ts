@@ -2,7 +2,10 @@
 import { z } from 'zod';
 import { normalizeIndianPhone } from '@/lib/domain/phone';
 import { isLocale, type Locale } from '@/lib/i18n/patient';
-import { bookScheduledSlot } from '@/lib/services/web-booking';
+import { clientIp, consumeThrottle, ipRules } from '@/lib/security/throttle';
+import { bookScheduledSlot, BookingError } from '@/lib/services/web-booking';
+
+const HOUR_MS = 60 * 60 * 1000;
 
 const bookSlotSchema = z.object({
   hospitalId: z.string().uuid(),
@@ -52,6 +55,28 @@ export async function submitSlotBooking(formData: FormData): Promise<BookSlotRes
 
   const locale: Locale = isLocale(parsed.data.locale) ? parsed.data.locale : 'en';
 
+  /**
+   * This form is public and every booking it accepts sends WhatsApp messages
+   * to the number typed in — so unthrottled, it was a way to make us message
+   * any Indian number on our bill, at whatever rate a script could manage,
+   * until recipients reported the number and Meta restricted it for every
+   * hospital on it.
+   *
+   * Counted in the database, per phone (a real patient books once or twice a
+   * day) and per IP (a script cycling numbers still comes from somewhere). A
+   * family booking for several members from one phone fits comfortably.
+   */
+  const allowed = await consumeThrottle([
+    { key: `book:phone:${phoneE164}`, limit: 4, windowMs: 24 * HOUR_MS },
+    ...ipRules(await clientIp(), { prefix: 'book:ip', limit: 10, windowMs: HOUR_MS }),
+  ]);
+  if (!allowed) {
+    return {
+      ok: false,
+      error: 'Too many bookings from here. Please call the hospital to book.',
+    };
+  }
+
   try {
     const result = await bookScheduledSlot({
       hospitalId: parsed.data.hospitalId,
@@ -73,10 +98,11 @@ export async function submitSlotBooking(formData: FormData): Promise<BookSlotRes
       patientAge: result.patientAge,
     };
   } catch (err) {
+    // Only a refusal written for patients is shown to one. Anything else is
+    // logged and answered in general: a raw database error names tables and
+    // constraints, and this page is open to anyone.
+    if (err instanceof BookingError) return { ok: false, error: err.message };
     console.error('Failed to book slot:', err);
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : 'Unable to book this slot. Please try another slot.',
-    };
+    return { ok: false, error: 'Unable to book this slot. Please try another slot.' };
   }
 }

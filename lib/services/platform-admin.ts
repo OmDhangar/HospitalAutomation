@@ -2,7 +2,12 @@ import { randomInt } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { getAdminDb } from '@/lib/db/admin';
 import { auditLogs, hospitals, sessions, staffMemberships, users } from '@/lib/db/schema';
-import { hashPassword } from '@/lib/security/password';
+import {
+  hashPassword,
+  MIN_PASSWORD_LENGTH,
+  passwordProblem,
+  verifyPassword,
+} from '@/lib/security/password';
 import { invalidateSessionCache } from './auth';
 
 /**
@@ -27,6 +32,7 @@ export class AccountAdminError extends Error {
       | 'MEMBERSHIP_NOT_FOUND'
       | 'LAST_OWNER'
       | 'WEAK_PASSWORD'
+      | 'WRONG_PASSWORD'
       | 'REASON_REQUIRED',
     message: string,
   ) {
@@ -366,23 +372,46 @@ async function assertNotLastOwner(
 
 /* ----------------------------------------------------- self-service reset */
 
-const MIN_PASSWORD_LENGTH = 10;
-
 /**
  * The other half of `resetUserPassword`: the customer choosing their own.
  *
  * Clearing the flag is the point — it is what makes the operator-issued
  * password expire in practice rather than in principle.
+ *
+ * Also the everyday "change my password", which did not exist before: a user
+ * could only ever replace a password an operator had just reset. Outside that
+ * forced case `currentPassword` is required and checked, so a session left
+ * open on a reception PC cannot be used to lock its owner out.
  */
 export async function changeOwnPassword(args: {
   userId: string;
   newPassword: string;
+  /** Required unless the account is in its forced-change state. */
+  currentPassword?: string;
 }): Promise<void> {
-  if (args.newPassword.length < MIN_PASSWORD_LENGTH) {
+  const problem = passwordProblem(args.newPassword);
+  if (problem) {
     throw new AccountAdminError(
       'WEAK_PASSWORD',
-      `Use at least ${MIN_PASSWORD_LENGTH} characters.`,
+      problem === 'too_short'
+        ? `Use at least ${MIN_PASSWORD_LENGTH} characters.`
+        : 'That password was a public default. Choose another.',
     );
+  }
+
+  const [user] = await getAdminDb()
+    .select({ passwordHash: users.passwordHash, mustChangePassword: users.mustChangePassword })
+    .from(users)
+    .where(eq(users.id, args.userId));
+  if (!user) throw new AccountAdminError('USER_NOT_FOUND', 'No such user.');
+
+  if (!user.mustChangePassword) {
+    const ok =
+      args.currentPassword !== undefined &&
+      (await verifyPassword(args.currentPassword, user.passwordHash));
+    if (!ok) {
+      throw new AccountAdminError('WRONG_PASSWORD', 'Your current password is not correct.');
+    }
   }
 
   await getAdminDb()

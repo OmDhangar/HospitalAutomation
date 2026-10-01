@@ -25,13 +25,13 @@ async function main() {
       if (Date.now() - lastSweep > 60_000) {
         const sweeps = await runSweeps();
         if (
-          sweeps.appointmentsExpired > 0 ||
+          sweeps.appointmentsMarkedNoShow > 0 ||
           sweeps.appointmentsResumed > 0 ||
           sweeps.subscriptionsExpired > 0 ||
           sweeps.paymentLinksExpired > 0
         ) {
           console.log(
-            `[sweeps] Expired appointments: ${sweeps.appointmentsExpired}, ` +
+            `[sweeps] Marked no-show: ${sweeps.appointmentsMarkedNoShow}, ` +
               `Resumed: ${sweeps.appointmentsResumed}, ` +
               `Expired subscriptions: ${sweeps.subscriptionsExpired}, ` +
               `Expired payment links: ${sweeps.paymentLinksExpired}`,

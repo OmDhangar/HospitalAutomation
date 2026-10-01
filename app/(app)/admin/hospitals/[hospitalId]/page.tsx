@@ -677,7 +677,8 @@ const DONE_MESSAGES: Record<string, string> = {
   user_deactivated: 'Login disabled and every session ended.',
   access_restored: 'Access to this hospital restored.',
   access_revoked: 'Access to this hospital revoked and sessions ended.',
-  staff_added: 'Login created on the default password — reset it before handing it over.',
+  staff_added:
+    'Login created. Nobody can use it yet: issue a temporary password from the staff list below.',
   waba_bound: 'WhatsApp credentials sealed and stored. Point Meta at the callback URL shown below.',
   custom_plan: 'Bespoke plan created and applied. It is hidden from public pricing.',
 };
@@ -693,6 +694,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   USER_NOT_FOUND: 'That user no longer exists.',
   HOSPITAL_NOT_FOUND: 'That hospital no longer exists.',
   PLAN_LIMIT: 'The plan’s staff-login limit is reached. Upgrade the tier first.',
+  EMAIL_IN_USE:
+    'That email already has a login. Each login belongs to one hospital — use a different email.',
   NOT_PLATFORM_ADMIN: 'Not permitted.',
   INVALID_PHONE_NUMBER_ID: 'That phone number ID does not look like one of Meta’s.',
   NUMBER_TAKEN: 'That phone number ID is already bound to another hospital.',
