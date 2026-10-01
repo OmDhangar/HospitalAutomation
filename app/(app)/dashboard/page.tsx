@@ -166,7 +166,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                         snapshot?.paused ? 'bg-amber-600' : 'bg-emerald-600 animate-pulse',
                       )}
                     />
-                    {snapshot?.paused ? 'Room Paused' : 'Live Consultations'}
+                    {snapshot?.paused ? 'On a break' : 'Live Consultations'}
                   </span>
                 </div>
                 <p className="text-xs text-ink-500 mt-0.5">
@@ -188,9 +188,16 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
 
           {snapshot?.paused ? (
             <Alert tone="warn">
-              <strong>Your consultation queue is currently on hold.</strong>{' '}
+              <strong>
+                You are on a break
+                {snapshot.breakStartedAt
+                  ? ` since ${formatTimeIn(session.timezone, snapshot.breakStartedAt)}`
+                  : ''}
+                .
+              </strong>{' '}
               {snapshot.pausedReason ? `${snapshot.pausedReason}. ` : ''}
-              Patients are informed that the doctor is temporarily away. Click &quot;Resume Room&quot; when ready.
+              Patients see that you are on a break. Click &quot;End break&quot; when you are back;
+              the break is not counted in the current patient&apos;s consultation time.
             </Alert>
           ) : null}
 
@@ -433,9 +440,15 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
 
           {snapshot?.paused ? (
             <Alert tone="warn">
-              <strong>{snapshot.doctorName} is paused.</strong>{' '}
+              <strong>
+                {snapshot.doctorName} is on a break
+                {snapshot.breakStartedAt
+                  ? ` since ${formatTimeIn(session.timezone, snapshot.breakStartedAt)}`
+                  : ''}
+                .
+              </strong>{' '}
               {snapshot.pausedReason ? `${snapshot.pausedReason}. ` : ''}
-              Patients are told the queue is on hold, and no reminders are sent.
+              Patients see a break notice, and no reminders are sent.
             </Alert>
           ) : null}
 

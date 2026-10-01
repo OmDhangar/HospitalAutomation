@@ -648,6 +648,8 @@ export const doctorDayStates = pgTable(
     mode: doctorScheduleMode('mode'),
     paused: boolean('paused').notNull().default(false),
     pausedReason: text('paused_reason'),
+    /** When the current break began. Null whenever `paused` is false. */
+    pausedAt: timestamp('paused_at', { withTimezone: true }),
     scheduledStartAt: timestamp('scheduled_start_at', { withTimezone: true }),
     sessionStartedAt: timestamp('session_started_at', { withTimezone: true }),
     lastTokenNumber: integer('last_token_number').notNull().default(0),

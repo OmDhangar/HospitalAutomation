@@ -34,6 +34,8 @@ export type BookingContext = {
   patientId?: string;
   patientName?: string;
   patientAge?: number;
+  /** The sender chose "Myself": book under their own name. */
+  patientSelf?: boolean;
 };
 
 export type ActiveAppointmentInfo = {
@@ -123,12 +125,94 @@ const parseReply = (replyId: string | undefined) => {
 
 const KEYWORD_STATUS_REGEX = /^(status|link|queue|token|view|appointment|अपॉइंटमेंट|कतार|रांग)/i;
 
+/** States in which the patient has already said who the appointment is for. */
+const PATIENT_CHOSEN_STATES: ReadonlySet<ConversationState> = new Set([
+  'awaiting_doctor',
+  'awaiting_queue_choice',
+  'awaiting_slot',
+]);
+
+const hasPatient = (context: BookingContext): boolean =>
+  Boolean(context.patientId || context.patientName || context.patientSelf);
+
+/**
+ * "Who is this appointment for?" — asked on every booking, the first included.
+ *
+ * It used to be skipped for a number with no saved patients, which booked the
+ * first appointment under the WhatsApp sender whether or not they were the
+ * patient. A parent booking for a child, or a son booking for his father, had
+ * no way to say so until their second booking. With no saved profiles the
+ * list offers "Myself" and "Someone else"; with saved profiles it lists them
+ * plus "Add new patient".
+ *
+ * Starts a fresh context: the language survives, nothing else does.
+ */
+const askPatient = (
+  locale: Locale,
+  knownPatients: PatientProfile[] | undefined,
+): BookingTransition => ({
+  state: 'awaiting_patient_choice',
+  context: { locale },
+  step: { kind: 'ask_patient_choice', patients: knownPatients ?? [] },
+});
+
+/** What happens once a doctor is known, whether the patient picked them or not. */
+function chooseDoctor(doctor: DoctorWithMode, context: BookingContext): BookingTransition {
+  if (doctor.mode === 'queue') {
+    // Direct queue booking without extra intermediate arrival questions
+    return {
+      state: 'idle',
+      context: { ...context, doctorId: doctor.id, queueChoice: 'join' },
+      step: {
+        kind: 'confirm_queue',
+        doctorId: doctor.id,
+        patientName: context.patientName,
+        patientAge: context.patientAge,
+      },
+    };
+  }
+  if (doctor.mode === 'both') {
+    // Hybrid: offer choice between today's live queue vs scheduled slot
+    return {
+      state: 'awaiting_queue_choice',
+      context: { ...context, doctorId: doctor.id, queueChoice: undefined },
+      step: { kind: 'ask_queue_branch', doctorId: doctor.id },
+    };
+  }
+  return {
+    state: 'awaiting_slot',
+    context: { ...context, doctorId: doctor.id, slot: undefined },
+    step: { kind: 'ask_slot', doctorId: doctor.id },
+  };
+}
+
+/**
+ * The doctor menu, unless there is nothing to choose.
+ *
+ * A one-doctor clinic asking "which doctor?" is a billable message whose only
+ * possible answer is already known. Every message that follows names the
+ * doctor, so the patient still learns who they are booked with.
+ */
+function pickDoctor(doctors: DoctorWithMode[], context: BookingContext): BookingTransition {
+  if (doctors.length === 1) return chooseDoctor(doctors[0], context);
+  return {
+    state: 'awaiting_doctor',
+    context: { ...context, doctorId: undefined, slot: undefined, queueChoice: undefined },
+    step: { kind: 'ask_doctor' },
+  };
+}
+
 /**
  * Drives a WhatsApp booking conversation.
  *
  * Pure on purpose: the number of billable messages a booking costs is decided
  * entirely here, so it can be asserted in a test rather than discovered on an
  * invoice.
+ *
+ * Free text never books anything. Only an explicit reply — a patient, a doctor,
+ * a queue or slot choice, or a name with an age typed in answer to "who is
+ * this for?" — can reach a confirmation. That matters most for a one-doctor clinic, where the
+ * step after choosing a patient may be the booking itself.
  */
 export function nextBookingStep(args: {
   state: ConversationState;
@@ -180,18 +264,7 @@ export function nextBookingStep(args: {
         step: { kind: 'ask_language' },
       };
     }
-    if (knownPatients && knownPatients.length > 0) {
-      return {
-        state: 'awaiting_patient_choice',
-        context: { locale, doctorId: undefined, slot: undefined, queueChoice: undefined },
-        step: { kind: 'ask_patient_choice', patients: knownPatients },
-      };
-    }
-    return {
-      state: 'awaiting_doctor',
-      context: { locale, doctorId: undefined, slot: undefined, queueChoice: undefined },
-      step: { kind: 'ask_doctor' },
-    };
+    return askPatient(locale, knownPatients);
   }
 
   // 3. Patient profile / name & age input handling
@@ -199,88 +272,77 @@ export function nextBookingStep(args: {
     if (reply.value === 'new') {
       return {
         state: 'awaiting_patient_name_age',
-        context: { ...context, patientId: undefined, patientName: undefined, patientAge: undefined },
+        context: {
+          ...context,
+          patientId: undefined,
+          patientName: undefined,
+          patientAge: undefined,
+          patientSelf: undefined,
+        },
         step: { kind: 'ask_patient_name_age' },
       };
     }
 
+    if (reply.value === 'self') {
+      // The sender is the patient. Their name is resolved at booking time —
+      // the record on file, else their WhatsApp profile name — because this
+      // function sees neither.
+      return pickDoctor(doctors, {
+        ...context,
+        patientId: undefined,
+        patientName: undefined,
+        patientAge: undefined,
+        patientSelf: true,
+      });
+    }
+
     const selectedProfile = knownPatients?.find((p) => p.id === reply.value);
     if (selectedProfile) {
-      return {
-        state: 'awaiting_doctor',
-        context: {
-          ...context,
-          patientId: selectedProfile.id,
-          patientName: selectedProfile.name,
-          patientAge: selectedProfile.age ?? undefined,
-        },
-        step: { kind: 'ask_doctor' },
-      };
+      return pickDoctor(doctors, {
+        ...context,
+        patientId: selectedProfile.id,
+        patientName: selectedProfile.name,
+        patientAge: selectedProfile.age ?? undefined,
+        patientSelf: undefined,
+      });
     }
   }
 
-  if (args.state === 'awaiting_patient_name_age' && message.text && !reply) {
+  if (message.text && !reply) {
     const parsed = parsePatientNameAge(message.text);
-    if (parsed) {
-      return {
-        state: 'awaiting_doctor',
-        context: {
-          ...context,
-          patientName: parsed.name,
-          patientAge: parsed.age,
-          patientId: undefined,
-        },
-        step: { kind: 'ask_doctor' },
-      };
+    /**
+     * Booking for someone else in one message: the patient list invites the
+     * sender to type the name and age straight back, which saves the "please
+     * send the patient's name" prompt that tapping "Someone else" costs.
+     *
+     * At the list itself, the age is what makes it a name. "Hi", "ok" and
+     * "hello" all parse as names too, and with a one-doctor clinic the next
+     * step after a name is the booking — so without an age the text is
+     * treated as chatter, not as a patient called "Hi".
+     */
+    const isPatientName =
+      args.state === 'awaiting_patient_name_age' ||
+      (args.state === 'awaiting_patient_choice' && parsed?.age !== undefined);
+
+    if (parsed && isPatientName) {
+      return pickDoctor(doctors, {
+        ...context,
+        patientName: parsed.name,
+        patientAge: parsed.age,
+        patientId: undefined,
+        patientSelf: undefined,
+      });
     }
   }
 
   // 4. Interactive reply handling
   if (reply?.prefix === 'lang' && isLocale(reply.value)) {
-    if (knownPatients && knownPatients.length > 0) {
-      return {
-        state: 'awaiting_patient_choice',
-        context: { ...context, locale: reply.value },
-        step: { kind: 'ask_patient_choice', patients: knownPatients },
-      };
-    }
-    return {
-      state: 'awaiting_doctor',
-      context: { ...context, locale: reply.value },
-      step: { kind: 'ask_doctor' },
-    };
+    return askPatient(reply.value, knownPatients);
   }
 
   if (reply?.prefix === 'doc') {
     const doctorObj = doctors.find((d) => d.id === reply.value);
-    if (doctorObj) {
-      if (doctorObj.mode === 'queue') {
-        // Direct queue booking without extra intermediate arrival questions
-        return {
-          state: 'idle',
-          context: { ...context, doctorId: doctorObj.id, queueChoice: 'join' },
-          step: {
-            kind: 'confirm_queue',
-            doctorId: doctorObj.id,
-            patientName: context.patientName,
-            patientAge: context.patientAge,
-          },
-        };
-      } else if (doctorObj.mode === 'both') {
-        // Hybrid: offer choice between today's live queue vs scheduled slot
-        return {
-          state: 'awaiting_queue_choice',
-          context: { ...context, doctorId: doctorObj.id, queueChoice: undefined },
-          step: { kind: 'ask_queue_branch', doctorId: doctorObj.id },
-        };
-      } else {
-        return {
-          state: 'awaiting_slot',
-          context: { ...context, doctorId: doctorObj.id, slot: undefined },
-          step: { kind: 'ask_slot', doctorId: doctorObj.id },
-        };
-      }
-    }
+    if (doctorObj) return chooseDoctor(doctorObj, context);
   }
 
   if (reply?.prefix === 'queue_choice' && context.doctorId) {
@@ -346,19 +408,16 @@ export function nextBookingStep(args: {
     };
   }
 
-  if (knownPatients && knownPatients.length > 0 && !context.patientName && !context.patientId) {
-    return {
-      state: 'awaiting_patient_choice',
-      context: { locale, doctorId: undefined, slot: undefined, queueChoice: undefined },
-      step: { kind: 'ask_patient_choice', patients: knownPatients },
-    };
+  // Mid-booking with the patient already chosen: repeat the doctor menu and
+  // keep the patient, rather than making them choose again. Not with a single
+  // doctor, where "repeating the menu" would mean booking on free text.
+  if (PATIENT_CHOSEN_STATES.has(args.state) && hasPatient(context) && doctors.length > 1) {
+    return pickDoctor(doctors, context);
   }
 
-  return {
-    state: 'awaiting_doctor',
-    context: { locale, doctorId: undefined, slot: undefined, queueChoice: undefined },
-    step: { kind: 'ask_doctor' },
-  };
+  // Idle, or a booking abandoned part-way: a greeting starts a new booking,
+  // and a new booking starts with who it is for.
+  return askPatient(locale, knownPatients);
 }
 
 /**

@@ -146,31 +146,67 @@ Tap below to join the queue whenever you are ready.`,
 const PATIENT_PROMPTS: Record<
   Locale,
   {
+    /**
+     * Also tells the sender they can type someone else's name and age straight
+     * back. Doing that books in one reply; tapping "Someone else" costs a
+     * further prompt asking for the name.
+     */
     choiceBody: string;
     choicePick: string;
     newPatientTitle: string;
     askNameAge: string;
+    /** First booking from a number: the sender, or somebody else. */
+    selfTitle: string;
+    otherTitle: string;
+    otherDesc: string;
   }
 > = {
   mr: {
-    choiceBody: 'ही अपॉइंटमेंट कोणासाठी नोंदवायची आहे?',
+    choiceBody:
+      'ही अपॉइंटमेंट कोणासाठी नोंदवायची आहे?\n\nदुसऱ्या व्यक्तीसाठी असल्यास, थेट त्यांचे नाव आणि वय पाठवा (उदा. आरव शर्मा 7).',
     choicePick: 'रुग्ण निवडा',
     newPatientTitle: '➕ नवीन रुग्ण जोडा',
     askNameAge: 'कृपया रुग्णाचे पूर्ण नाव आणि वय सांगा (उदा. आरव शर्मा 7):',
+    selfTitle: 'माझ्यासाठी',
+    otherTitle: 'दुसऱ्या व्यक्तीसाठी',
+    otherDesc: 'किंवा नाव व वय टाइप करा',
   },
   hi: {
-    choiceBody: 'यह अपॉइंटमेंट किसके लिए बुक करनी है?',
+    choiceBody:
+      'यह अपॉइंटमेंट किसके लिए बुक करनी है?\n\nकिसी और के लिए हो, तो सीधे उनका नाम और उम्र भेजें (उदा. आरव शर्मा 7).',
     choicePick: 'मरीज़ चुनें',
     newPatientTitle: '➕ नया मरीज़ जोड़ें',
     askNameAge: 'कृपया मरीज़ का पूरा नाम और उम्र बताएं (उदा. आरव शर्मा 7):',
+    selfTitle: 'मेरे लिए',
+    otherTitle: 'किसी और के लिए',
+    otherDesc: 'या नाम व उम्र टाइप करें',
   },
   en: {
-    choiceBody: 'Who is this appointment for?',
+    choiceBody:
+      'Who is this appointment for?\n\nBooking for someone else? Just reply with their name and age (e.g. Aarav Sharma 7).',
     choicePick: 'Select Patient',
     newPatientTitle: '➕ Add New Patient',
     askNameAge: 'Please reply with the patient’s full name and age (e.g. Aarav Sharma 7):',
+    selfTitle: 'Myself',
+    otherTitle: 'Someone else',
+    otherDesc: 'Or type name & age',
   },
 };
+
+/**
+ * One extra line on the confirmation when the doctor is on a break, rather than
+ * a separate message. Without it a patient booking during lunch reads "currently
+ * serving: 7", watches 7 not move for forty minutes, and concludes the queue is
+ * broken.
+ */
+const ON_BREAK_NOTE: Record<Locale, string> = {
+  mr: 'डॉक्टर सध्या विश्रांतीवर आहेत. ते परत आल्यावर रांग पुन्हा सुरू होईल.',
+  hi: 'डॉक्टर अभी ब्रेक पर हैं। उनके लौटते ही कतार फिर से चलेगी।',
+  en: 'The doctor is on a break right now. The queue will move again when they are back.',
+};
+
+const withBreakNote = (body: string, locale: Locale, onBreak: boolean): string =>
+  onBreak ? `${ON_BREAK_NOTE[locale]}\n\n${body}` : body;
 
 const QUEUE_CONFIRMATION: Record<
   Locale,
@@ -677,16 +713,34 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
 
     case 'ask_patient_choice': {
       const p = PATIENT_PROMPTS[locale];
-      const rows: ListRow[] = [
-        ...step.patients.slice(0, 8).map((pt) => ({
-          id: `patient:${pt.id}`,
-          title: fitListTitle(pt.age ? `${pt.name} (${pt.age})` : pt.name),
-        })),
-        {
-          id: 'patient:new',
-          title: fitListTitle(p.newPatientTitle),
-        },
-      ];
+      // A number with no saved patients gets "Myself" and "Someone else", so
+      // even a first booking can be for a child or a parent. The sender's
+      // WhatsApp name sits under "Myself" so they can see whose name it books.
+      const selfName = cleanProfileName(inbound.profileName);
+      const rows: ListRow[] =
+        step.patients.length === 0
+          ? [
+              {
+                id: 'patient:self',
+                title: fitListTitle(p.selfTitle),
+                ...(selfName ? { description: fitListTitle(selfName) } : {}),
+              },
+              {
+                id: 'patient:new',
+                title: fitListTitle(p.otherTitle),
+                description: fitListTitle(p.otherDesc),
+              },
+            ]
+          : [
+              ...step.patients.slice(0, 8).map((pt) => ({
+                id: `patient:${pt.id}`,
+                title: fitListTitle(pt.age ? `${pt.name} (${pt.age})` : pt.name),
+              })),
+              {
+                id: 'patient:new',
+                title: fitListTitle(p.newPatientTitle),
+              },
+            ];
       await sendList(p.choiceBody, rows, 'conversation:patient_choice');
       break;
     }
@@ -749,7 +803,11 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
 
       const p = QUEUE_WAIT_TIME_PROMPTS[locale];
       await sendButtons(
-        p.body(doctor.name, currentServing, patientsAhead, waitMinutes),
+        withBreakNote(
+          p.body(doctor.name, currentServing, patientsAhead, waitMinutes),
+          locale,
+          snapshot?.paused ?? false,
+        ),
         [{ id: 'queue_choice:join', title: p.joinTitle }],
         'conversation:show_wait_time',
       );
@@ -799,13 +857,17 @@ export async function handleInboundMessage(inbound: InboundWhatsApp): Promise<vo
       const sent = await provider.sendText({
         phoneNumberId: inbound.phoneNumberId,
         toPhoneE164: phoneE164,
-        body: QUEUE_CONFIRMATION[locale](
-          created.tokenNumber,
-          doctor.name,
-          patientDisplay,
-          currentServing,
-          waitMinutes,
-          `${baseUrl}/q/${created.publicToken}`,
+        body: withBreakNote(
+          QUEUE_CONFIRMATION[locale](
+            created.tokenNumber,
+            doctor.name,
+            patientDisplay,
+            currentServing,
+            waitMinutes,
+            `${baseUrl}/q/${created.publicToken}`,
+          ),
+          locale,
+          snapshot?.paused ?? false,
         ),
       });
 

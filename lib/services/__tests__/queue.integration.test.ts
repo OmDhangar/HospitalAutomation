@@ -9,6 +9,7 @@ import {
   createWalkIn,
   getPublicQueueView,
   getQueueSnapshot,
+  setDoctorPaused,
   setPriority,
 } from '@/lib/services/queue';
 
@@ -262,6 +263,98 @@ describe.skipIf(!enabled)('queue engine', () => {
 
     const snapshot = (await getQueueSnapshot({ hospitalId, doctorId, timezone: TZ }))!;
     expect(snapshot.rows[0].tokenNumber).toBe(3);
+  });
+
+  describe("the doctor's break", () => {
+    /**
+     * Times are pinned relative to one instant rather than read off the clock,
+     * so "a 30-minute break" is exactly that. Everything sits in the past hour
+     * to stay on today's service date.
+     */
+    const minutesAgo = (base: Date, n: number) => new Date(base.getTime() - n * 60_000);
+
+    /** Now, unless that is within an hour of IST midnight; then an hour past it. */
+    const pinnedBase = () => {
+      const now = new Date();
+      const istMinutes = (now.getUTCHours() * 60 + now.getUTCMinutes() + 330) % 1440;
+      return istMinutes < 60 ? new Date(now.getTime() + (60 - istMinutes) * 60_000) : now;
+    };
+
+    it('keeps the break out of the consultation it interrupted', async () => {
+      const base = pinnedBase();
+      await walkIn(1);
+      await walkIn(2);
+
+      // Token 1 is called, then the doctor steps out with them still CALLED.
+      await advanceQueue({ hospitalId, doctorId, timezone: TZ, now: minutesAgo(base, 50) });
+      await setDoctorPaused({ hospitalId, doctorId, timezone: TZ, paused: true, now: minutesAgo(base, 45) });
+      await setDoctorPaused({ hospitalId, doctorId, timezone: TZ, paused: false, now: minutesAgo(base, 15) });
+      // Back from the break, the doctor finishes token 1 and calls token 2.
+      await advanceQueue({ hospitalId, doctorId, timezone: TZ, now: minutesAgo(base, 10) });
+
+      const [row] = await admin<{ minutes: number }[]>`
+        select extract(epoch from (completed_at - consult_started_at)) / 60 as minutes
+        from appointments
+        where hospital_id = ${hospitalId} and token_number = 1
+      `;
+      // 40 minutes elapsed between call and completion; 30 of them were the break.
+      expect(Math.round(Number(row.minutes))).toBe(10);
+    });
+
+    it('shifts an open consultation by the break, and nothing else', async () => {
+      const base = pinnedBase();
+      const first = await walkIn(1);
+      await walkIn(2);
+
+      await advanceQueue({ hospitalId, doctorId, timezone: TZ, now: minutesAgo(base, 50) });
+      await applyQueueAction({
+        hospitalId,
+        appointmentId: first.appointment.id,
+        action: 'start_consultation',
+        timezone: TZ,
+        now: minutesAgo(base, 48),
+      });
+      // Pressing "Start break" twice must not move the start of the break.
+      await setDoctorPaused({ hospitalId, doctorId, timezone: TZ, paused: true, now: minutesAgo(base, 45) });
+      await setDoctorPaused({ hospitalId, doctorId, timezone: TZ, paused: true, now: minutesAgo(base, 30) });
+      await setDoctorPaused({ hospitalId, doctorId, timezone: TZ, paused: false, now: minutesAgo(base, 25) });
+
+      const rows = await admin<{ token_number: number; called_at: Date | null; consult_started_at: Date | null }[]>`
+        select token_number, called_at, consult_started_at
+        from appointments
+        where hospital_id = ${hospitalId}
+        order by token_number
+      `;
+      // A 20-minute break, from 45 to 25 minutes ago.
+      expect(rows[0].consult_started_at?.getTime()).toBe(minutesAgo(base, 28).getTime());
+      // calledAt is the end of the patient's wait, which the break did not change.
+      expect(rows[0].called_at?.getTime()).toBe(minutesAgo(base, 50).getTime());
+      // Token 2 was only waiting: untouched.
+      expect(rows[1].called_at).toBeNull();
+      expect(rows[1].consult_started_at).toBeNull();
+    });
+
+    it('tells waiting patients the doctor is on a break, and since when', async () => {
+      const base = pinnedBase();
+      await walkIn(1);
+      const second = await walkIn(2);
+      await advanceQueue({ hospitalId, doctorId, timezone: TZ, now: minutesAgo(base, 20) });
+      await setDoctorPaused({ hospitalId, doctorId, timezone: TZ, paused: true, now: minutesAgo(base, 10) });
+
+      const view = (await getPublicQueueView(second.publicToken))!;
+      expect(view.paused).toBe(true);
+      expect(view.breakStartedAt?.getTime()).toBe(minutesAgo(base, 10).getTime());
+      expect(view.patientsAhead).toBe(0);
+      expect(view.eta).toBeNull();
+
+      const snapshot = (await getQueueSnapshot({ hospitalId, doctorId, timezone: TZ }))!;
+      expect(snapshot.breakStartedAt?.getTime()).toBe(minutesAgo(base, 10).getTime());
+
+      await setDoctorPaused({ hospitalId, doctorId, timezone: TZ, paused: false, now: base });
+      const after = (await getPublicQueueView(second.publicToken))!;
+      expect(after.paused).toBe(false);
+      expect(after.breakStartedAt).toBeNull();
+    });
   });
 
   describe('the patient view', () => {

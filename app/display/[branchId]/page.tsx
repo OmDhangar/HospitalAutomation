@@ -166,6 +166,11 @@ export default async function DisplayPage({
                     <p className="text-3xl sm:text-4xl font-black text-amber-300">
                       {s.displayOnBreak}
                     </p>
+                    {snapshot.breakStartedAt ? (
+                      <p className="mt-2 text-base font-semibold text-amber-200/80">
+                        {s.pausedSince} {formatTimeIn(session.timezone, snapshot.breakStartedAt)}
+                      </p>
+                    ) : null}
                     {snapshot.pausedReason ? (
                       <p className="mt-2 text-sm text-amber-200/70">{snapshot.pausedReason}</p>
                     ) : null}

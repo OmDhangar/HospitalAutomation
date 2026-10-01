@@ -204,6 +204,13 @@
       "when": 1789650000000,
       "tag": "0028_clinical_opd",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1789700000000,
+      "tag": "0029_doctor_break_started_at",
+      "breakpoints": true
     }
   ]
 }

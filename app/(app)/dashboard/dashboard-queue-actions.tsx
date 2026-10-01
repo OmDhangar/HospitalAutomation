@@ -539,7 +539,10 @@ export function TogglePauseButton({
     startTransition(async () => {
       const res = await togglePauseDynamic({ doctorId, paused: !paused });
       if (res.ok) {
-        toast.info(paused ? 'Queue Resumed' : 'Queue Paused');
+        toast.info(
+          paused ? 'Break ended' : 'Break started',
+          paused ? undefined : 'Patients now see that the doctor is on a break.',
+        );
       } else {
         toast.error('Pause operation failed', res.error);
       }
@@ -550,10 +553,18 @@ export function TogglePauseButton({
     <Button
       type="button"
       size="sm"
+      // Named for what the doctor is doing, not what the software does to the
+      // queue. "Pause queue" read as a setting, so doctors stepped out without
+      // pressing it and patients watched a token that never moved.
+      title={
+        paused
+          ? 'Doctor is back: the queue moves again'
+          : 'Doctor is stepping out: patients see a break notice'
+      }
       onClick={handleTogglePause}
       isLoading={isPending}
     >
-      {paused ? 'Resume queue' : 'Pause queue'}
+      {paused ? 'End break' : 'Start break'}
     </Button>
   );
 }
