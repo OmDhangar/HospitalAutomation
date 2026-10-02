@@ -482,7 +482,7 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
               Existing Staff Accounts
             </h3>
             {staff.length === 0 ? (
-              <EmptyState title="No staff accounts" hint="Add receptionists or doctors below." />
+              <EmptyState title="No staff accounts" hint="Add receptionists, doctors or nurses below." />
             ) : (
               <ul className="divide-y divide-ink-200 rounded-xl border border-ink-200 overflow-hidden bg-white">
                 {staff.map((member) => (
@@ -502,7 +502,9 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                               ? 'bg-purple-100 text-purple-800'
                               : member.role === 'receptionist'
                                 ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-blue-100 text-blue-800',
+                                : member.role === 'nurse'
+                                  ? 'bg-rose-100 text-rose-800'
+                                  : 'bg-blue-100 text-blue-800',
                           )}
                         >
                           {member.role}
@@ -575,6 +577,7 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                 >
                   <option value="receptionist">Receptionist</option>
                   <option value="doctor">Doctor</option>
+                  <option value="nurse">Nurse (IPD ward)</option>
                   <option value="owner">Hospital Owner / Admin</option>
                 </select>
               </Field>

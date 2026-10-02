@@ -1128,7 +1128,16 @@ export const encounterStatus = pgEnum('encounter_status', ['open', 'closed', 'ca
 export const encounterOrigin = pgEnum('encounter_origin', ['queue', 'emergency', 'direct']);
 export const serviceKind = pgEnum('service_kind', ['consultation']);
 export const billStatus = pgEnum('bill_status', ['draft', 'final', 'cancelled']);
-export const billItemType = pgEnum('bill_item_type', ['consultation', 'medicine', 'other']);
+export const billItemType = pgEnum('bill_item_type', [
+  'consultation',
+  'medicine',
+  'other',
+  // IPD sources (0031). Each has its own typed column and CHECK in 0032.
+  'consumable',
+  'procedure',
+  'service',
+  'room',
+]);
 export const patientPaymentKind = pgEnum('patient_payment_kind', ['payment', 'refund']);
 export const patientPaymentMethod = pgEnum('patient_payment_method', [
   'cash',

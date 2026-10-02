@@ -4,12 +4,15 @@ import {
   can,
   canSwitchDashboardView,
   dashboardViewFor,
+  homePathFor,
   isStaffRole,
 } from '../permissions';
 
+const OPD_ROLES = ['owner', 'receptionist', 'doctor'] as const;
+
 describe('can', () => {
-  it('lets every current role move the queue', () => {
-    for (const role of STAFF_ROLES) expect(can(role, 'queue.mutate')).toBe(true);
+  it('lets every OPD role move the queue', () => {
+    for (const role of OPD_ROLES) expect(can(role, 'queue.mutate')).toBe(true);
   });
 
   it('keeps configuration with the owner', () => {
@@ -44,8 +47,14 @@ describe('clinical permissions', () => {
     expect(can('receptionist', 'clinical.write')).toBe(false);
   });
 
-  it('lets every current role read, because every read is logged', () => {
+  it('lets every role read, because every read is logged', () => {
     for (const role of STAFF_ROLES) expect(can(role, 'clinical.read')).toBe(true);
+  });
+
+  it('never lets a nurse write a consultation or add medicines', () => {
+    expect(can('nurse', 'clinical.write')).toBe(false);
+    expect(can('nurse', 'medicines.manage')).toBe(false);
+    expect(can('nurse', 'medicines.quickAdd')).toBe(false);
   });
 
   it('keeps medicine prices with the owner, but lets a doctor add a missing medicine', () => {
@@ -76,9 +85,78 @@ describe('dashboardViewFor', () => {
   });
 });
 
+describe('nurse', () => {
+  it('cannot mutate the queue', () => {
+    expect(can('nurse', 'queue.mutate')).toBe(false);
+  });
+
+  it('cannot change prices, take money, or see reports and configuration', () => {
+    expect(can('nurse', 'billing.price')).toBe(false);
+    expect(can('nurse', 'billing.collect')).toBe(false);
+    expect(can('nurse', 'reports.view')).toBe(false);
+    expect(can('nurse', 'subscription.notice')).toBe(false);
+    expect(can('nurse', 'hospital.configure')).toBe(false);
+  });
+
+  it('works on the ward: views IPD and records at the bedside, nothing more', () => {
+    expect(can('nurse', 'ipd.view')).toBe(true);
+    expect(can('nurse', 'ipd.record')).toBe(true);
+    expect(can('nurse', 'ipd.shift')).toBe(false);
+    expect(can('nurse', 'ipd.admit')).toBe(false);
+    expect(can('nurse', 'ipd.correct')).toBe(false);
+    expect(can('nurse', 'ipd.dischargeReady')).toBe(false);
+    expect(can('nurse', 'ipd.discharge')).toBe(false);
+    expect(can('nurse', 'ipd.configure')).toBe(false);
+  });
+
+  it('starts on the ward, everyone else on the queue', () => {
+    expect(homePathFor('nurse')).toBe('/ipd/ward');
+    for (const role of OPD_ROLES) expect(homePathFor(role)).toBe('/dashboard');
+  });
+});
+
+describe('IPD permissions', () => {
+  it('lets every role see the IPD section', () => {
+    for (const role of STAFF_ROLES) expect(can(role, 'ipd.view')).toBe(true);
+  });
+
+  it('lets the doctor shift a patient to IPD, and not reception', () => {
+    expect(can('doctor', 'ipd.shift')).toBe(true);
+    expect(can('owner', 'ipd.shift')).toBe(true);
+    expect(can('receptionist', 'ipd.shift')).toBe(false);
+  });
+
+  it('gives admission paperwork to reception, not the doctor', () => {
+    expect(can('receptionist', 'ipd.admit')).toBe(true);
+    expect(can('owner', 'ipd.admit')).toBe(true);
+    expect(can('doctor', 'ipd.admit')).toBe(false);
+  });
+
+  it('lets reception record and correct entries, but a doctor neither', () => {
+    expect(can('receptionist', 'ipd.record')).toBe(true);
+    expect(can('receptionist', 'ipd.correct')).toBe(true);
+    expect(can('doctor', 'ipd.record')).toBe(false);
+    expect(can('doctor', 'ipd.correct')).toBe(false);
+  });
+
+  it('splits discharge: the doctor says ready, the desk bills', () => {
+    expect(can('doctor', 'ipd.dischargeReady')).toBe(true);
+    expect(can('doctor', 'ipd.discharge')).toBe(false);
+    expect(can('receptionist', 'ipd.dischargeReady')).toBe(false);
+    expect(can('receptionist', 'ipd.discharge')).toBe(true);
+  });
+
+  it('keeps ward set-up with the owner', () => {
+    expect(can('owner', 'ipd.configure')).toBe(true);
+    expect(can('receptionist', 'ipd.configure')).toBe(false);
+    expect(can('doctor', 'ipd.configure')).toBe(false);
+  });
+});
+
 describe('isStaffRole', () => {
   it('accepts only known roles', () => {
     expect(isStaffRole('receptionist')).toBe(true);
+    expect(isStaffRole('nurse')).toBe(true);
     expect(isStaffRole('admin')).toBe(false);
     expect(isStaffRole('')).toBe(false);
   });

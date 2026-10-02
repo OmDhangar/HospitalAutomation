@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { AutoRefresh } from '@/components/auto-refresh';
 import {
   Alert,
@@ -22,7 +23,12 @@ import { ConsultationGateProvider } from '@/components/clinical/consultation-gat
 import { PaidToggle } from '@/components/paid-toggle';
 import { SubscriptionCard, UsageNotice } from '@/components/subscription';
 import { requireSession } from '@/lib/auth/session';
-import { can, canSwitchDashboardView, dashboardViewFor } from '@/lib/domain/permissions';
+import {
+  can,
+  canSwitchDashboardView,
+  dashboardViewFor,
+  homePathFor,
+} from '@/lib/domain/permissions';
 import type { PaymentStatus } from '@/lib/domain/patient-billing';
 import { formatIndianPhone } from '@/lib/domain/phone';
 import { formatTimeIn, minutesBetween } from '@/lib/domain/time';
@@ -53,6 +59,8 @@ const waitedFor = (since: Date | null, now: Date): string => {
 
 export default async function DashboardPage({ searchParams }: PageProps<'/dashboard'>) {
   const session = await requireSession();
+  // A role that cannot work the queue (a nurse) has no business on it.
+  if (!can(session.role, 'queue.mutate')) redirect(homePathFor(session.role));
   const params = await searchParams;
   const now = new Date();
   const requestId = `page_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;

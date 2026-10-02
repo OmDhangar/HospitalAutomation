@@ -443,6 +443,7 @@ export default async function AccountDetailPage({
               <option value="owner">Owner</option>
               <option value="receptionist">Receptionist</option>
               <option value="doctor">Doctor</option>
+              <option value="nurse">Nurse</option>
             </select>
           </Field>
           <div className="flex items-end">
