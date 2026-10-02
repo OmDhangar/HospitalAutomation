@@ -9,6 +9,15 @@ import {
   Input,
   cn,
 } from '@/components/ui';
+import {
+  BuildingIcon,
+  StethoscopeIcon,
+  MapPinIcon,
+  ClockIcon,
+  PillIcon,
+  LayersIcon,
+  ActivityIcon,
+} from '@/components/icons';
 import { requireSession } from '@/lib/auth/session';
 import { canConfigureHospital, listBranches, listStaffMembers } from '@/lib/services/auth';
 import { describeLimit } from '@/lib/services/entitlements';
@@ -138,10 +147,7 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
       <Card>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 sm:p-5">
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-lg">💬</span>
-              <h2 className="text-base font-bold text-ink-900">WhatsApp Integration</h2>
-            </div>
+            <h2 className="text-base font-bold text-ink-900">WhatsApp Integration</h2>
             <p className="mt-0.5 text-xs text-ink-500">
               Automated booking, live token tracker links, and patient notifications.
             </p>
@@ -158,8 +164,8 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 sm:p-5">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="text-lg">💊</span>
-              <h2 className="text-base font-bold text-ink-900">Medicines</h2>
+              <PillIcon className="size-5 text-brand-600" />
+              <h2 className="text-base font-bold text-ink-900">Medicines Catalogue</h2>
             </div>
             <p className="mt-0.5 text-xs text-ink-500">
               What doctors can prescribe, and the price the billing desk charges for each.
@@ -180,11 +186,6 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
       <div className="grid gap-5 lg:grid-cols-2 lg:items-start">
         {/* Branches Card */}
         <Card>
-          {/*
-            The add form sits below the list, so it drifts further down the page
-            with every branch added. The header keeps a way to reach it that does
-            not depend on how long the list has become.
-          */}
           <CardHeader
             title="Branches"
             hint={`${branches.length} active branch${branches.length === 1 ? '' : 'es'}`}
@@ -206,8 +207,8 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
             <ul className="divide-y divide-ink-200">
               {branches.map((branch) => (
                 <li key={branch.id} className="px-4 py-3 sm:px-5 sm:py-3.5 text-sm text-ink-800 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-base text-ink-400">🏥</span>
+                  <div className="flex items-center gap-2.5">
+                    <BuildingIcon className="size-4 text-ink-500" />
                     <span className="font-semibold text-ink-900">{branch.name}</span>
                   </div>
                   <span className="rounded-full bg-ink-100 px-2 py-0.5 text-xs font-semibold text-ink-600">
@@ -281,17 +282,20 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                       
                       <div className="flex flex-wrap items-center gap-1.5 mt-1.5 text-xs text-ink-600">
                         {doctor.specialty ? (
-                          <span className="font-medium text-ink-800 bg-ink-100 px-2 py-0.5 rounded-md">
-                            🩺 {doctor.specialty}
+                          <span className="inline-flex items-center gap-1 font-medium text-ink-800 bg-ink-100 px-2 py-0.5 rounded-md">
+                            <StethoscopeIcon className="size-3 text-brand-600" />
+                            {doctor.specialty}
                           </span>
                         ) : null}
                         {doctor.branchName ? (
-                          <span className="text-ink-600 bg-ink-100 px-2 py-0.5 rounded-md">
-                            📍 {doctor.branchName}
+                          <span className="inline-flex items-center gap-1 text-ink-600 bg-ink-100 px-2 py-0.5 rounded-md">
+                            <MapPinIcon className="size-3 text-ink-500" />
+                            {doctor.branchName}
                           </span>
                         ) : null}
-                        <span className="text-ink-500 bg-ink-100 px-2 py-0.5 rounded-md">
-                          ⏱️ ~{doctor.defaultConsultMinutes}m
+                        <span className="inline-flex items-center gap-1 text-ink-500 bg-ink-100 px-2 py-0.5 rounded-md">
+                          <ClockIcon className="size-3 text-ink-500" />
+                          ~{doctor.defaultConsultMinutes}m
                         </span>
                       </div>
                     </div>
@@ -302,14 +306,6 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                       <Button
                         type="submit"
                         size="sm"
-                        /*
-                         * Not `danger`, despite the word: this is a toggle, and
-                         * the same button turns back into Activate. Destructive
-                         * styling is a promise that something cannot be undone,
-                         * and spending it once per row on a reversible action
-                         * both drowns out the doctor names and leaves nothing
-                         * left to say when something really is irreversible.
-                         */
                         variant={doctor.active ? 'secondary' : 'primary'}
                         className="w-full sm:w-auto"
                       >
@@ -378,7 +374,7 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                   <div className="pt-0.5">
                     <span
                       className={cn(
-                        'inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-semibold border',
+                        'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold border',
                         doctor.mode === 'both'
                           ? 'bg-amber-50 text-amber-900 border-amber-200'
                           : doctor.mode === 'slot'
@@ -386,11 +382,22 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                           : 'bg-blue-50 text-blue-900 border-blue-200',
                       )}
                     >
-                      {doctor.mode === 'both'
-                        ? '🌟 Hybrid Mode (Live Queue + Time Slots)'
-                        : doctor.mode === 'slot'
-                        ? '🕒 Time Slots Only'
-                        : '🎫 Live Running Queue (Visiting)'}
+                      {doctor.mode === 'both' ? (
+                        <>
+                          <LayersIcon className="size-3 text-amber-700" />
+                          <span>Hybrid Practice (Live Queue + Time Slots)</span>
+                        </>
+                      ) : doctor.mode === 'slot' ? (
+                        <>
+                          <ClockIcon className="size-3 text-emerald-700" />
+                          <span>Time Slots Only</span>
+                        </>
+                      ) : (
+                        <>
+                          <ActivityIcon className="size-3 text-blue-700" />
+                          <span>Live Queue (Tokens & Walk-ins)</span>
+                        </>
+                      )}
                     </span>
                   </div>
                 </li>
@@ -436,9 +443,9 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                   defaultValue="both"
                   className="block w-full rounded-lg border-0 bg-white px-3 py-2.5 text-sm text-ink-900 ring-1 ring-inset ring-ink-300 focus:ring-2 focus:ring-inset focus:ring-brand-600 focus:outline-none cursor-pointer"
                 >
-                  <option value="both">🌟 Hybrid (Both: Live Queue & Time Slots)</option>
-                  <option value="queue">🎫 Live Running Queue Only (Visiting / Walk-ins)</option>
-                  <option value="slot">🕒 Time-based Appointment Slots Only</option>
+                  <option value="both">Hybrid (Both: Live Queue & Time Slots)</option>
+                  <option value="queue">Live Running Queue Only (Visiting / Walk-ins)</option>
+                  <option value="slot">Time-based Appointment Slots Only</option>
                 </select>
               </Field>
               <Field
@@ -507,7 +514,7 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                         ) : null}
                       </div>
                       <p className="text-xs text-ink-500 mt-0.5">
-                        {member.email} {member.branchName ? `· 📍 ${member.branchName}` : ''}
+                        {member.email} {member.branchName ? `· ${member.branchName}` : ''}
                       </p>
                     </div>
 

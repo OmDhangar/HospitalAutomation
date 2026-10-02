@@ -2,6 +2,14 @@
 
 import React, { useEffect, useState, useTransition } from 'react';
 import { Alert, Button, Card, CardHeader, Field, Input } from '@/components/ui';
+import {
+  LayersIcon,
+  ActivityIcon,
+  ClockIcon,
+  ZapIcon,
+  StethoscopeIcon,
+  XIcon,
+} from '@/components/icons';
 import { useToast } from '@/components/toast';
 import type { DoctorListItem } from '@/lib/services/hospital';
 import type {
@@ -21,17 +29,10 @@ import {
 
 /**
  * The three practice modes, as data.
- *
- * Previously three near-identical hand-written buttons, each repeating the same
- * layout and state classes with one colour changed — which is where most of the
- * page's "extra button styles" came from, since none of them went through the
- * shared Button component either. Only what actually differs per mode lives
- * here; the rest is written once at the call site.
  */
 const SCHEDULE_MODE_OPTIONS = [
   {
     value: 'both',
-    icon: '🌟',
     label: 'Hybrid',
     hint: 'Both (Queue + Slots)',
     selectedClass:
@@ -39,7 +40,6 @@ const SCHEDULE_MODE_OPTIONS = [
   },
   {
     value: 'queue',
-    icon: '🎫',
     label: 'Live Queue',
     hint: 'Tokens Only',
     selectedClass:
@@ -47,7 +47,6 @@ const SCHEDULE_MODE_OPTIONS = [
   },
   {
     value: 'slot',
-    icon: '🕒',
     label: 'Time Slots',
     hint: 'Slots Only',
     selectedClass:
@@ -90,34 +89,29 @@ export function DoctorScheduleManager({
   const [intervalReason, setIntervalReason] = useState('Emergency / Surgery');
   const [isAddingBlock, startAddBlockTransition] = useTransition();
 
-  // Active slot override being edited
-  const [activeSlotTime, setActiveSlotTime] = useState<string | null>(null);
-  const [overrideReason, setOverrideReason] = useState('Lunch');
-
   const loadSchedule = async (docId: string, dateStr: string) => {
     if (!docId) return;
     setLoadingSchedule(true);
     try {
-      const res = await fetchDoctorScheduleData(docId, dateStr);
-      if (res.ok && res.data) {
-        setScheduleData(res.data);
-        const cfg = res.data.config;
-        setScheduleMode(cfg.mode || 'both');
-        setStartTime(cfg.startTime);
-        setEndTime(cfg.endTime);
-        setSlotMinutes(cfg.slotMinutes);
-        setBreakStart(cfg.breakStartTime || '13:00');
-        setBreakEnd(cfg.breakEndTime || '14:00');
+      const data = await fetchDoctorScheduleData(docId, dateStr);
+      setScheduleData(data);
+      if (data?.config) {
+        setScheduleMode(data.config.mode);
+        setStartTime(data.config.startTime);
+        setEndTime(data.config.endTime);
+        setSlotMinutes(data.config.slotMinutes);
+        setBreakStart(data.config.breakStartTime || '13:00');
+        setBreakEnd(data.config.breakEndTime || '14:00');
       }
-    } catch (err: unknown) {
-      toast.error('Failed to load schedule', err instanceof Error ? err.message : '');
+    } catch (e: unknown) {
+      toast.error('Failed to load doctor schedule', (e as Error).message);
     } finally {
       setLoadingSchedule(false);
     }
   };
 
   useEffect(() => {
-    if (selectedDoctorId) {
+    if (selectedDoctorId && selectedDate) {
       loadSchedule(selectedDoctorId, selectedDate);
     }
   }, [selectedDoctorId, selectedDate]);
@@ -131,114 +125,36 @@ export function DoctorScheduleManager({
           mode: scheduleMode,
           startTime,
           endTime,
-          slotMinutes: Number(slotMinutes),
+          slotMinutes,
           breakStartTime: breakStart || null,
           breakEndTime: breakEnd || null,
         });
-        toast.success(
-          scheduleMode === 'both'
-            ? 'Saved in Hybrid Mode (Live Queue + Time Slots)!'
-            : scheduleMode === 'queue'
-            ? 'Saved in Live Running Queue Mode!'
-            : 'Doctor Availability & Slots Saved!',
-          scheduleMode === 'both'
-            ? 'Patients can join the live queue today or book advance time slots.'
-            : scheduleMode === 'queue'
-            ? 'Patients will receive sequential queue tokens on booking.'
-            : 'Appointment slots have been generated.',
-        );
-        await loadSchedule(selectedDoctorId, selectedDate);
+        toast.success('Schedule Updated', 'Doctor availability configuration saved.');
+        loadSchedule(selectedDoctorId, selectedDate);
       } catch (err: unknown) {
-        toast.error('Save failed', err instanceof Error ? err.message : '');
-      }
-    });
-  };
-
-  const handleToggleSlotStatus = (slot: GeneratedSlot) => {
-    const nextAvailable = !slot.available;
-    const defaultReason = nextAvailable ? '' : 'Lunch';
-
-    startSaveConfigTransition(async () => {
-      try {
-        await toggleSlotOverrideApi({
-          doctorId: selectedDoctorId,
-          serviceDate: selectedDate,
-          slotTime: slot.time24,
-          isAvailable: nextAvailable,
-          reason: nextAvailable ? undefined : defaultReason,
-        });
-        toast.success(
-          nextAvailable ? `Slot ${slot.timeStr} Activated` : `Slot ${slot.timeStr} Deactivated`,
-        );
-        await loadSchedule(selectedDoctorId, selectedDate);
-      } catch (err: unknown) {
-        toast.error('Slot update failed', err instanceof Error ? err.message : '');
+        toast.error('Could not save schedule', (err as Error).message);
       }
     });
   };
 
   const handleAddIntervalBlock = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!intervalStart || !intervalEnd) {
-      toast.error('Please enter both start and end time');
-      return;
-    }
-
     startAddBlockTransition(async () => {
       try {
-        /**
-         * Ask first when real appointments are involved.
-         *
-         * Blocking a window cancels bookings inside it and sends each patient
-         * a WhatsApp message. None of that is undone by removing the block
-         * afterwards, so the count is confirmed before it happens rather than
-         * reported after.
-         */
-        const preview = await previewIntervalApi({
+        const res = await addIntervalBlockApi({
           doctorId: selectedDoctorId,
           serviceDate: selectedDate,
           startTime: intervalStart,
           endTime: intervalEnd,
+          reason: intervalReason,
         });
-
-        const affected = preview.summary.cancelled + preview.summary.needsDeskAction;
-        if (affected > 0) {
-          const lines = [
-            `${preview.summary.cancelled} booked appointment${
-              preview.summary.cancelled === 1 ? '' : 's'
-            } will be cancelled and the patient${
-              preview.summary.cancelled === 1 ? '' : 's'
-            } messaged on WhatsApp to rebook.`,
-          ];
-          if (preview.summary.needsDeskAction > 0) {
-            lines.push(
-              `${preview.summary.needsDeskAction} patient${
-                preview.summary.needsDeskAction === 1 ? ' is' : 's are'
-              } already waiting and will NOT be messaged — speak to them at the desk.`,
-            );
-          }
-          lines.push('This cannot be undone. Continue?');
-
-          if (!window.confirm(lines.join('\n\n'))) return;
-        }
-
-        const result = await addIntervalBlockApi({
-          doctorId: selectedDoctorId,
-          serviceDate: selectedDate,
-          startTime: intervalStart,
-          endTime: intervalEnd,
-          reason: intervalReason.trim() || 'Emergency / Temporary Unavailability',
-        });
-
-        // The server's own sentence, which names what happened to patients
-        // rather than only that a time range is now unavailable.
         toast.success(
-          `${intervalStart}–${intervalEnd} blocked`,
-          result.message ?? 'The window is now unavailable.',
+          'Interval Blocked',
+          res.message || `${intervalStart} – ${intervalEnd} blocked on ${selectedDate}.`,
         );
-        await loadSchedule(selectedDoctorId, selectedDate);
+        loadSchedule(selectedDoctorId, selectedDate);
       } catch (err: unknown) {
-        toast.error('Failed to add block', err instanceof Error ? err.message : '');
+        toast.error('Failed to block interval', (err as Error).message);
       }
     });
   };
@@ -246,48 +162,55 @@ export function DoctorScheduleManager({
   const handleRemoveIntervalBlock = async (blockId: string) => {
     try {
       await removeIntervalBlockApi({ doctorId: selectedDoctorId, blockId });
-      toast.info('Interval block removed');
-      await loadSchedule(selectedDoctorId, selectedDate);
+      toast.info('Interval block cleared');
+      loadSchedule(selectedDoctorId, selectedDate);
     } catch (err: unknown) {
-      toast.error('Failed to remove block', err instanceof Error ? err.message : '');
+      toast.error('Failed to clear interval block', (err as Error).message);
     }
   };
 
-  if (doctors.length === 0) {
-    return null;
-  }
+  const handleToggleSlot = async (slotTime: string, currentlyAvailable: boolean) => {
+    try {
+      await toggleSlotOverrideApi({
+        doctorId: selectedDoctorId,
+        serviceDate: selectedDate,
+        slotTime,
+        isAvailable: !currentlyAvailable,
+        reason: currentlyAvailable ? 'Manual Break' : undefined,
+      });
+      toast.info(`Slot ${slotTime} updated`);
+      loadSchedule(selectedDoctorId, selectedDate);
+    } catch (err: unknown) {
+      toast.error('Could not update slot', (err as Error).message);
+    }
+  };
 
-  const selectedDoc = doctors.find((d) => d.id === selectedDoctorId);
+  const selectedDoc = doctors.find((d) => d.id === selectedDoctorId) || doctors[0];
 
   return (
     <div className="space-y-5 sm:space-y-6">
-      {/* Doctor & Date Header Bar */}
-      <Card className="p-3.5 sm:p-4 bg-white border-ink-200 shadow-xs">
-        {/*
-          No justify-between: with two children it forces them to opposite edges,
-          which pushed the date picker away from the doctor selector it filters
-          alongside. They read as one set of controls, so they sit as one.
-        */}
-        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 sm:gap-4">
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 min-w-0">
-            <div className="flex items-center gap-2">
-              <label className="text-xs sm:text-sm font-bold text-ink-900 shrink-0">Doctor:</label>
-              <select
-                value={selectedDoctorId}
-                onChange={(e) => setSelectedDoctorId(e.target.value)}
-                className="w-full sm:w-auto rounded-lg border-0 bg-ink-50 px-3 py-2 text-xs sm:text-sm font-semibold text-ink-900 ring-1 ring-inset ring-ink-300 focus:ring-2 focus:ring-brand-600 cursor-pointer"
-              >
-                {doctors.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name} {d.specialty ? `(${d.specialty})` : ''} {!d.active ? ' [Inactive]' : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
+      {/* 1. Doctor & Date Selection Ribbon */}
+      <Card className="p-4 sm:p-5 bg-gradient-to-r from-ink-50/70 to-white">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
+            <span className="text-xs sm:text-sm font-semibold text-ink-700 shrink-0">
+              Select Doctor:
+            </span>
+            <select
+              value={selectedDoctorId}
+              onChange={(e) => setSelectedDoctorId(e.target.value)}
+              className="rounded-lg border-0 bg-white py-1.5 px-3 text-xs sm:text-sm font-semibold text-ink-900 ring-1 ring-inset ring-ink-300 focus:ring-2 focus:ring-brand-600 cursor-pointer max-w-[220px] truncate"
+            >
+              {doctors.map((doc) => (
+                <option key={doc.id} value={doc.id}>
+                  {doc.name} {doc.specialty ? `(${doc.specialty})` : ''}
+                </option>
+              ))}
+            </select>
 
-            <div>
+            <div className="hidden sm:flex items-center gap-1.5">
               <span
-                className={`inline-flex items-center rounded-full px-2.5 py-0.5 sm:py-1 text-xs font-bold ${
+                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 sm:py-1 text-xs font-bold ${
                   scheduleMode === 'both'
                     ? 'bg-amber-100 text-amber-900 border border-amber-300'
                     : scheduleMode === 'queue'
@@ -295,11 +218,22 @@ export function DoctorScheduleManager({
                     : 'bg-emerald-100 text-emerald-900 border border-emerald-200'
                 }`}
               >
-                {scheduleMode === 'both'
-                  ? '🌟 Hybrid (Queue + Slots)'
-                  : scheduleMode === 'queue'
-                  ? '🎫 Live Queue Mode'
-                  : '🕒 Time Slots Mode'}
+                {scheduleMode === 'both' ? (
+                  <>
+                    <LayersIcon className="size-3 text-amber-700" />
+                    <span>Hybrid (Queue + Slots)</span>
+                  </>
+                ) : scheduleMode === 'queue' ? (
+                  <>
+                    <ActivityIcon className="size-3 text-blue-700" />
+                    <span>Live Queue Mode</span>
+                  </>
+                ) : (
+                  <>
+                    <ClockIcon className="size-3 text-emerald-700" />
+                    <span>Time Slots Mode</span>
+                  </>
+                )}
               </span>
             </div>
           </div>
@@ -326,27 +260,10 @@ export function DoctorScheduleManager({
               hint="Configure appointment slots, live OPD queue, or both"
             />
             <form onSubmit={handleSaveConfig} className="p-4 sm:p-5 space-y-4">
-              {/*
-                A fieldset, not <Field>.
-                Field renders a <label> around whatever it wraps, and a label may
-                be associated with only one control — it binds to the first
-                labelable descendant, so with a group of radios inside, a click
-                anywhere in the group could land on the first one. fieldset and
-                legend are what actually group a set of related controls, and
-                screen readers announce the legend before each option.
-              */}
               <fieldset className="block">
                 <legend className="mb-1.5 block text-sm font-medium text-ink-700">
                   Practice / Schedule Mode
                 </legend>
-                {/*
-                  Real radio inputs rather than three buttons.
-                  These are one choice out of three, and as buttons nothing
-                  announced which was selected -- the state lived only in the
-                  colour and the ring, so a screen reader heard three unrelated
-                  buttons. A radio group also gets arrow-key navigation from the
-                  browser rather than from hand-written key handlers.
-                */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {SCHEDULE_MODE_OPTIONS.map((option) => {
                     const selected = scheduleMode === option.value;
@@ -367,21 +284,21 @@ export function DoctorScheduleManager({
                           onChange={() => setScheduleMode(option.value)}
                           className="peer sr-only"
                         />
-                        {/* Sibling of the input, so `peer` can reach it. */}
                         <span
                           aria-hidden="true"
                           className="pointer-events-none absolute inset-0 rounded-xl peer-focus-visible:ring-2 peer-focus-visible:ring-brand-600 peer-focus-visible:ring-offset-2"
                         />
-                        <span aria-hidden="true" className="text-lg sm:text-sm mr-2.5 sm:mr-0">
-                          {option.icon}
-                        </span>
+                        <div className="mb-1 sm:mb-1.5 mr-2 sm:mr-0">
+                          {option.value === 'both' ? (
+                            <LayersIcon className="size-5 text-amber-700" />
+                          ) : option.value === 'queue' ? (
+                            <ActivityIcon className="size-5 text-blue-700" />
+                          ) : (
+                            <ClockIcon className="size-5 text-emerald-700" />
+                          )}
+                        </div>
                         <div>
                           <span className="text-xs sm:text-sm font-bold block">{option.label}</span>
-                          {/*
-                            A colour token, not opacity: opacity composites against
-                            whichever tint the selected state sets, so the effective
-                            contrast changed per mode.
-                          */}
                           <span className="block text-xs text-ink-500">{option.hint}</span>
                         </div>
                       </label>
@@ -395,21 +312,30 @@ export function DoctorScheduleManager({
 
               {scheduleMode === 'both' ? (
                 <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-950 leading-relaxed space-y-1">
-                  <p className="font-bold">🌟 Hybrid Mode (Both Active)</p>
+                  <p className="font-bold flex items-center gap-1.5">
+                    <LayersIcon className="size-4 text-amber-700" />
+                    <span>Hybrid Mode (Both Active)</span>
+                  </p>
                   <p>
                     Patients can walk-in / join today&apos;s live token queue without restriction, while advance bookings can select convenient time slots.
                   </p>
                 </div>
               ) : scheduleMode === 'queue' ? (
                 <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-900 leading-relaxed space-y-1">
-                  <p className="font-bold">🎫 Live Running Queue Mode (Visiting Doctors)</p>
+                  <p className="font-bold flex items-center gap-1.5">
+                    <ActivityIcon className="size-4 text-blue-700" />
+                    <span>Live Running Queue Mode (Visiting Doctors)</span>
+                  </p>
                   <p>
                     All patients join a live dynamic token queue sequentially. Ideal for visiting doctors to cover all visiting patients arriving that day.
                   </p>
                 </div>
               ) : (
                 <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-950 leading-relaxed space-y-1">
-                  <p className="font-bold">🕒 Time-based Appointment Slots Only</p>
+                  <p className="font-bold flex items-center gap-1.5">
+                    <ClockIcon className="size-4 text-emerald-700" />
+                    <span>Time-based Appointment Slots Only</span>
+                  </p>
                   <p>
                     Strict slot schedule. Consultations are strictly booked into fixed time slots.
                   </p>
@@ -531,7 +457,7 @@ export function DoctorScheduleManager({
                 className="w-full justify-center"
                 isLoading={isAddingBlock}
               >
-                🚫 Block Interval For Today
+                Block Interval For Today
               </Button>
             </form>
 
@@ -557,10 +483,11 @@ export function DoctorScheduleManager({
                       <button
                         type="button"
                         onClick={() => handleRemoveIntervalBlock(block.id)}
-                        className="text-rose-700 hover:text-rose-900 font-bold px-2 py-1 rounded-md bg-rose-100 hover:bg-rose-200 cursor-pointer"
+                        className="text-rose-700 hover:text-rose-900 font-bold px-2 py-1 rounded-md bg-rose-100 hover:bg-rose-200 cursor-pointer inline-flex items-center gap-1"
                         title="Clear block"
                       >
-                        Clear ✕
+                        <span>Clear</span>
+                        <XIcon className="size-3" />
                       </button>
                     </div>
                   ))}
@@ -575,8 +502,8 @@ export function DoctorScheduleManager({
           {scheduleMode === 'queue' ? (
             <Card className="p-4 sm:p-6 bg-gradient-to-br from-blue-50/50 via-white to-indigo-50/30 border-blue-200">
               <div className="flex flex-col sm:flex-row items-start gap-4">
-                <div className="size-12 rounded-2xl bg-blue-600 text-white flex items-center justify-center text-2xl shadow-xs shrink-0">
-                  🎫
+                <div className="size-12 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-xs shrink-0">
+                  <ActivityIcon className="size-6 text-white" />
                 </div>
                 <div className="space-y-3 flex-1">
                   <div>
@@ -590,14 +517,20 @@ export function DoctorScheduleManager({
 
                   <div className="grid gap-3 sm:grid-cols-2 pt-2">
                     <div className="p-3.5 rounded-xl bg-white border border-blue-100 shadow-xs">
-                      <p className="text-xs font-semibold text-blue-900">⚡ Dynamic First-Come Tokens</p>
+                      <p className="text-xs font-semibold text-blue-900 flex items-center gap-1.5">
+                        <ZapIcon className="size-3.5 text-blue-700" />
+                        <span>Dynamic First-Come Tokens</span>
+                      </p>
                       <p className="text-xs text-ink-600 mt-1 leading-relaxed">
                         Patients do not have to compete for limited time slots. They get sequential tokens (Token #1, #2...) and live wait-time estimates on WhatsApp.
                       </p>
                     </div>
 
                     <div className="p-3.5 rounded-xl bg-white border border-blue-100 shadow-xs">
-                      <p className="text-xs font-semibold text-blue-900">🩺 Covers All Visiting Patients</p>
+                      <p className="text-xs font-semibold text-blue-900 flex items-center gap-1.5">
+                        <StethoscopeIcon className="size-3.5 text-blue-700" />
+                        <span>Covers All Visiting Patients</span>
+                      </p>
                       <p className="text-xs text-ink-600 mt-1 leading-relaxed">
                         Ideal for specialists visiting specific days. The doctor can consult everyone who arrives, without hard slot cutoffs.
                       </p>
@@ -620,76 +553,70 @@ export function DoctorScheduleManager({
               <div className="border-b border-ink-200 px-4 py-3.5 sm:px-5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
                   <h2 className="text-sm font-bold text-ink-900">
-                    Generated Appointment Slots ({scheduleData?.slots.length || 0} Total)
+                    Slot Schedule: {selectedDoc?.name}
                   </h2>
-                  <p className="mt-0.5 text-xs text-ink-500">
-                    {scheduleData?.totalAvailable || 0} available for booking · Duration: {slotMinutes} mins
+                  <p className="text-xs text-ink-500 mt-0.5">
+                    {selectedDate} · {scheduleData?.totalAvailable ?? 0} slots available for online / reception booking
                   </p>
                 </div>
-
-                <div className="flex items-center gap-3 text-xs pt-1 sm:pt-0">
-                  <span className="inline-flex items-center gap-1.5 text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                    <span className="size-2 rounded-full bg-emerald-500 inline-block" /> Available
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="flex items-center gap-1">
+                    <span className="size-2.5 rounded-sm bg-emerald-500" /> Available
                   </span>
-                  <span className="inline-flex items-center gap-1.5 text-rose-700 font-semibold bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200">
-                    <span className="size-2 rounded-full bg-rose-500 inline-block" /> Blocked / Skip
+                  <span className="flex items-center gap-1">
+                    <span className="size-2.5 rounded-sm bg-rose-400" /> Blocked
                   </span>
                 </div>
               </div>
 
-              <div className="p-3.5 sm:p-5">
+              <div className="p-4 sm:p-5">
                 {loadingSchedule ? (
-                  <div className="py-16 text-center">
-                    <div className="inline-block animate-spin size-8 border-4 border-brand-600 border-t-transparent rounded-full mb-3" />
-                    <p className="text-sm font-medium text-ink-600">Generating slots...</p>
+                  <div className="py-16 text-center text-sm text-ink-400 animate-pulse">
+                    Loading slot schedule...
                   </div>
                 ) : !scheduleData || scheduleData.slots.length === 0 ? (
-                  <div className="py-12 text-center text-ink-500">
-                    <p className="text-sm">No slots generated for this date.</p>
-                    <p className="text-xs mt-1">Check working hours configuration on the left.</p>
+                  <div className="py-12 text-center">
+                    <p className="text-sm font-semibold text-ink-700">No slots generated for this day.</p>
+                    <p className="text-xs text-ink-500 mt-1">
+                      Check your start and end times or ensure the doctor is active.
+                    </p>
                   </div>
                 ) : (
-                  <div className="space-y-4">
-                    {scheduleMode === 'both' ? (
-                      <div className="rounded-xl bg-amber-50/80 p-3.5 text-xs text-amber-950 leading-relaxed border border-amber-200 shadow-xs flex items-start gap-2.5">
-                        <span className="text-base leading-none">🌟</span>
-                        <div>
-                          <strong className="font-semibold">Hybrid Practice Mode Active:</strong> Patients booking for future dates will book from the time slots below. Patients arriving today can also walk in or join the live token queue without restriction.
-                        </div>
-                      </div>
-                    ) : null}
-
-                    <div className="rounded-lg bg-ink-50 p-3 text-xs text-ink-600 leading-relaxed border border-ink-200">
-                      💡 <strong>Interactive Slot Management:</strong> Tap any slot to toggle its availability (e.g. mark a slot as Lunch or Break). Changes take effect instantly for web and WhatsApp booking.
-                    </div>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2 sm:gap-2.5">
-                      {scheduleData.slots.map((slot) => {
-                        return (
-                          <button
-                            key={slot.time24}
-                            type="button"
-                            onClick={() => handleToggleSlotStatus(slot)}
-                            className={`flex flex-col items-center justify-center p-2.5 sm:p-3 min-h-[56px] rounded-xl border text-center transition-all cursor-pointer select-none active:scale-95 ${
-                              slot.available
-                                ? 'bg-emerald-50/70 hover:bg-emerald-100 active:bg-emerald-200 border-emerald-300 text-emerald-950 shadow-xs'
-                                : 'bg-rose-50/70 hover:bg-rose-100 active:bg-rose-200 border-rose-300 text-rose-950 opacity-90'
+                  <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-2.5">
+                    {scheduleData.slots.map((slot) => {
+                      const isAvailable = slot.available;
+                      return (
+                        <div
+                          key={slot.time24}
+                          className={`relative rounded-xl border p-2.5 text-center transition-all ${
+                            isAvailable
+                              ? 'bg-emerald-50 border-emerald-300 text-emerald-950 hover:border-emerald-400 hover:shadow-xs'
+                              : 'bg-rose-50 border-rose-200 text-rose-800 opacity-80'
+                          }`}
+                        >
+                          <p className="text-sm font-bold tracking-tight">{slot.timeStr || slot.time24}</p>
+                          <span
+                            className={`text-[10px] font-bold uppercase tracking-wider block mt-0.5 ${
+                              isAvailable ? 'text-emerald-700' : 'text-rose-700'
                             }`}
                           >
-                            <span className="text-sm font-bold">{slot.timeStr}</span>
-                            <span
-                              className={`mt-1 inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-bold ${
-                                slot.available
-                                  ? 'bg-emerald-200 text-emerald-900'
-                                  : 'bg-rose-200 text-rose-900'
-                              }`}
-                            >
-                              {slot.available ? '✅ Available' : `❌ ${slot.reason || 'Disabled'}`}
-                            </span>
+                            {isAvailable ? 'Available' : slot.reason || 'Blocked'}
+                          </span>
+
+                          <button
+                            type="button"
+                            onClick={() => handleToggleSlot(slot.time24, isAvailable)}
+                            className={`mt-1.5 w-full rounded-md py-0.5 text-[10px] font-bold transition-colors cursor-pointer ${
+                              isAvailable
+                                ? 'bg-rose-200/80 hover:bg-rose-300 text-rose-900'
+                                : 'bg-emerald-200/80 hover:bg-emerald-300 text-emerald-900'
+                            }`}
+                          >
+                            {isAvailable ? 'Block Slot' : 'Enable Slot'}
                           </button>
-                        );
-                      })}
-                    </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
