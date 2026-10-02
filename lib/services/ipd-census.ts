@@ -6,6 +6,7 @@ import {
   beds,
   branches,
   doctors,
+  encounterPayers,
   encounters,
   patients,
   wards,
@@ -204,4 +205,157 @@ export async function countAdmittedForDoctorUser(hospitalId: string, userId: str
     { clinical: true },
   );
   return row?.count ?? 0;
+}
+
+export type AdmissionSummary = {
+  admissionId: string;
+  encounterId: string;
+  patientId: string;
+  branchId: string;
+  status: AdmissionStatus;
+  patientName: string;
+  age: number | null;
+  gender: string | null;
+  phoneE164: string;
+  address: string | null;
+  doctorId: string;
+  doctorName: string;
+  doctorUserId: string | null;
+  reason: string | null;
+  requestedAt: Date;
+  admittedAt: Date | null;
+  dischargeReadyAt: Date | null;
+  dischargedAt: Date | null;
+  bed: { id: string; label: string; wardId: string; wardName: string } | null;
+  payer: {
+    kind: 'self' | 'insurer' | 'tpa' | 'corporate';
+    payerName: string | null;
+    policyNumber: string | null;
+    preauthAmountPaise: number | null;
+    approvedAmountPaise: number | null;
+  } | null;
+};
+
+/**
+ * One admission with everything its header and actions need. Not found
+ * (including another hospital's id) is null, which the page shows as 404.
+ */
+export async function getAdmissionSummary(
+  hospitalId: string,
+  admissionId: string,
+): Promise<AdmissionSummary | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(admissionId)) return null;
+  return withTenant(
+    hospitalId,
+    async (tx) => {
+      const [row] = await tx
+        .select({
+          admissionId: admissions.id,
+          encounterId: admissions.encounterId,
+          patientId: admissions.patientId,
+          branchId: admissions.branchId,
+          status: admissions.status,
+          patientName: patients.name,
+          age: patients.age,
+          gender: patients.gender,
+          phoneE164: patients.phoneE164,
+          address: patients.address,
+          doctorId: doctors.id,
+          doctorName: doctors.name,
+          doctorUserId: doctors.userId,
+          reason: admissions.reason,
+          requestedAt: admissions.requestedAt,
+          admittedAt: admissions.admittedAt,
+          dischargeReadyAt: admissions.dischargeReadyAt,
+          dischargedAt: admissions.dischargedAt,
+        })
+        .from(admissions)
+        .innerJoin(patients, eq(patients.id, admissions.patientId))
+        .innerJoin(doctors, eq(doctors.id, admissions.admittingDoctorId))
+        .where(eq(admissions.id, admissionId));
+      if (!row) return null;
+
+      const [[bed], [payer]] = await Promise.all([
+        tx
+          .select({ id: beds.id, label: beds.label, wardId: wards.id, wardName: wards.name })
+          .from(bedAssignments)
+          .innerJoin(beds, eq(beds.id, bedAssignments.bedId))
+          .innerJoin(wards, eq(wards.id, beds.wardId))
+          .where(eq(bedAssignments.admissionId, admissionId))
+          .orderBy(sql`${bedAssignments.toAt} is null desc`, sql`${bedAssignments.fromAt} desc`)
+          .limit(1),
+        tx
+          .select({
+            kind: encounterPayers.kind,
+            payerName: encounterPayers.payerName,
+            policyNumber: encounterPayers.policyNumber,
+            preauthAmountPaise: encounterPayers.preauthAmountPaise,
+            approvedAmountPaise: encounterPayers.approvedAmountPaise,
+          })
+          .from(encounterPayers)
+          .where(and(eq(encounterPayers.encounterId, row.encounterId), isNull(encounterPayers.voidedAt))),
+      ]);
+      return { ...row, bed: bed ?? null, payer: payer ?? null };
+    },
+    { clinical: true },
+  );
+}
+
+/** Free, in-use beds of a branch, by ward, for the admission sheet and transfers. */
+export async function listFreeBeds(args: {
+  hospitalId: string;
+  branchId: string;
+}): Promise<{ wardId: string; wardName: string; beds: { id: string; label: string }[] }[]> {
+  return withTenant(args.hospitalId, async (tx) => {
+    const rows = await tx
+      .select({
+        wardId: wards.id,
+        wardName: wards.name,
+        wardSort: wards.sortOrder,
+        bedId: beds.id,
+        bedLabel: beds.label,
+        bedSort: beds.sortOrder,
+      })
+      .from(beds)
+      .innerJoin(wards, eq(wards.id, beds.wardId))
+      .where(
+        and(
+          eq(beds.active, true),
+          eq(wards.active, true),
+          eq(wards.branchId, args.branchId),
+          sql`not exists (select 1 from ${bedAssignments} ba where ba.bed_id = ${beds.id} and ba.to_at is null)`,
+        ),
+      )
+      .orderBy(asc(wards.sortOrder), asc(wards.name), asc(beds.sortOrder));
+
+    const byWard = new Map<string, { wardId: string; wardName: string; beds: { id: string; label: string }[] }>();
+    for (const row of rows) {
+      const ward = byWard.get(row.wardId) ?? { wardId: row.wardId, wardName: row.wardName, beds: [] };
+      ward.beds.push({ id: row.bedId, label: row.bedLabel });
+      byWard.set(row.wardId, ward);
+    }
+    for (const ward of byWard.values()) ward.beds.sort((a, b) => compareBedLabels(a.label, b.label));
+    return [...byWard.values()];
+  });
+}
+
+/** Patients on file with this phone, for the emergency admission's search. Not clinical. */
+export async function findPatientsByPhone(
+  hospitalId: string,
+  phoneE164: string,
+): Promise<{ id: string; name: string; age: number | null; gender: string | null; address: string | null }[]> {
+  return withTenant(hospitalId, (tx) =>
+    tx
+      .select({
+        id: patients.id,
+        name: patients.name,
+        age: patients.age,
+        gender: patients.gender,
+        address: patients.address,
+      })
+      .from(patients)
+      .where(eq(patients.phoneE164, phoneE164))
+      .orderBy(asc(patients.name))
+      .limit(10),
+  );
 }
