@@ -165,7 +165,7 @@ const PATIENT_PROMPTS: Record<
     choiceBody:
       'ही अपॉइंटमेंट कोणासाठी नोंदवायची आहे?\n\nदुसऱ्या व्यक्तीसाठी असल्यास, थेट त्यांचे नाव आणि वय पाठवा (उदा. आरव शर्मा 7).',
     choicePick: 'रुग्ण निवडा',
-    newPatientTitle: '➕ नवीन रुग्ण जोडा',
+    newPatientTitle: 'नवीन रुग्ण जोडा',
     askNameAge: 'कृपया रुग्णाचे पूर्ण नाव आणि वय सांगा (उदा. आरव शर्मा 7):',
     selfTitle: 'माझ्यासाठी',
     otherTitle: 'दुसऱ्या व्यक्तीसाठी',
@@ -175,7 +175,7 @@ const PATIENT_PROMPTS: Record<
     choiceBody:
       'यह अपॉइंटमेंट किसके लिए बुक करनी है?\n\nकिसी और के लिए हो, तो सीधे उनका नाम और उम्र भेजें (उदा. आरव शर्मा 7).',
     choicePick: 'मरीज़ चुनें',
-    newPatientTitle: '➕ नया मरीज़ जोड़ें',
+    newPatientTitle: 'नया मरीज़ जोड़ें',
     askNameAge: 'कृपया मरीज़ का पूरा नाम और उम्र बताएं (उदा. आरव शर्मा 7):',
     selfTitle: 'मेरे लिए',
     otherTitle: 'किसी और के लिए',
@@ -185,7 +185,7 @@ const PATIENT_PROMPTS: Record<
     choiceBody:
       'Who is this appointment for?\n\nBooking for someone else? Just reply with their name and age (e.g. Aarav Sharma 7).',
     choicePick: 'Select Patient',
-    newPatientTitle: '➕ Add New Patient',
+    newPatientTitle: 'Add New Patient',
     askNameAge: 'Please reply with the patient’s full name and age (e.g. Aarav Sharma 7):',
     selfTitle: 'Myself',
     otherTitle: 'Someone else',

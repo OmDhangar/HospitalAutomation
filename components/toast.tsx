@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
 import { cn } from '@/components/ui';
+import { CheckIcon, XIcon, AlertTriangleIcon, InfoIcon } from '@/components/icons';
 
 export type ToastType = 'success' | 'error' | 'info' | 'warn';
 
@@ -78,11 +79,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             )}
           >
             <div className="flex items-start gap-2.5 min-w-0">
-              <span className="text-base shrink-0 mt-0.5">
-                {toast.type === 'success' && '✓'}
-                {toast.type === 'error' && '✕'}
-                {toast.type === 'warn' && '⚠️'}
-                {toast.type === 'info' && 'ℹ️'}
+              <span className="shrink-0 mt-0.5">
+                {toast.type === 'success' && <CheckIcon className="h-4 w-4" />}
+                {toast.type === 'error' && <XIcon className="h-4 w-4" />}
+                {toast.type === 'warn' && <AlertTriangleIcon className="h-4 w-4" />}
+                {toast.type === 'info' && <InfoIcon className="h-4 w-4" />}
               </span>
               <div className="min-w-0">
                 <p className="text-sm font-semibold leading-tight truncate">{toast.title}</p>
@@ -93,10 +94,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             </div>
             <button
               onClick={() => removeToast(toast.id)}
-              className="text-white/70 hover:text-white text-xs font-bold shrink-0 p-1"
+              className="text-white/70 hover:text-white shrink-0 p-1 rounded hover:bg-white/10 transition-colors"
               aria-label="Close toast"
             >
-              ✕
+              <XIcon className="h-3.5 w-3.5" />
             </button>
           </div>
         ))}

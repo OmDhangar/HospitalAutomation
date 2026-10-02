@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { Alert, Button, Card, Field, Input } from '@/components/ui';
+import { CheckIcon, ClockIcon } from '@/components/icons';
 import type { Locale } from '@/lib/i18n/patient';
 import type { DoctorBookingDetails, TimeSlot } from '@/lib/services/web-booking';
 import { submitSlotBooking, type BookSlotResult } from './actions';
@@ -98,8 +99,8 @@ export function BookSlotForm({
       <div className="mx-auto max-w-lg">
         <Card className="border-brand-200 bg-white shadow-[var(--shadow-raised)]">
           <div className="bg-brand-50 px-6 py-5 border-b border-brand-100 text-center">
-            <span className="inline-flex items-center justify-center size-12 rounded-full bg-brand-600 text-white font-bold text-xl mb-2">
-              ✓
+            <span className="inline-flex items-center justify-center size-12 rounded-full bg-brand-600 text-white font-bold text-xl mb-2 shadow-xs">
+              <CheckIcon className="size-6" />
             </span>
             <h2 className="text-xl font-bold text-ink-900">Appointment Confirmed!</h2>
             <p className="text-xs text-brand-800 mt-1">
@@ -116,7 +117,7 @@ export function BookSlotForm({
                 {success.tokenNumber}
               </p>
               <div className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-brand-100 px-3 py-1 text-xs font-semibold text-brand-900">
-                <span>🕒</span>
+                <ClockIcon className="size-3.5 text-brand-800" />
                 <span>
                   Date: {details.serviceDate} · Time: {success.slotTimeFormatted}
                 </span>

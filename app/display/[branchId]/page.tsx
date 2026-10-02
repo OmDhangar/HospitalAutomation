@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { AutoRefresh } from '@/components/auto-refresh';
+import { StethoscopeIcon, PauseIcon, UserIcon } from '@/components/icons';
 import { requireSession } from '@/lib/auth/session';
 import { formatTimeIn } from '@/lib/domain/time';
 import { isLocale, t, type Locale } from '@/lib/i18n/patient';
@@ -115,7 +116,7 @@ export default async function DisplayPage({
       {snapshots.length === 0 ? (
         <div className="my-auto flex flex-col items-center justify-center py-24 text-center">
           <div className="size-20 rounded-3xl bg-white/5 flex items-center justify-center text-3xl mb-4 ring-1 ring-white/10">
-            🩺
+            <StethoscopeIcon className="size-10 text-emerald-400" />
           </div>
           <p className="text-2xl sm:text-3xl font-bold text-slate-400">{s.displayNoDoctors}</p>
         </div>
@@ -148,8 +149,9 @@ export default async function DisplayPage({
                 </div>
 
                 {snapshot.paused ? (
-                  <span className="rounded-xl bg-amber-400/20 px-3 py-1 text-xs font-bold text-amber-300 ring-1 ring-amber-400/30">
-                    ⏸ {s.displayOnBreak}
+                  <span className="rounded-xl bg-amber-400/20 px-3 py-1 text-xs font-bold text-amber-300 ring-1 ring-amber-400/30 inline-flex items-center gap-1.5">
+                    <PauseIcon className="size-3 text-amber-300" />
+                    <span>{s.displayOnBreak}</span>
                   </span>
                 ) : snapshot.currentToken !== null ? (
                   <span className="rounded-xl bg-emerald-500/20 px-3 py-1 text-xs font-bold text-emerald-300 ring-1 ring-emerald-400/30 flex items-center gap-1.5">
@@ -194,7 +196,7 @@ export default async function DisplayPage({
                     </p>
                     {snapshot.currentPatientName ? (
                       <div className="mt-3 inline-flex items-center gap-2 rounded-2xl bg-white/10 px-4 py-1.5 text-base sm:text-lg font-bold text-slate-100 ring-1 ring-white/15">
-                        <span>👤</span>
+                        <UserIcon className="size-4 text-emerald-300 shrink-0" />
                         <span className="truncate max-w-[280px]">{snapshot.currentPatientName}</span>
                       </div>
                     ) : null}

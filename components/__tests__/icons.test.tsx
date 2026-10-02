@@ -25,6 +25,11 @@ import {
   PauseIcon,
   ChevronRightIcon,
   PlusIcon,
+  TagIcon,
+  PillIcon,
+  ActivityIcon,
+  BellIcon,
+  BellOffIcon,
 } from '../icons';
 
 describe('Centralized SVG Iconography', () => {
@@ -53,6 +58,11 @@ describe('Centralized SVG Iconography', () => {
     expect(PauseIcon).toBeDefined();
     expect(ChevronRightIcon).toBeDefined();
     expect(PlusIcon).toBeDefined();
+    expect(TagIcon).toBeDefined();
+    expect(PillIcon).toBeDefined();
+    expect(ActivityIcon).toBeDefined();
+    expect(BellIcon).toBeDefined();
+    expect(BellOffIcon).toBeDefined();
   });
 
   it('renders SVG elements with appropriate default attributes', () => {

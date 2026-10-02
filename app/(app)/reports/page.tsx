@@ -7,6 +7,7 @@ import {
   VolumeTrend,
 } from '@/components/charts';
 import { Button, Card, CardHeader, EmptyState, cn } from '@/components/ui';
+import { TvIcon, StethoscopeIcon } from '@/components/icons';
 import { requireSession } from '@/lib/auth/session';
 import { serviceDateIn } from '@/lib/domain/time';
 import { listBranches } from '@/lib/services/auth';
@@ -98,7 +99,8 @@ export default async function ReportsPage() {
         {branches[0] ? (
           <Link href={`/display/${branches[0].id}`} target="_blank" className="w-full sm:w-auto">
             <Button className="w-full sm:w-auto justify-center gap-2">
-              <span>📺</span> Open waiting-room display
+              <TvIcon className="size-4 text-brand-600" />
+              <span>Open waiting-room display</span>
             </Button>
           </Link>
         ) : null}
@@ -192,7 +194,7 @@ export default async function ReportsPage() {
                       <div key={row.doctorId} className="p-4 space-y-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
-                            <span className="text-base">🩺</span>
+                            <StethoscopeIcon className="size-4 text-brand-600" />
                             <span className="font-bold text-sm text-ink-900">{row.doctorName}</span>
                           </div>
                           {row.noShows > 0 ? (
