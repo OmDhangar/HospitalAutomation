@@ -34,9 +34,9 @@ export default async function WardGridPage({ params }: PageProps<'/ipd/ward/[war
 
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-2xl font-bold text-ink-900">{ward.name}</h1>
-        {census.wards.length > 1 ? (
+        {census.wards.length > 1 || session.wardDeviceId === null ? (
           <Link href="/ipd/ward?pick=1" className="inline-flex min-h-12 items-center rounded-lg px-3 font-semibold text-brand-700 hover:bg-brand-50">
-            Change ward
+            {census.wards.length > 1 ? 'Change ward' : 'Your PIN'}
           </Link>
         ) : null}
       </div>

@@ -377,6 +377,12 @@ export const sessions = pgTable(
     returnHospitalId: uuid('return_hospital_id').references(() => hospitals.id, {
       onDelete: 'set null',
     }),
+    /**
+     * Set on a PIN session opened on a shared ward device (0033). Such a
+     * session resolves as a nurse whatever the person's role, slides a
+     * 10-minute idle expiry, and ends when the device is revoked.
+     */
+    wardDeviceId: uuid('ward_device_id').references(() => wardDevices.id, { onDelete: 'cascade' }),
     createdAt: createdAt(),
   },
   (t) => [
@@ -400,6 +406,8 @@ export const staffMemberships = pgTable(
     branchId: uuid('branch_id').references(() => branches.id, { onDelete: 'set null' }),
     role: staffRole('role').notNull(),
     active: boolean('active').notNull().default(true),
+    /** scrypt hash of the 4-digit PIN for shared ward devices (0033). */
+    pinHash: text('pin_hash'),
     createdAt: createdAt(),
   },
   (t) => [
@@ -1882,4 +1890,42 @@ export const encounterPayers = pgTable(
       foreignColumns: [encounters.hospitalId, encounters.id, encounters.patientId],
     }).onDelete('cascade'),
   ],
+);
+
+/** A registered shared ward tablet (0033). The cookie is never stored, only its hash. */
+export const wardDevices = pgTable(
+  'ward_devices',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull(),
+    label: text('label').notNull(),
+    tokenHash: text('token_hash').notNull().unique(),
+    registeredByUserId: uuid('registered_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    registeredAt: timestamp('registered_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => [uniqueIndex('ward_devices_tenant_key').on(t.hospitalId, t.id)],
+);
+
+/** Failed PIN tries per person per device, for the five-tries lock-out. */
+export const wardDevicePinAttempts = pgTable(
+  'ward_device_pin_attempts',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    deviceId: uuid('device_id').notNull(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    failedCount: integer('failed_count').notNull().default(0),
+    lockedUntil: timestamp('locked_until', { withTimezone: true }),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('ward_device_pin_attempts_key').on(t.deviceId, t.userId)],
 );

@@ -232,6 +232,13 @@
       "when": 1789850000000,
       "tag": "0032_ipd_core",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1789900000000,
+      "tag": "0033_ward_devices",
+      "breakpoints": true
     }
   ]
 }

@@ -9,6 +9,7 @@ import { getSession, requireSession } from '@/lib/auth/session';
 import { can, homePathFor } from '@/lib/domain/permissions';
 import { daysUntilExpiry, expiryBucket } from '@/lib/domain/subscription';
 import { getCurrentSubscription } from '@/lib/services/subscriptions';
+import { switchNurseAction } from '../ward-device/actions';
 import { signOutAction } from './dashboard/actions';
 
 /**
@@ -28,6 +29,7 @@ async function AppHeader() {
   if (session.mustChangePassword) redirect('/change-password');
 
   const navItems: NavItem[] = [];
+  const onWardDevice = session.wardDeviceId !== null;
 
   if (can(session.role, 'queue.mutate')) {
     navItems.push({ label: 'Queue', href: '/dashboard' });
@@ -87,29 +89,43 @@ async function AppHeader() {
               {session.role}
             </p>
           </div>
-          <Link
-            href="/change-password"
-            className="hidden rounded-lg px-3 py-1.5 text-sm font-medium text-ink-600 transition-colors hover:bg-ink-100 sm:block"
-          >
-            Password
-          </Link>
-          <form action={signOutAction} className="hidden sm:block">
-            <button
-              type="submit"
-              className="rounded-lg px-3 py-1.5 text-sm font-medium text-ink-600 transition-colors hover:bg-ink-100 cursor-pointer"
-            >
-              Sign out
-            </button>
-          </form>
+          {onWardDevice ? (
+            // A shared ward tablet: hand it to the next nurse, never "sign out".
+            <form action={switchNurseAction}>
+              <button
+                type="submit"
+                className="min-h-11 rounded-lg bg-brand-50 px-3 text-sm font-semibold text-brand-800 ring-1 ring-inset ring-brand-200 transition-colors hover:bg-brand-100 cursor-pointer"
+              >
+                Switch nurse
+              </button>
+            </form>
+          ) : (
+            <>
+              <Link
+                href="/change-password"
+                className="hidden rounded-lg px-3 py-1.5 text-sm font-medium text-ink-600 transition-colors hover:bg-ink-100 sm:block"
+              >
+                Password
+              </Link>
+              <form action={signOutAction} className="hidden sm:block">
+                <button
+                  type="submit"
+                  className="rounded-lg px-3 py-1.5 text-sm font-medium text-ink-600 transition-colors hover:bg-ink-100 cursor-pointer"
+                >
+                  Sign out
+                </button>
+              </form>
 
-          {/* Mobile Hamburger Navigation */}
-          <MobileNav
-            items={[...navItems, { label: 'Change password', href: '/change-password' }]}
-            userName={session.name}
-            userRole={session.role}
-            hospitalName={session.hospitalName}
-            signOutAction={signOutAction}
-          />
+              {/* Mobile Hamburger Navigation */}
+              <MobileNav
+                items={[...navItems, { label: 'Change password', href: '/change-password' }]}
+                userName={session.name}
+                userRole={session.role}
+                hospitalName={session.hospitalName}
+                signOutAction={signOutAction}
+              />
+            </>
+          )}
         </div>
       </div>
     </header>

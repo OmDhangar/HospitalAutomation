@@ -3,6 +3,9 @@ import { Alert, Button, Field, Input } from '@/components/ui';
 import { getSession, setSessionCookie } from '@/lib/auth/session';
 import { clearEvents, clientIp, ipRules, isThrottled, recordEvent } from '@/lib/security/throttle';
 import { login } from '@/lib/services/auth';
+import { readWardDeviceCookie } from '@/lib/auth/ward-device-cookie';
+import { resolveWardDevice } from '@/lib/services/ward-devices';
+import Link from 'next/link';
 
 const WINDOW_MS = 15 * 60 * 1000;
 
@@ -51,6 +54,8 @@ export default async function LoginPage({
 }: PageProps<'/login'>) {
   if (await getSession()) redirect('/dashboard');
   const { error } = await searchParams;
+  // A registered ward tablet: the nurse taps her name and PIN instead (T1.9).
+  const wardDevice = await resolveWardDevice(await readWardDeviceCookie());
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-ink-100 px-4 py-12">
@@ -62,6 +67,15 @@ export default async function LoginPage({
           <h1 className="text-xl font-semibold text-ink-900">Qurio</h1>
           <p className="mt-1 text-sm text-ink-500">Sign in to your hospital dashboard</p>
         </div>
+
+        {wardDevice ? (
+          <Link
+            href="/ward-device"
+            className="mb-4 flex min-h-14 items-center justify-center rounded-xl bg-brand-600 px-4 text-base font-semibold text-white shadow-sm hover:bg-brand-700"
+          >
+            Ward tablet: tap your name to record
+          </Link>
+        ) : null}
 
         <form
           action={signIn}

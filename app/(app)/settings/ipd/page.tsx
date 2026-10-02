@@ -87,6 +87,22 @@ export default async function IpdSettingsPage({ searchParams }: PageProps<'/sett
         </Card>
       ) : null}
 
+      <Card>
+        <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+          <div className="min-w-0">
+            <h2 className="text-base font-bold text-ink-900">Ward tablets and PINs</h2>
+            <p className="mt-0.5 text-xs text-ink-500">
+              A shared tablet per ward, unlocked by each nurse’s 4-digit PIN.
+            </p>
+          </div>
+          <Link href="/settings/ipd/devices" className="w-full sm:w-auto">
+            <Button variant="secondary" className="w-full justify-center sm:w-auto">
+              Ward devices
+            </Button>
+          </Link>
+        </div>
+      </Card>
+
       {wardRows.length === 0 ? null : (
         <div className="grid gap-5 lg:grid-cols-2 lg:items-start">
           {wardRows.map((ward) => (
