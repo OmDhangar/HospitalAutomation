@@ -15,6 +15,7 @@ import {
   transferBed,
   type AdmissionExtras,
 } from '@/lib/services/admissions';
+import { CareEntryError, voidCareEntry } from '@/lib/services/care-entries';
 import { PatientBillingError } from '@/lib/services/patient-billing';
 
 /**
@@ -181,4 +182,22 @@ export async function setDischargeReadyAction(form: FormData) {
     throw err;
   }
   go(safeBack, { saved: ready ? 'Marked ready to go home. The desk will prepare the bill.' : 'No longer marked ready.' });
+}
+
+/** The desk's correction of a bedside entry after the undo window, with a reason (D-UN). */
+export async function voidCareEntryAction(form: FormData) {
+  const session = await authorize('ipd.correct');
+  const admissionId = text(form, 'admissionId');
+  try {
+    await voidCareEntry({
+      hospitalId: session.hospitalId,
+      entryId: text(form, 'entryId'),
+      reason: text(form, 'reason'),
+      actorUserId: session.userId,
+    });
+  } catch (err) {
+    if (err instanceof CareEntryError) go(`/ipd/admissions/${admissionId}`, { error: err.message });
+    throw err;
+  }
+  go(`/ipd/admissions/${admissionId}`, { saved: 'Entry removed. Its bill line is voided with your reason.' });
 }

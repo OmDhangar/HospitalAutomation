@@ -397,6 +397,15 @@ export async function setConsultationPaid(args: {
 }
 
 /**
+ * The running total of a stay: what has been charged on every bill that is
+ * not cancelled, and what has been received (deposits and payments, less
+ * refunds). For the patient IPD page; the caller checks `billing.collect`.
+ */
+export async function getEncounterSettlement(hospitalId: string, encounterId: string): Promise<Settlement> {
+  return withTenant(hospitalId, (tx) => settlementInTx(tx, encounterId));
+}
+
+/**
  * Money taken before the bill is final: an IPD deposit at admission, or a
  * part-payment during the stay. It hangs off the encounter, not a bill
  * (0026), and counts towards whatever the final bill comes to. The caller
