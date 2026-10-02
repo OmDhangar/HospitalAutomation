@@ -34,7 +34,9 @@ import { formatIndianPhone } from '@/lib/domain/phone';
 import { formatTimeIn, minutesBetween } from '@/lib/domain/time';
 import { loadDashboardData } from '@/lib/services/dashboard-loader';
 import type { QueueRow } from '@/lib/services/queue';
+import { getIpdStatusesForAppointments, type IpdStatus } from '@/lib/services/ipd-census';
 import { ConsultationPanel } from './consultation-panel';
+import { IpdBadge, ShiftToIpdButton } from './shift-to-ipd-button';
 import {
   AddWalkInForm,
   CallNextButton,
@@ -131,6 +133,16 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
   const waiting = snapshot?.rows.filter((row) => row.status === 'WAITING') ?? [];
   const scheduledToday = snapshot?.rows.filter((row) => Boolean(row.scheduledSlotAt)) ?? [];
   const seenToday = snapshot?.completed ?? [];
+
+  // Shift to IPD (T1.4): the doctor's one click, and the badge that replaces it.
+  const canShift = can(session.role, 'ipd.shift') && !session.readOnly;
+  const ipdStatuses: Record<string, IpdStatus> = can(session.role, 'ipd.view')
+    ? await getIpdStatusesForAppointments(session.hospitalId, [
+        ...(serving ? [serving.appointmentId] : []),
+        ...seenToday.map((row) => row.appointmentId),
+      ])
+    : {};
+  const ipd: IpdRowContext = { statuses: ipdStatuses, canShift };
 
   /**
    * Everything a payment pill needs except the row. The doctor view always
@@ -326,6 +338,12 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                         label="Skip"
                       />
 
+                      {ipd.statuses[serving.appointmentId] ? (
+                        <IpdBadge label={ipdLabel(ipd.statuses[serving.appointmentId])} />
+                      ) : canShift ? (
+                        <ShiftToIpdButton appointmentId={serving.appointmentId} />
+                      ) : null}
+
                       {serving.status === 'CALLED' ? (
                         <div className="col-span-2 sm:col-auto">
                           <QueueActionButton
@@ -406,6 +424,10 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                 timezone={session.timezone}
                 payment={payment}
               />
+
+              {canShift && seenToday.length > 0 ? (
+                <DoctorSeenTodayCard rows={seenToday} ipd={ipd} />
+              ) : null}
 
               {scheduledToday.length > 0 ? (
                 <Card>
@@ -649,7 +671,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
             overviewContent={
               <>
                 {seenToday.length > 0 ? (
-                  <SeenTodayCard rows={seenToday} payment={payment} />
+                  <SeenTodayCard rows={seenToday} payment={payment} ipd={ipd} />
                 ) : null}
 
                 <Card>
@@ -892,7 +914,15 @@ function RowPaidToggle({ row, payment }: { row: QueueRow; payment: PaymentPillCo
  * Patients the doctor has finished with. The queue forgets them; the desk
  * cannot, because in most OPDs the fee is paid on the way out.
  */
-function SeenTodayCard({ rows, payment }: { rows: QueueRow[]; payment: PaymentPillContext }) {
+function SeenTodayCard({
+  rows,
+  payment,
+  ipd,
+}: {
+  rows: QueueRow[];
+  payment: PaymentPillContext;
+  ipd: IpdRowContext;
+}) {
   const unpaid = rows.filter((row) => (payment.statuses[row.appointmentId] ?? 'unpaid') !== 'paid');
   return (
     <Card>
@@ -909,7 +939,49 @@ function SeenTodayCard({ rows, payment }: { rows: QueueRow[]; payment: PaymentPi
               </span>
               <p className="truncate text-sm font-semibold text-ink-900">{row.patientName}</p>
             </div>
-            <RowPaidToggle row={row} payment={payment} />
+            <div className="flex shrink-0 items-center gap-2">
+              {ipd.statuses[row.appointmentId] ? (
+                <IpdBadge label={ipdLabel(ipd.statuses[row.appointmentId])} />
+              ) : ipd.canShift ? (
+                <ShiftToIpdButton appointmentId={row.appointmentId} compact />
+              ) : null}
+              <RowPaidToggle row={row} payment={payment} />
+            </div>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+/** Which OPD rows are on the IPD side, and whether this user may shift one. */
+type IpdRowContext = { statuses: Record<string, IpdStatus>; canShift: boolean };
+
+const ipdLabel = (status: IpdStatus): string =>
+  status === 'awaiting_bed' ? 'awaiting bed' : status === 'discharge_ready' ? 'going home' : 'admitted';
+
+/**
+ * The doctor's own Seen today: the doctor may decide to admit after the
+ * consultation is over, so each finished patient keeps a one-tap Shift to IPD.
+ */
+function DoctorSeenTodayCard({ rows, ipd }: { rows: QueueRow[]; ipd: IpdRowContext }) {
+  return (
+    <Card>
+      <CardHeader title="Seen today" hint="Admit a patient after the consultation" />
+      <ul className="max-h-80 divide-y divide-ink-200 overflow-y-auto">
+        {rows.map((row) => (
+          <li key={row.appointmentId} className="flex items-center justify-between gap-3 px-4 py-2.5">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="numeric flex size-8 shrink-0 items-center justify-center rounded-lg bg-ink-100 text-sm font-bold text-ink-600">
+                {row.tokenNumber}
+              </span>
+              <p className="truncate text-sm font-semibold text-ink-900">{row.patientName}</p>
+            </div>
+            {ipd.statuses[row.appointmentId] ? (
+              <IpdBadge label={ipdLabel(ipd.statuses[row.appointmentId])} />
+            ) : (
+              <ShiftToIpdButton appointmentId={row.appointmentId} compact />
+            )}
           </li>
         ))}
       </ul>

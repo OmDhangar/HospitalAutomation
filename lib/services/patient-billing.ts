@@ -397,6 +397,54 @@ export async function setConsultationPaid(args: {
 }
 
 /**
+ * Money taken before the bill is final: an IPD deposit at admission, or a
+ * part-payment during the stay. It hangs off the encounter, not a bill
+ * (0026), and counts towards whatever the final bill comes to. The caller
+ * must have checked `billing.collect`.
+ */
+export async function recordDepositInTx(
+  tx: Tx,
+  args: {
+    encounter: Pick<EncounterRow, 'id' | 'hospitalId' | 'patientId'>;
+    amountPaise: number;
+    method?: (typeof patientPayments.$inferInsert)['method'];
+    reference?: string | null;
+    actorUserId: string;
+  },
+): Promise<{ id: string }> {
+  if (!Number.isSafeInteger(args.amountPaise) || args.amountPaise <= 0) {
+    throw new PatientBillingError('Enter a deposit of more than ₹0');
+  }
+  const [payment] = await tx
+    .insert(patientPayments)
+    .values({
+      hospitalId: args.encounter.hospitalId,
+      encounterId: args.encounter.id,
+      patientId: args.encounter.patientId,
+      amountPaise: args.amountPaise,
+      method: args.method ?? 'cash',
+      reference: args.reference ?? null,
+      receivedByUserId: args.actorUserId,
+    })
+    .returning({ id: patientPayments.id });
+
+  await tx.insert(auditLogs).values({
+    hospitalId: args.encounter.hospitalId,
+    actorUserId: args.actorUserId,
+    action: 'billing.payment_recorded',
+    objectType: 'patient_payment',
+    objectId: payment.id,
+    metadata: {
+      encounterId: args.encounter.id,
+      amountPaise: args.amountPaise,
+      method: args.method ?? 'cash',
+      kind: 'deposit',
+    },
+  });
+  return payment;
+}
+
+/**
  * Payment status for a set of queue appointments, for the dashboard pills.
  * One round trip; appointments with no encounter yet are simply absent,
  * which the caller reads as unpaid.
