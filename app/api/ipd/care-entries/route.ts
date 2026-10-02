@@ -65,6 +65,7 @@ export async function GET(request: Request) {
       .map((entry) => ({
         id: entry.id,
         description: entry.description,
+        itemKey: entry.itemKey,
         quantity: entry.quantity,
         occurredAt: entry.occurredAt.toISOString(),
         recordedByName: entry.recordedByName,

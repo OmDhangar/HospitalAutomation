@@ -346,6 +346,8 @@ export type TimelineEntry = {
   /** The bill line's total; null when unpriced (or for roles not shown money). */
   amountPaise: number | null;
   unpriced: boolean;
+  /** "medicine:<id>" or "charge:<id>": which catalogue item, for the duplicate guard. */
+  itemKey: string;
 };
 
 /**
@@ -378,6 +380,7 @@ export async function listEntriesForAdmission(args: {
           medicinePrice: medicines.sellingPricePaise,
           chargePrice: chargeItems.sellingPricePaise,
           medicineId: careEntries.medicineId,
+          chargeItemId: careEntries.chargeItemId,
         })
         .from(careEntries)
         .leftJoin(users, eq(users.id, careEntries.recordedByUserId))
@@ -415,6 +418,7 @@ export async function listEntriesForAdmission(args: {
         voidReason: row.voidReason,
         amountPaise: row.amountPaise,
         unpriced: (row.medicineId ? row.medicinePrice : row.chargePrice) === null,
+        itemKey: row.medicineId ? `medicine:${row.medicineId}` : `charge:${row.chargeItemId}`,
       }));
     },
     { clinical: true },
