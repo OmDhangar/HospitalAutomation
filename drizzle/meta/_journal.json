@@ -225,6 +225,13 @@
       "when": 1789800000000,
       "tag": "0031_ipd_enums",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1789850000000,
+      "tag": "0032_ipd_core",
+      "breakpoints": true
     }
   ]
 }
