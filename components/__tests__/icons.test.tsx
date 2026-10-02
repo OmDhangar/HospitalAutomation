@@ -30,6 +30,12 @@ import {
   ActivityIcon,
   BellIcon,
   BellOffIcon,
+  BedIcon,
+  UndoIcon,
+  SyringeIcon,
+  SearchIcon,
+  ArrowLeftIcon,
+  WifiOffIcon,
 } from '../icons';
 
 describe('Centralized SVG Iconography', () => {
@@ -63,6 +69,14 @@ describe('Centralized SVG Iconography', () => {
     expect(ActivityIcon).toBeDefined();
     expect(BellIcon).toBeDefined();
     expect(BellOffIcon).toBeDefined();
+  });
+
+  it('exports the IPD icons, decorative like the rest', () => {
+    for (const Icon of [BedIcon, UndoIcon, SyringeIcon, SearchIcon, ArrowLeftIcon, WifiOffIcon]) {
+      const el = Icon({});
+      expect(el.type).toBe('svg');
+      expect(el.props['aria-hidden']).toBe('true');
+    }
   });
 
   it('renders SVG elements with appropriate default attributes', () => {

@@ -15,6 +15,7 @@ import {
   MapPinIcon,
   ClockIcon,
   PillIcon,
+  BedIcon,
   LayersIcon,
   ActivityIcon,
 } from '@/components/icons';
@@ -174,6 +175,25 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
           <Link href="/settings/medicines" className="w-full sm:w-auto">
             <Button variant="secondary" className="w-full sm:w-auto justify-center">
               Manage medicines
+            </Button>
+          </Link>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 sm:p-5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <BedIcon className="size-5 text-brand-600" />
+              <h2 className="text-base font-bold text-ink-900">IPD wards, beds and prices</h2>
+            </div>
+            <p className="mt-0.5 text-xs text-ink-500">
+              Wards and beds for admissions, and the items nurses record at the bedside.
+            </p>
+          </div>
+          <Link href="/settings/ipd" className="w-full sm:w-auto">
+            <Button variant="secondary" className="w-full sm:w-auto justify-center">
+              Set up IPD
             </Button>
           </Link>
         </div>
