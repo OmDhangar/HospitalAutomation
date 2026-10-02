@@ -574,7 +574,7 @@ export function DoctorScheduleManager({
                   <div className="py-16 text-center text-sm text-ink-400 animate-pulse">
                     Loading slot schedule...
                   </div>
-                ) : !scheduleData || scheduleData.slots.length === 0 ? (
+                ) : !scheduleData?.slots || scheduleData.slots.length === 0 ? (
                   <div className="py-12 text-center">
                     <p className="text-sm font-semibold text-ink-700">No slots generated for this day.</p>
                     <p className="text-xs text-ink-500 mt-1">
