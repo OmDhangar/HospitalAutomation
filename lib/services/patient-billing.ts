@@ -297,6 +297,8 @@ export async function setConsultationPaid(args: {
    * checked the actor may set prices.
    */
   setFeePaise?: number;
+  reason?: string;
+  waiveCharges?: boolean;
   actorUserId: string;
 }): Promise<Settlement> {
   return withTenant(args.hospitalId, async (tx) => {
@@ -346,15 +348,33 @@ export async function setConsultationPaid(args: {
         metadata: { encounterId: encounter.id, amountPaise: outstanding, method: args.method ?? 'cash' },
       });
     } else {
+      const voidReason = args.reason || 'Marked unpaid at the desk';
+
       const voided = await tx
         .update(patientPayments)
         .set({
           voidedAt: new Date(),
           voidedByUserId: args.actorUserId,
-          voidReason: 'Marked unpaid at the desk',
+          voidReason,
         })
         .where(and(eq(patientPayments.encounterId, encounter.id), isNull(patientPayments.voidedAt)))
         .returning({ id: patientPayments.id, amountPaise: patientPayments.amountPaise });
+
+      if (args.waiveCharges) {
+        await tx
+          .update(billItems)
+          .set({
+            voidedAt: new Date(),
+            voidedByUserId: args.actorUserId,
+            voidReason,
+          })
+          .where(
+            and(
+              eq(billItems.appointmentId, args.appointmentId),
+              isNull(billItems.voidedAt),
+            ),
+          );
+      }
 
       if (voided.length > 0) {
         await tx.insert(auditLogs).values({
@@ -363,7 +383,11 @@ export async function setConsultationPaid(args: {
           action: 'billing.payment_voided',
           objectType: 'encounter',
           objectId: encounter.id,
-          metadata: { paymentIds: voided.map((p) => p.id), reason: 'Marked unpaid at the desk' },
+          metadata: {
+            paymentIds: voided.map((p) => p.id),
+            reason: voidReason,
+            waiveCharges: args.waiveCharges ?? false,
+          },
         });
       }
     }

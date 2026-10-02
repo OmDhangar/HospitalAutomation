@@ -55,6 +55,7 @@ export type QueueRow = {
   priority: number;
   patientName: string;
   patientAge?: number | null;
+  patientPhone?: string | null;
   patientId: string;
   enqueuedAt: Date | null;
   calledAt: Date | null;
@@ -160,6 +161,7 @@ async function loadDayAppointments(
       patientId: appointments.patientId,
       patientName: patients.name,
       patientAge: patients.age,
+      patientPhone: patients.phoneE164,
       whatsappOptInAt: patients.whatsappOptInAt,
       /** Needed so a nudge goes out in the language the patient chose. */
       locale: patients.locale,
@@ -919,15 +921,16 @@ export async function setDoctorPaused(args: {
         const shift = sql`make_interval(secs => ${breakMs / 1000}::double precision)`;
         // Only timestamps from before the break moved: anything stamped during
         // it was real activity, not time the doctor was away.
+        const breakIso = breakStartedAt.toISOString();
         await tx
           .update(appointments)
           .set({
             calledAt: sql`case
-              when ${appointments.status} = 'CALLED' and ${appointments.calledAt} <= ${breakStartedAt}::timestamptz
+              when ${appointments.status} = 'CALLED' and ${appointments.calledAt} <= ${breakIso}::timestamptz
               then ${appointments.calledAt} + ${shift}
               else ${appointments.calledAt} end`,
             consultStartedAt: sql`case
-              when ${appointments.status} = 'IN_CONSULTATION' and ${appointments.consultStartedAt} <= ${breakStartedAt}::timestamptz
+              when ${appointments.status} = 'IN_CONSULTATION' and ${appointments.consultStartedAt} <= ${breakIso}::timestamptz
               then ${appointments.consultStartedAt} + ${shift}
               else ${appointments.consultStartedAt} end`,
             updatedAt: now,
@@ -1216,6 +1219,7 @@ export async function getQueueSnapshotInTx(
         priority: entry.priority,
         patientName: row.patientName,
         patientAge: row.patientAge,
+        patientPhone: row.patientPhone,
         patientId: row.patientId,
         enqueuedAt: row.enqueuedAt,
         calledAt: row.calledAt,
@@ -1242,6 +1246,7 @@ const toQueueRow = (row: Awaited<ReturnType<typeof loadDayAppointments>>[number]
   priority: row.priority,
   patientName: row.patientName,
   patientAge: row.patientAge,
+  patientPhone: row.patientPhone,
   patientId: row.patientId,
   enqueuedAt: row.enqueuedAt,
   calledAt: row.calledAt,
