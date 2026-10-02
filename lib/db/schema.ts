@@ -1317,6 +1317,8 @@ export const billItems = pgTable(
     bedAssignmentId: uuid('bed_assignment_id'),
     /** The day a room line charges for (YYYY-MM-DD, hospital time). */
     serviceDate: date('service_date', { mode: 'string' }),
+    /** Why discount_paise is not zero (0034). */
+    discountReason: text('discount_reason'),
     createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     createdAt: createdAt(),
     ...voidColumns(),
@@ -1746,6 +1748,11 @@ export const admissions = pgTable(
       onDelete: 'set null',
     }),
     cancelReason: text('cancel_reason'),
+    /** The family's running-bill link (0034): hashed token, expiry 7 days after discharge. */
+    billLinkTokenHash: text('bill_link_token_hash'),
+    billLinkCreatedAt: timestamp('bill_link_created_at', { withTimezone: true }),
+    billLinkExpiresAt: timestamp('bill_link_expires_at', { withTimezone: true }),
+    billLinkRevokedAt: timestamp('bill_link_revoked_at', { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -1928,4 +1935,20 @@ export const wardDevicePinAttempts = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [uniqueIndex('ward_device_pin_attempts_key').on(t.deviceId, t.userId)],
+);
+
+/** Gap-free document numbers per hospital, kind and financial year (0034). */
+export const documentSequences = pgTable(
+  'document_sequences',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    fiscalYear: text('fiscal_year').notNull(),
+    lastNumber: integer('last_number').notNull().default(0),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('document_sequences_key').on(t.hospitalId, t.kind, t.fiscalYear)],
 );
