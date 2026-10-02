@@ -214,3 +214,22 @@ planned `has_clinical_records` / `has_lab` plan flags (D12) are not built yet.
 **Why:** There is one pilot customer. Gating touches pricing tiers, custom
 plans and the platform console, which is effort with no revenue until a second
 tier exists. When it is built, a downgrade must block writes, never reads.
+
+### ADR-018 · IPD capture is distributed and billed at the bedside
+*Oct 2026 · IPD plan*
+
+**Decision:** Nurses record medicines, consumables and procedures at the
+bedside on a phone or tablet. Each entry becomes a server-priced bill line at
+once, which reverses D20 (billing desk adds IPD items). The patient is
+identified by tapping the bed on the ward grid; there are no bed QR codes or
+wristbands. Reception enters the bed, payer and deposit on the admission sheet.
+Common medicines, consumables, procedures, room charges and tests are loaded
+unpriced when a hospital is created, so staff pick instead of typing and the
+owner only enters prices. ABDM and prescription capture are not in the MVP.
+Details: [../plans/ipd-mvp-implementation-plan.md](../plans/ipd-mvp-implementation-plan.md).
+
+**Why:** Field feedback from doctors, administrators and staff (2 Oct 2026).
+Billing at the desk from paper notes is where IPD charges get missed. Doctors
+will not type prescriptions, and a nurse at the bedside will not type item
+names. Scanning needs label printing and camera code before it pays off, and
+the ward grid already shows who is in which bed.

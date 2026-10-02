@@ -1,7 +1,8 @@
 # Progress log
 
 What each phase delivered, in the order it was built. The roadmap and the
-reasoning behind it are in [../plans/hms-expansion-plan.md](../plans/hms-expansion-plan.md).
+reasoning behind it are in [../plans/hms-expansion-plan.md](../plans/hms-expansion-plan.md);
+from IPD onwards, in [../plans/ipd-mvp-implementation-plan.md](../plans/ipd-mvp-implementation-plan.md).
 The decisions made along the way are in [decisions.md](decisions.md).
 
 | Phase | What | Status |
@@ -10,8 +11,8 @@ The decisions made along the way are in [decisions.md](decisions.md).
 | 1 | Walk-in address, billing foundation, Paid toggle | Done, committed (`ae68611`), migrated |
 | 1+ | Security fix: RLS on two schedule tables | Done, committed (`ae68611`), migrated |
 | 2 | Medicine catalogue, OPD consultation and prescription, print, history | Built and tested, **not yet committed or migrated** |
-| 3 | IPD: admission, ward timeline, drugs given, IPD bill, discharge | Next |
-| 4 | Lab: orders, worklist, results, lab billing | Planned |
+| 3 | IPD: Shift to IPD, beds, nurse bedside entries, bed-days, discharge bill (IPD plan Stages 1–3) | Next: Stage 1 from 19 Oct 2026 |
+| 4 | Lab-lite, reports, hardening (IPD plan Stage 4) | Planned: 8 Feb – 26 Mar 2027 |
 
 ---
 
