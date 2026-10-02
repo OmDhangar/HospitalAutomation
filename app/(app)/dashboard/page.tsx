@@ -18,6 +18,7 @@ import {
   ZapIcon,
   BuildingIcon,
   FileTextIcon,
+  BedIcon,
 } from '@/components/icons';
 import { ConsultationGateProvider } from '@/components/clinical/consultation-gate';
 import { PaidToggle } from '@/components/paid-toggle';
@@ -34,7 +35,11 @@ import { formatIndianPhone } from '@/lib/domain/phone';
 import { formatTimeIn, minutesBetween } from '@/lib/domain/time';
 import { loadDashboardData } from '@/lib/services/dashboard-loader';
 import type { QueueRow } from '@/lib/services/queue';
-import { getIpdStatusesForAppointments, type IpdStatus } from '@/lib/services/ipd-census';
+import {
+  countAdmittedForDoctorUser,
+  getIpdStatusesForAppointments,
+  type IpdStatus,
+} from '@/lib/services/ipd-census';
 import { ConsultationPanel } from './consultation-panel';
 import { IpdBadge, ShiftToIpdButton } from './shift-to-ipd-button';
 import {
@@ -143,6 +148,9 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
       ])
     : {};
   const ipd: IpdRowContext = { statuses: ipdStatuses, canShift };
+  // The doctor's one tap to their admitted patients (T3.1).
+  const canSeeAdmitted = effectiveView === 'doctor' && can(session.role, 'ipd.dischargeReady');
+  const admittedCount = canSeeAdmitted ? await countAdmittedForDoctorUser(session.hospitalId, session.userId) : 0;
 
   /**
    * Everything a payment pill needs except the row. The doctor view always
@@ -207,6 +215,15 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
             </div>
 
             <div className="flex items-center gap-2.5 self-end sm:self-auto shrink-0">
+              {canSeeAdmitted ? (
+                <Link
+                  href="/ipd/my-patients"
+                  className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-brand-50 px-3 text-sm font-semibold text-brand-800 ring-1 ring-inset ring-brand-200 hover:bg-brand-100"
+                >
+                  <BedIcon className="size-4" />
+                  Admitted <span className="numeric">({admittedCount})</span>
+                </Link>
+              ) : null}
               <TogglePauseButton
                 doctorId={selectedId!}
                 paused={snapshot?.paused ?? false}

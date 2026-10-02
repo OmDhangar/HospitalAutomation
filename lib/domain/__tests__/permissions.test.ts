@@ -146,6 +146,13 @@ describe('IPD permissions', () => {
     expect(can('receptionist', 'ipd.discharge')).toBe(true);
   });
 
+  it('lets the doctor order tests, and nobody else on the ward', () => {
+    expect(can('doctor', 'ipd.orderTests')).toBe(true);
+    expect(can('owner', 'ipd.orderTests')).toBe(true);
+    expect(can('nurse', 'ipd.orderTests')).toBe(false);
+    expect(can('receptionist', 'ipd.orderTests')).toBe(false);
+  });
+
   it('keeps ward set-up with the owner', () => {
     expect(can('owner', 'ipd.configure')).toBe(true);
     expect(can('receptionist', 'ipd.configure')).toBe(false);

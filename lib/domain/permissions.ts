@@ -82,6 +82,12 @@ const PERMISSIONS = {
   'ipd.correct': ['owner', 'receptionist'],
   /** Tell the desk the patient may go home; billing starts from here. */
   'ipd.dischargeReady': ['owner', 'doctor'],
+  /**
+   * Order tests for an admitted patient from the doctor's phone view (T3.1).
+   * Narrower than ipd.record: only items flagged as tests, so a doctor never
+   * records the ward's consumables by accident.
+   */
+  'ipd.orderTests': ['owner', 'doctor'],
   /** Review, finalise and print the discharge bill. */
   'ipd.discharge': ['owner', 'receptionist'],
   /** Wards, beds, ward devices and nurse PINs. Prices stay `billing.price`. */

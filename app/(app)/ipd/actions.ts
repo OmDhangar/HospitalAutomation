@@ -18,6 +18,7 @@ import {
 import { CareEntryError, voidCareEntry } from '@/lib/services/care-entries';
 import { PatientBillingError } from '@/lib/services/patient-billing';
 import { WardDeviceError, setOwnPin } from '@/lib/services/ward-devices';
+import { DoctorIpdError, orderTests } from '@/lib/services/doctor-ipd';
 
 /**
  * The desk's IPD actions (IPD plan §5.3–5.5, task T1.6). Form posts that
@@ -216,4 +217,31 @@ export async function setOwnPinAction(form: FormData) {
     throw err;
   }
   go('/ipd/ward', { saved: 'Your ward PIN is set. Use it on the shared ward tablet.' });
+}
+
+/** The doctor's Tests button (T3.1): each tapped test becomes an entry, billed like any other. */
+export async function orderTestsAction(form: FormData) {
+  const session = await authorize('ipd.orderTests');
+  const admissionId = text(form, 'admissionId');
+  const ids = form.getAll('test').map(String).filter((id) => /^[0-9a-f-]{36}$/i.test(id));
+  let ordered = 0;
+  let firstError = '';
+  try {
+    const results = await orderTests({
+      hospitalId: session.hospitalId,
+      admissionId,
+      chargeItemIds: ids,
+      formKey: text(form, 'formKey'),
+      actorUserId: session.userId,
+      // The person running the hospital may order for any patient.
+      seeAll: can(session.role, 'hospital.configure'),
+    });
+    ordered = results.filter((result) => result.ok).length;
+    const refused = results.find((result) => !result.ok);
+    firstError = refused && !refused.ok ? refused.error : '';
+  } catch (err) {
+    if (err instanceof DoctorIpdError) go('/ipd/my-patients', { error: err.message });
+    throw err;
+  }
+  go('/ipd/my-patients', firstError ? { error: firstError } : { saved: `${ordered} test${ordered === 1 ? '' : 's'} sent.` });
 }
