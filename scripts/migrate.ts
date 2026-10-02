@@ -12,6 +12,13 @@ async function main() {
   const sql = postgres(url, { max: 1 });
   const db = drizzle(sql);
 
+  // Pre-commit newly added enum values so subsequent migrations in the same run can reference them safely in CHECK constraints
+  await sql`ALTER TYPE staff_role ADD VALUE IF NOT EXISTS 'nurse'`;
+  await sql`ALTER TYPE bill_item_type ADD VALUE IF NOT EXISTS 'consumable'`;
+  await sql`ALTER TYPE bill_item_type ADD VALUE IF NOT EXISTS 'procedure'`;
+  await sql`ALTER TYPE bill_item_type ADD VALUE IF NOT EXISTS 'service'`;
+  await sql`ALTER TYPE bill_item_type ADD VALUE IF NOT EXISTS 'room'`;
+
   await migrate(db, { migrationsFolder: './drizzle' });
 
   /**
