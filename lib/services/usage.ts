@@ -69,7 +69,7 @@ export async function getHospitalUsage(args: {
   now?: Date;
 }): Promise<HospitalUsage> {
   const now = args.now ?? new Date();
-  const subscription = await getCurrentSubscription(args.hospitalId);
+  const subscription = await getCurrentSubscription(args.hospitalId, now);
 
   if (!subscription) {
     return EMPTY_USAGE;

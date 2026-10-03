@@ -46,8 +46,8 @@ Then summarise what changed and tick the task's acceptance list.
 2. **Shift to IPD in one click** for the doctor, from the OPD dashboard. No form.
 3. **Wards and beds**, an **Awaiting bed** list, and an **admission sheet** where reception assigns the
    bed, the payer and the deposit.
-4. A **nurse role** and a **mobile nurse screen** (phone or tablet PWA, PIN login on shared ward
-   devices, offline outbox): tap the bed on the ward grid → tap the item → save.
+4. A **nurse role** and a **mobile nurse screen** (phone or tablet PWA, each nurse signed in with her
+   own login, offline outbox): tap the bed on the ward grid → tap the item → save.
    Every saved entry becomes a server-priced bill line at once. This reverses decision D20 of
    hms-expansion-plan.md (IPD medicines billed at the desk).
 5. **Starter catalogues** (§5.8): common medicines, consumables, procedures, room charges and tests
@@ -76,7 +76,7 @@ From the product plan. Each stage's gate is a field result at the pilot hospital
 | Stage | Dates | Tasks | Gate |
 |---|---|---|---|
 | 0 Field groundwork | 5–16 Oct 2026 | Answers to §11; the pilot's ward and bed list; its price list as CSV (input to T1.3); device choice | §11 answered by 16 Oct. No code is blocked; T1.1 may start early |
-| 1 IPD section, Shift to IPD, beds, nurse app | 19 Oct – 27 Nov 2026 | T1.1–T1.10 (§7) | **One ward recording at the bedside by 16 Nov.** Needs T1.1–T1.8, plus T1.9 if D-DV = shared tablet; T1.10 can follow by 27 Nov |
+| 1 IPD section, Shift to IPD, beds, nurse app | 19 Oct – 27 Nov 2026 | T1.1–T1.10 (§7) | **One ward recording at the bedside by 16 Nov.** Needs T1.1–T1.8; T1.10 can follow by 27 Nov |
 | 2 Discharge billing, transparent bill | 30 Nov – 24 Dec 2026 | T2.1–T2.4 (§8) | Every pilot IPD discharge billed this way from 4 Jan 2027 |
 | 3 Doctor phone view | 4 Jan – 5 Feb 2027 | T3.1 (§9) | — |
 | 4 Lab-lite, reports, hardening | 8 Feb – 26 Mar 2027 | T4.1–T4.3 (§10) | MVP ready for more hospitals on 1 Apr 2027 |
@@ -251,20 +251,12 @@ CREATE UNIQUE INDEX encounter_payers_one_active ON encounter_payers (encounter_i
 **Before writing 0032, Claude Code must read 0026 and 0028** to confirm: the existing `bill_items`
 CHECKs, any guard trigger on `encounters` (Shift to IPD updates `encounters.stage`), and the helper names.
 
-### 3.3 Stage 1 later migration — `0033_ward_devices.sql` (task T1.9)
+### 3.3 Ward devices — dropped
 
-```sql
-ALTER TABLE staff_memberships ADD COLUMN pin_hash text;     -- scrypt, like passwords
-CREATE TABLE ward_devices (
-  id uuid PK, hospital_id …, branch_id uuid NOT NULL, label text NOT NULL,   -- "Ward A tablet"
-  token_hash text NOT NULL,                                   -- SHA-256 of a long-lived device cookie
-  registered_by_user_id uuid, registered_at timestamptz NOT NULL DEFAULT now(),
-  revoked_at timestamptz,
-  UNIQUE (hospital_id, id)
-);
-```
+Removed on 3 Oct 2026 (D-DV): no shared-device mode, no PINs. Each nurse signs in with her own
+login. The discharge-billing migration below took the number 0033.
 
-### 3.4 Stage 2 migration — `0034_discharge_billing.sql` (task T2.1)
+### 3.4 Stage 2 migration — `0033_discharge_billing.sql` (task T2.1)
 
 Payers moved to 0032 (2 Oct 2026), because reception records the payer at admission.
 
@@ -288,7 +280,7 @@ Add `'nurse'` to `STAFF_ROLES`. New entries:
 | `ipd.correct` | owner, receptionist | Void any care entry or bill line after the undo window, with a reason |
 | `ipd.dischargeReady` | owner, doctor | Mark Discharge ready (Stage 3 phone view; also on the IPD page) |
 | `ipd.discharge` | owner, receptionist | Discharge billing, finalise, print (Stage 2) |
-| `ipd.configure` | owner | Wards, beds, ward devices, nurse PINs |
+| `ipd.configure` | owner | Wards and beds |
 | `billing.price` (existing) | owner | Prices of charge items |
 
 Existing entries to extend: `clinical.read` adds `nurse` (nurses read the IPD record; reads stay logged).
@@ -317,7 +309,7 @@ the branch name and, on wide screens, the section tabs. Add `{ label: 'IPD', hre
 | `/ipd/admissions/[id]` | **Patient IPD page**: header, day-by-day timeline, running total, role actions | `ipd.view` | Any |
 | `/ipd/ward` | **Nurse ward picker** → `/ipd/ward/[wardId]` **ward grid** | `ipd.record` | Phone |
 | `/ipd/ward/[wardId]/bed/[bedId]` | **Record screen** (tap item, save) | `ipd.record` | Phone |
-| `/settings/ipd` | Wards and beds; charge items (with CSV import); ward devices and PINs | `ipd.configure`, `billing.price` | PC |
+| `/settings/ipd` | Wards and beds; charge items (with CSV import) | `ipd.configure`, `billing.price` | PC |
 | `/ipd/admissions/[id]/bill` | **Discharge billing** (Stage 2) | `ipd.discharge` | PC / tablet |
 | `/print/ipd-bill/[billId]` | **Itemised bill print** (Stage 2), outside the app shell like `/print/prescription` | `ipd.discharge` | Printer |
 | `/b/[token]` | **Running bill for the family** (Stage 2), public, like `/q/[token]` | public | Patient's phone |
@@ -440,9 +432,8 @@ nurse tapped, with no scanning (decision D-ID). The large name · age · sex hea
 - **"Common in this ward"** = the ward's top 12 items over 30 days. Until the ward has that history,
   it is filled with starter items (§5.8) in list order, so the screen is useful on day one.
 
-**Shared ward devices (task T1.9):** a registered ward device shows a "Who is recording?" grid of nurse
-names; tap a name → 4-digit PIN pad → a device session that ends after 10 minutes idle or on
-"Switch nurse". Until T1.9 ships, nurses use their own login.
+**Nurse logins (D-DV, 3 Oct 2026):** each nurse has her own login (Settings → Staff → Nurse) and opens
+the IPD section on any phone or tablet; it lands on the ward. There is no shared-device or PIN mode.
 
 ### 5.7 Settings `/settings/ipd`
 
@@ -452,7 +443,6 @@ names; tap a name → 4-digit PIN pad → a device session that ends after 10 mi
   **CSV import** (name, kind, unit, price in rupees, tax %): preview with row-level errors before saving.
   "Add common items" button (§5.8).
 - **Set prices** view for charge items (§5.8).
-- **Ward devices and PINs** (T1.9).
 
 ### 5.8 Starter catalogues: pick, don't type
 
@@ -542,7 +532,7 @@ Build in this order; each task is one Claude Code session and one PR.
   `setPrices`), `lib/services/medicines.ts` (split `addStarterMedicines` into an `…InTx` helper + wrapper;
   bulk price save), `lib/services/platform.ts` (`createHospital` loads both starter lists),
   `app/(app)/settings/ipd/*`, a "Set prices" view in `app/(app)/settings/medicines/`, nav link in settings.
-- **Do:** §5.7 without devices/PINs, and §5.8. CSV import with preview and per-row errors. Audit price
+- **Do:** §5.7 and §5.8. CSV import with preview and per-row errors. Audit price
   changes `{from, to}` in `audit_logs`, as medicines do.
 - **Accept:** owner creates 2 wards × 10 beds in under 2 minutes; imports a 100-row price list; a new
   hospital starts with both starter lists, all unpriced; the owner prices the 64 starter medicines on
@@ -601,20 +591,16 @@ Build in this order; each task is one Claude Code session and one PR.
 - **Files:** `app/(app)/ipd/ward/**`, `components/ipd/record-sheet.tsx`, `components/ipd/outbox.ts`
   (IndexedDB queue, no library), `app/manifest.ts` (installable PWA: name, icons, `display: standalone`,
   `start_url: /ipd/ward`).
-- **Do:** §5.6 in full except shared-device PINs. "Given recently" = this patient's last 48 h;
+- **Do:** §5.6 in full. "Given recently" = this patient's last 48 h;
   "Common in this ward" = top 12 items in the ward over 30 days, starter order until then (§5.8);
   "Add 'X' as a new item" when search finds nothing.
 - **Accept:** on a real Android phone: bed → item → Save in ≤ 3 taps and ≤ 10 s; airplane-mode entries
   sync once on reconnect; Undo works for 2 minutes; nothing shows a price; a new ward with no history
   still shows 12 common items.
 
-### T1.9 Shared ward devices with nurse PINs
-- **Files:** `drizzle/0033_ward_devices.sql`, `lib/services/ward-devices.ts`, settings screen,
-  `/ipd/ward` "Who is recording?" + PIN pad, session changes in `lib/auth/`.
-- **Do:** owner registers a device (sets a long-lived httpOnly device cookie, stores its hash); each nurse
-  sets a 4-digit PIN (scrypt); PIN unlock creates a short session limited to `ipd.record`, idle timeout
-  10 minutes; 5 wrong PINs lock that nurse on that device for 15 minutes.
-- **Accept:** PIN sessions cannot reach any non-IPD route; revoking a device ends its sessions.
+### T1.9 Shared ward devices — dropped (3 Oct 2026, D-DV)
+Nurses use their own login; the nurse role already sees only the IPD section. Built once, then
+removed as harder to understand than it was worth.
 
 ### T1.10 Nightly bed-day charges
 - **Files:** `lib/domain/bed-days.ts` (+ tests), `lib/services/bed-days.ts`, hook into `runSweeps`
@@ -633,7 +619,7 @@ Build in this order; each task is one Claude Code session and one PR.
 
 ## 8. Stage 2 tasks: discharge billing and the transparent bill
 
-### T2.1 Bill numbering and running-bill token — migration 0034 (§3.4). Payers moved to T1.2 / T1.6.
+### T2.1 Bill numbering and running-bill token — migration 0033 (§3.4). Payers moved to T1.2 / T1.6.
 
 ### T2.2 Discharge billing screen `/ipd/admissions/[id]/bill`
 - Day-wise draft bill (same grouping as the timeline) with **flags first**: unpriced entries, possible
@@ -700,7 +686,6 @@ default.
 | D-PH | Are IPD medicines supplied by the hospital (billed per entry) or bought by the family (record only)? | Billed per entry | T1.7 |
 | D-BD | Bed-day rule: calendar days, 24-hour cycles, or include discharge day? | Calendar days, discharge day not charged | T1.10 |
 | D-UN | Who may void a nurse entry after the 2-minute undo: billing only, or also the ward in-charge? | Billing (owner, receptionist) | T1.7 |
-| D-DV | One shared tablet per ward, or nurses' own phones? | Shared tablet with PINs (T1.9) | T1.9 |
 | D-UD | Should Undo of Shift to IPD also re-open the OPD token? | No; token stays completed | T1.4 |
 | D-RB | Show the running bill to families during the stay? | Yes, when the admin shares the link | T2.4 |
 | D-IN | Which insurers/TPAs does the pilot handle, and what must the admin record? | Payer name, policy no., pre-auth, approved amount | T1.2, T1.6 |
@@ -711,6 +696,7 @@ default.
 |---|---|---|---|
 | D-ID | Identify the patient by bed QR or wristband? | Neither: tap the bed on the ward grid. QR/wristband moves to the future roadmap | 2 Oct 2026 |
 | D-AD | What does reception enter when assigning the bed? | Bed + payer + deposit (optional, under "Add details") | 2 Oct 2026 |
+| D-DV | Shared ward tablets with PINs, or each nurse's own login? | Each nurse's own login. No ward-device module | 3 Oct 2026 |
 | D-SC | How do items get into the catalogue? | Starter lists are loaded unpriced when a hospital is created; staff pick, and add a missing item in place; the owner prices in bulk (§5.8) | 2 Oct 2026 |
 
 ---

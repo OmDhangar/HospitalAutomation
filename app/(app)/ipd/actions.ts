@@ -17,7 +17,6 @@ import {
 } from '@/lib/services/admissions';
 import { CareEntryError, voidCareEntry } from '@/lib/services/care-entries';
 import { PatientBillingError } from '@/lib/services/patient-billing';
-import { WardDeviceError, setOwnPin } from '@/lib/services/ward-devices';
 import { DoctorIpdError, orderTests } from '@/lib/services/doctor-ipd';
 
 /**
@@ -202,21 +201,6 @@ export async function voidCareEntryAction(form: FormData) {
     throw err;
   }
   go(`/ipd/admissions/${admissionId}`, { saved: 'Entry removed. Its bill line is voided with your reason.' });
-}
-
-/** A nurse sets her own ward-tablet PIN, signed in with her own login (T1.9). */
-export async function setOwnPinAction(form: FormData) {
-  const session = await authorize('ipd.record');
-  if (session.wardDeviceId) go('/ipd/ward', { error: 'Set your PIN after signing in with your own login' });
-  const pin = text(form, 'pin').trim();
-  if (pin !== text(form, 'confirm').trim()) go('/ipd/ward', { error: 'The two PINs do not match' });
-  try {
-    await setOwnPin({ hospitalId: session.hospitalId, userId: session.userId, pin });
-  } catch (err) {
-    if (err instanceof WardDeviceError) go('/ipd/ward', { error: err.message });
-    throw err;
-  }
-  go('/ipd/ward', { saved: 'Your ward PIN is set. Use it on the shared ward tablet.' });
 }
 
 /** The doctor's Tests button (T3.1): each tapped test becomes an entry, billed like any other. */
