@@ -3,7 +3,7 @@ import { cn } from '@/components/ui';
 import type { ExpiryBucket } from '@/lib/domain/subscription';
 
 /**
- * The plan-expiry strip that sits above every page.
+ * The plan-expiry strip, on the dashboard (see PlanExpiryNotice).
  *
  * Deliberately not a card on the subscription page, where it would only be
  * seen by someone already thinking about billing. The person who needs to act
@@ -11,7 +11,7 @@ import type { ExpiryBucket } from '@/lib/domain/subscription';
  * failure is invisible in the product — appointments still book, so nobody
  * discovers it until a patient says they were never messaged.
  *
- * It stays quiet until the last 30 days, then escalates. A banner that is
+ * It stays quiet until the last 15 days, then escalates. A banner that is
  * always on screen is furniture, and furniture does not get clicked.
  */
 

@@ -119,7 +119,7 @@ export function SubscriptionStatusPill({ status }: { status: string }) {
  * threshold would be a far worse failure than an unexpected invoice line.
  */
 export function UsageNotice({ usage }: { usage: HospitalUsage }) {
-  const { appointments, expiry } = usage;
+  const { appointments } = usage;
 
   const notices: Array<{ tone: 'warn' | 'error'; text: string }> = [];
 
@@ -140,17 +140,8 @@ export function UsageNotice({ usage }: { usage: HospitalUsage }) {
     });
   }
 
-  if (expiry.bucket === 'expired') {
-    notices.push({ tone: 'error', text: 'Your subscription has expired. Please renew to continue.' });
-  } else if (expiry.bucket && expiry.daysRemaining !== null) {
-    notices.push({
-      tone: 'warn',
-      text:
-        expiry.daysRemaining <= 1
-          ? 'Your subscription expires tomorrow.'
-          : `Your subscription expires in ${expiry.daysRemaining} days.`,
-    });
-  }
+  // Renewal is not repeated here: the dashboard's PlanExpiryNotice says it,
+  // to the owner and doctors, in the last 15 days.
 
   if (notices.length === 0) return null;
 

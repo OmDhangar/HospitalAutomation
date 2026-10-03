@@ -26,8 +26,12 @@ const PERMISSIONS = {
   /** Branches, doctors, staff, WhatsApp, subscription. */
   'hospital.configure': ['owner'],
   'reports.view': ['owner', 'receptionist'],
-  /** The plan-expiry strip; renewing from it is `hospital.configure`. */
-  'subscription.notice': ['owner', 'receptionist'],
+  /**
+   * The plan-renewal strip, on the dashboard only. The owner pays; doctors
+   * are told too, because in a small hospital the doctor is often the one
+   * who gets it done. Not the desk or the ward. Renewing is hospital.configure.
+   */
+  'subscription.notice': ['owner', 'doctor'],
   /**
    * Take money at the desk and mark a visit paid or unpaid. Deliberately not
    * the doctor: reception owns the till, and a doctor flipping a patient to

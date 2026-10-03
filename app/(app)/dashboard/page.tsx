@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Suspense } from 'react';
 import { redirect } from 'next/navigation';
 import { AutoRefresh } from '@/components/auto-refresh';
 import {
@@ -22,6 +23,7 @@ import {
 } from '@/components/icons';
 import { ConsultationGateProvider } from '@/components/clinical/consultation-gate';
 import { PaidToggle } from '@/components/paid-toggle';
+import { PlanExpiryNotice } from '@/components/plan-expiry-notice';
 import { SubscriptionCard, UsageNotice } from '@/components/subscription';
 import { requireSession } from '@/lib/auth/session';
 import {
@@ -168,6 +170,11 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
   return (
     <>
       <AutoRefresh seconds={10} />
+
+      {/* Renewal strip: owner and doctors, last 15 days only, streamed so the queue never waits on it. */}
+      <Suspense fallback={null}>
+        <PlanExpiryNotice />
+      </Suspense>
 
       {/* ========================================================================= */}
       {/* 1. DOCTOR DASHBOARD VIEW (Distraction-Free Clinical Focus)               */}

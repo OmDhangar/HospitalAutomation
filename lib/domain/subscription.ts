@@ -186,5 +186,19 @@ export function expiryBucket(endsAt: Date | null, now: Date): ExpiryBucket {
   return null;
 }
 
+/**
+ * How far ahead the hospital's own staff are told to renew. The operator's
+ * console still sees the whole 30-day window (expiryBucket); the hospital
+ * only needs the nudge once it is close enough to act on.
+ */
+export const RENEWAL_NOTICE_DAYS = 15;
+
+/** expiryBucket, but silent until the last RENEWAL_NOTICE_DAYS days. */
+export function renewalNoticeBucket(endsAt: Date | null, now: Date): ExpiryBucket {
+  if (!endsAt) return null;
+  if ((endsAt.getTime() - now.getTime()) / DAY_MS > RENEWAL_NOTICE_DAYS) return null;
+  return expiryBucket(endsAt, now);
+}
+
 export const daysUntilExpiry = (endsAt: Date | null, now: Date): number | null =>
   endsAt ? Math.ceil((endsAt.getTime() - now.getTime()) / DAY_MS) : null;
