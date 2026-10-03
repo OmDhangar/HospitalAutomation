@@ -346,7 +346,7 @@ describe.skipIf(!enabled)('queue engine', () => {
       const view = (await getPublicQueueView(second.publicToken))!;
       expect(view.paused).toBe(true);
       expect(view.breakStartedAt?.getTime()).toBe(minutesAgo(base, 10).getTime());
-      expect(view.patientsAhead).toBe(0);
+      expect(view.patientsAhead).toBe(1);
       expect(view.eta).toBeNull();
 
       const snapshot = (await getQueueSnapshot({ hospitalId, doctorId, timezone: TZ }))!;

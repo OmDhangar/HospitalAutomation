@@ -4,20 +4,43 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/components/ui';
+import {
+  StethoscopeIcon,
+  BarChartIcon,
+  CreditCardIcon,
+  TagIcon,
+  FileTextIcon,
+  SettingsIcon,
+  ShieldIcon,
+  MenuIcon,
+  XIcon,
+} from '@/components/icons';
 
 export type NavItem = {
   label: string;
   href: string;
 };
 
-const NAV_ICONS: Record<string, string> = {
-  '/dashboard': '🩺',
-  '/reports': '📊',
-  '/subscription': '💳',
-  '/pricing': '🏷️',
-  '/audit': '📜',
-  '/settings': '⚙️',
-  '/admin': '🛡️',
+const renderNavIcon = (href: string, isActive: boolean) => {
+  const iconClass = cn('size-4 shrink-0', isActive ? 'text-brand-700' : 'text-ink-500');
+  switch (href) {
+    case '/dashboard':
+      return <StethoscopeIcon className={iconClass} />;
+    case '/reports':
+      return <BarChartIcon className={iconClass} />;
+    case '/subscription':
+      return <CreditCardIcon className={iconClass} />;
+    case '/pricing':
+      return <TagIcon className={iconClass} />;
+    case '/audit':
+      return <FileTextIcon className={iconClass} />;
+    case '/settings':
+      return <SettingsIcon className={iconClass} />;
+    case '/admin':
+      return <ShieldIcon className={iconClass} />;
+    default:
+      return <FileTextIcon className={iconClass} />;
+  }
 };
 
 export function MobileNav({
@@ -46,7 +69,7 @@ export function MobileNav({
         aria-label="Toggle navigation menu"
         aria-expanded={isOpen}
       >
-        <span className="text-xl leading-none">{isOpen ? '✕' : '☰'}</span>
+        {isOpen ? <XIcon className="size-5" /> : <MenuIcon className="size-5" />}
       </button>
 
       {/* Slide-out Mobile Navigation Drawer */}
@@ -72,7 +95,7 @@ export function MobileNav({
                 onClick={() => setIsOpen(false)}
                 className="size-8 flex items-center justify-center rounded-lg text-ink-500 hover:bg-ink-100 hover:text-ink-900 font-bold cursor-pointer"
               >
-                ✕
+                <XIcon className="size-4" />
               </button>
             </div>
 
@@ -80,7 +103,6 @@ export function MobileNav({
             <nav className="flex-1 overflow-y-auto px-3.5 py-4 space-y-1.5">
               {items.map((item) => {
                 const isActive = pathname === item.href;
-                const icon = NAV_ICONS[item.href] || '📌';
                 return (
                   <Link
                     key={item.href}
@@ -94,7 +116,7 @@ export function MobileNav({
                     )}
                   >
                     <div className="flex items-center gap-3">
-                      <span className="text-base">{icon}</span>
+                      {renderNavIcon(item.href, isActive)}
                       <span>{item.label}</span>
                     </div>
                     {isActive ? (

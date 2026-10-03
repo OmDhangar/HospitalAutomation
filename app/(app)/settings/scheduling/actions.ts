@@ -10,7 +10,8 @@ export async function fetchDoctorScheduleData(doctorId: string, serviceDate?: st
     const err = await res.json().catch(() => ({ error: 'Failed to fetch schedule' }));
     throw new Error(err.error || 'Failed to fetch schedule');
   }
-  return res.json();
+  const body = await res.json();
+  return body.data ?? body;
 }
 
 export async function saveScheduleConfigApi(payload: {

@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import { withTenant, type Tx } from '@/lib/db';
 import { auditLogs, medicines } from '@/lib/db/schema';
 import {
@@ -8,6 +8,7 @@ import {
   tidy,
 } from '@/lib/domain/medicine';
 import { STARTER_MEDICINES } from '@/lib/domain/starter-medicines';
+import { billUnbilledEntriesForItemsInTx } from '@/lib/services/ipd-billing';
 
 /**
  * The hospital's medicine catalogue: what it offers and at what price.
@@ -355,34 +356,104 @@ const findByIdentityInTx = (
       ),
     );
 
+/**
+ * Loads the starter list, unpriced; anything already present is left
+ * untouched. Its own function so a new hospital gets it at creation (D19,
+ * D-SC) as well as from the Settings button.
+ */
+export async function addStarterMedicinesInTx(
+  tx: Tx,
+  args: { hospitalId: string; actorUserId: string | null },
+): Promise<number> {
+  const inserted = await tx
+    .insert(medicines)
+    .values(
+      STARTER_MEDICINES.map((item) => ({
+        hospitalId: args.hospitalId,
+        name: item.name,
+        strength: item.strength,
+        form: item.form,
+        unit: item.unit,
+        createdByUserId: args.actorUserId,
+      })),
+    )
+    .onConflictDoNothing()
+    .returning({ id: medicines.id });
+  return inserted.length;
+}
+
 /** Adds the starter list; anything already present is left untouched. */
 export async function addStarterMedicines(args: {
   hospitalId: string;
   actorUserId: string;
 }): Promise<{ added: number }> {
   return withTenant(args.hospitalId, async (tx) => {
-    const inserted = await tx
-      .insert(medicines)
-      .values(
-        STARTER_MEDICINES.map((item) => ({
-          hospitalId: args.hospitalId,
-          name: item.name,
-          strength: item.strength,
-          form: item.form,
-          unit: item.unit,
-          createdByUserId: args.actorUserId,
-        })),
-      )
-      .onConflictDoNothing()
-      .returning({ id: medicines.id });
-
+    const added = await addStarterMedicinesInTx(tx, args);
     await tx.insert(auditLogs).values({
       hospitalId: args.hospitalId,
       actorUserId: args.actorUserId,
       action: 'medicine.starter_list_added',
       objectType: 'medicine',
-      metadata: { added: inserted.length },
+      metadata: { added },
     });
-    return { added: inserted.length };
+    return { added };
   });
+}
+
+/**
+ * The "Set prices" screen's single Save. Each change is audited with both
+ * amounts, and a medicine priced for the first time bills the bedside entries
+ * that were waiting for it — which needs the clinical key, since care entries
+ * are clinical rows.
+ */
+export async function setMedicinePrices(args: {
+  hospitalId: string;
+  edits: readonly { id: string; sellingPricePaise: number }[];
+  actorUserId: string;
+}): Promise<{ changed: number; billed: number }> {
+  if (args.edits.length === 0) return { changed: 0, billed: 0 };
+  return withTenant(
+    args.hospitalId,
+    async (tx) => {
+      const before = await tx
+        .select({
+          id: medicines.id,
+          name: medicines.name,
+          strength: medicines.strength,
+          form: medicines.form,
+          price: medicines.sellingPricePaise,
+        })
+        .from(medicines)
+        .where(inArray(medicines.id, args.edits.map((edit) => edit.id)))
+        .for('update');
+      const byId = new Map(before.map((row) => [row.id, row]));
+
+      let changed = 0;
+      const newlyPriced: string[] = [];
+      for (const edit of args.edits) {
+        const row = byId.get(edit.id);
+        if (!row || row.price === edit.sellingPricePaise) continue;
+        await tx
+          .update(medicines)
+          .set({ sellingPricePaise: edit.sellingPricePaise, updatedAt: new Date() })
+          .where(eq(medicines.id, row.id));
+        await tx.insert(auditLogs).values({
+          hospitalId: args.hospitalId,
+          actorUserId: args.actorUserId,
+          action: 'billing.price_changed',
+          objectType: 'medicine',
+          objectId: row.id,
+          metadata: { label: medicineLabel(row), fromPaise: row.price, toPaise: edit.sellingPricePaise },
+        });
+        if (row.price === null) newlyPriced.push(row.id);
+        changed += 1;
+      }
+      const billed = await billUnbilledEntriesForItemsInTx(tx, {
+        medicineIds: newlyPriced,
+        actorUserId: args.actorUserId,
+      });
+      return { changed, billed };
+    },
+    { clinical: true },
+  );
 }

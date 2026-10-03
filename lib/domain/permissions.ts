@@ -13,7 +13,7 @@
  */
 
 /** Built into the database enum, so a role cannot exist in one and not the other. */
-export const STAFF_ROLES = ['owner', 'receptionist', 'doctor'] as const;
+export const STAFF_ROLES = ['owner', 'receptionist', 'doctor', 'nurse'] as const;
 
 export type StaffRole = (typeof STAFF_ROLES)[number];
 
@@ -44,7 +44,7 @@ const PERMISSIONS = {
    * because in a small hospital the desk handles follow-ups and IPD care
    * (decision D9). Every read of a history is logged in record_access_logs.
    */
-  'clinical.read': ['owner', 'receptionist', 'doctor'],
+  'clinical.read': ['owner', 'receptionist', 'doctor', 'nurse'],
   /**
    * Write or revise a consultation. Necessary but not sufficient: the service
    * also requires the user to be linked to the visit's attending doctor
@@ -60,6 +60,38 @@ const PERMISSIONS = {
    * a doctor is never blocked by an incomplete catalogue. The owner prices it.
    */
   'medicines.quickAdd': ['owner', 'doctor'],
+
+  /* IPD (docs/plans/ipd-mvp-implementation-plan.md §4) */
+
+  /** The IPD section: its nav entry, home screen and each patient's IPD page. */
+  'ipd.view': ['owner', 'receptionist', 'doctor', 'nurse'],
+  /**
+   * The one-click Shift to IPD on the OPD dashboard. The doctor decides to
+   * admit; reception then does the paperwork under `ipd.admit`.
+   */
+  'ipd.shift': ['owner', 'doctor'],
+  /** Emergency admission, assign a bed and the payer, transfer, cancel a request. */
+  'ipd.admit': ['owner', 'receptionist'],
+  /**
+   * Record what was given or used at the bedside, and undo one's own entry
+   * within two minutes. Every entry becomes a server-priced bill line, so this
+   * is a billing act too — but the nurse never sees the price.
+   */
+  'ipd.record': ['owner', 'receptionist', 'nurse'],
+  /** Void any entry or bill line after the undo window, with a reason (D-UN). */
+  'ipd.correct': ['owner', 'receptionist'],
+  /** Tell the desk the patient may go home; billing starts from here. */
+  'ipd.dischargeReady': ['owner', 'doctor'],
+  /**
+   * Order tests for an admitted patient from the doctor's phone view (T3.1).
+   * Narrower than ipd.record: only items flagged as tests, so a doctor never
+   * records the ward's consumables by accident.
+   */
+  'ipd.orderTests': ['owner', 'doctor'],
+  /** Review, finalise and print the discharge bill. */
+  'ipd.discharge': ['owner', 'receptionist'],
+  /** Wards, beds, ward devices and nurse PINs. Prices stay `billing.price`. */
+  'ipd.configure': ['owner'],
 } as const satisfies Record<string, readonly StaffRole[]>;
 
 export type Permission = keyof typeof PERMISSIONS;
@@ -80,7 +112,19 @@ const DASHBOARD_VIEWS: Record<
   owner: { default: 'reception', canSwitch: true },
   receptionist: { default: 'reception', canSwitch: false },
   doctor: { default: 'doctor', canSwitch: false },
+  /**
+   * Nurses never see the OPD dashboard: the page redirects them to the ward
+   * (dashboard/page.tsx). The entry exists only because every role needs one.
+   */
+  nurse: { default: 'reception', canSwitch: false },
 };
+
+/**
+ * Where a role starts. Everyone lands on the OPD queue except nurses, whose
+ * only work is on the ward.
+ */
+export const homePathFor = (role: StaffRole): '/dashboard' | '/ipd/ward' =>
+  role === 'nurse' ? '/ipd/ward' : '/dashboard';
 
 export function dashboardViewFor(
   role: StaffRole,

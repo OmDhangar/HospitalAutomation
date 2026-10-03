@@ -19,6 +19,7 @@ import {
   PatientBillingError,
   setConsultationPaid,
 } from '@/lib/services/patient-billing';
+import { notifyQueueMovement } from '@/lib/services/display-events';
 import {
   advanceQueue,
   applyQueueAction,
@@ -72,6 +73,7 @@ export async function addWalkInAction(formData: FormData) {
     whatsappOptIn: formData.get('whatsappOptIn') === 'yes',
   });
 
+  notifyQueueMovement(session.hospitalId, branchId);
   backToDoctor(doctorId);
 }
 
@@ -149,6 +151,7 @@ export async function addWalkInDynamic(args: {
       }
     }
 
+    notifyQueueMovement(session.hospitalId, args.branchId);
     revalidatePath('/dashboard');
     const tRevalidate = performance.now();
 
@@ -180,6 +183,8 @@ export async function togglePaidDynamic(args: {
   appointmentId: string;
   paid: boolean;
   feeRupees?: string;
+  reason?: string;
+  waiveCharges?: boolean;
 }): Promise<TogglePaidResult> {
   try {
     const session = await authorize();
@@ -202,9 +207,12 @@ export async function togglePaidDynamic(args: {
       appointmentId: args.appointmentId,
       paid: args.paid,
       setFeePaise,
+      reason: args.reason,
+      waiveCharges: args.waiveCharges,
       actorUserId: session.userId,
     });
 
+    notifyQueueMovement(session.hospitalId);
     revalidatePath('/dashboard');
     return { ok: true, status: settlement.status };
   } catch (err: unknown) {
@@ -230,6 +238,7 @@ export async function advanceQueueDynamic(args: {
       actorUserId: session.userId,
     });
 
+    notifyQueueMovement(session.hospitalId);
     revalidatePath('/dashboard');
     return { ok: true };
   } catch (err: unknown) {
@@ -252,6 +261,7 @@ export async function queueActionDynamic(args: {
       actorUserId: session.userId,
     });
 
+    notifyQueueMovement(session.hospitalId);
     revalidatePath('/dashboard');
     return { ok: true };
   } catch (err: unknown) {
@@ -273,6 +283,7 @@ export async function setPriorityDynamic(args: {
       actorUserId: session.userId,
     });
 
+    notifyQueueMovement(session.hospitalId);
     revalidatePath('/dashboard');
     return { ok: true };
   } catch (err: unknown) {
@@ -295,6 +306,7 @@ export async function togglePauseDynamic(args: {
       reason: args.reason || null,
     });
 
+    notifyQueueMovement(session.hospitalId);
     revalidatePath('/dashboard');
     return { ok: true };
   } catch (err: unknown) {
@@ -324,6 +336,7 @@ export async function pauseAppointmentDynamic(args: {
       return { ok: false, error: `Cannot pause appointment in status: ${result.currentStatus}` };
     }
 
+    notifyQueueMovement(session.hospitalId);
     revalidatePath('/dashboard');
     return { ok: true };
   } catch (err: unknown) {
@@ -355,6 +368,7 @@ export async function resumeAppointmentDynamic(args: {
       };
     }
 
+    notifyQueueMovement(session.hospitalId);
     revalidatePath('/dashboard');
     return { ok: true };
   } catch (err: unknown) {

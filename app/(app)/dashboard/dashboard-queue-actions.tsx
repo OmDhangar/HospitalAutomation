@@ -3,6 +3,16 @@
 import React, { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button, Field, Input, cn } from '@/components/ui';
+import {
+  StethoscopeIcon,
+  FileTextIcon,
+  UserPlusIcon,
+  BarChartIcon,
+  PauseIcon,
+  ZapIcon,
+  CheckIcon,
+  XIcon,
+} from '@/components/icons';
 import { useConsultationGate } from '@/components/clinical/consultation-gate';
 import { useToast } from '@/components/toast';
 import { playChime } from '@/lib/utils/sound';
@@ -52,22 +62,24 @@ export function DoctorTabs({
             onClick={() => handleSelectDoctor(doctor.id)}
             disabled={isPending}
             className={cn(
-              'shrink-0 inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all cursor-pointer select-none',
+              'shrink-0 inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all cursor-pointer select-none',
               isSelected
-                ? 'bg-brand-600 text-white shadow-sm ring-2 ring-brand-600'
+                ? 'bg-brand-600 text-white shadow-xs ring-2 ring-brand-600'
                 : 'bg-white text-ink-700 ring-1 ring-inset ring-ink-200 hover:bg-ink-50',
               isPending && !isSelected && 'opacity-60 cursor-not-allowed',
             )}
           >
             {isLoadingThis ? (
               <span className="inline-block size-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
-            ) : null}
+            ) : (
+              <StethoscopeIcon className={cn('size-4', isSelected ? 'text-white' : 'text-brand-600')} />
+            )}
             <span>{doctor.name}</span>
             {doctor.specialty ? (
               <span
                 className={cn(
-                  'text-xs',
-                  isSelected ? 'text-brand-100' : 'text-ink-500',
+                  'rounded-md px-1.5 py-0.5 text-xs font-normal',
+                  isSelected ? 'bg-brand-700 text-brand-100' : 'bg-ink-100 text-ink-600',
                 )}
               >
                 {doctor.specialty}
@@ -193,10 +205,6 @@ export function AddWalkInForm({
         />
       </Field>
 
-      {/*
-       * After the phone, so the common case — name, phone, Enter — never has
-       * to pass through it. Optional: many patients will not have it handy.
-       */}
       <Field label="Address" hint="Optional. Helps reach family in an emergency.">
         <Input
           type="text"
@@ -213,8 +221,8 @@ export function AddWalkInForm({
           <span className="mb-1.5 block text-sm font-medium text-ink-700">Payment</span>
           <div className="inline-flex rounded-xl bg-ink-100 p-1 ring-1 ring-ink-200" role="radiogroup">
             {[
-              { value: false, label: 'Unpaid', glyph: '○' },
-              { value: true, label: 'Paid', glyph: '✓' },
+              { value: false, label: 'Unpaid' },
+              { value: true, label: 'Paid' },
             ].map((option) => {
               const selected = paid === option.value;
               const disabled = option.value && !feeKnown;
@@ -236,7 +244,11 @@ export function AddWalkInForm({
                     disabled && 'cursor-not-allowed opacity-50 hover:text-ink-600',
                   )}
                 >
-                  <span aria-hidden="true">{option.glyph}</span>
+                  {option.value ? (
+                    <CheckIcon className="size-3.5" />
+                  ) : (
+                    <span className="size-2 rounded-full border border-current" />
+                  )}
                   {option.label}
                 </button>
               );
@@ -272,6 +284,7 @@ export function AddWalkInForm({
         className="w-full"
         isLoading={isPending}
       >
+        <UserPlusIcon className="size-4 mr-1.5" />
         {isPending ? 'Adding Walk-in...' : 'Add to queue'}
       </Button>
     </form>
@@ -355,7 +368,7 @@ export function ViewModeToggle({
             : 'text-ink-600 hover:text-ink-900',
         )}
       >
-        <span>🩺</span>
+        <StethoscopeIcon className="size-3.5 text-brand-600" />
         <span>Doctor View</span>
       </button>
       <button
@@ -369,33 +382,13 @@ export function ViewModeToggle({
             : 'text-ink-600 hover:text-ink-900',
         )}
       >
-        <span>📋</span>
+        <FileTextIcon className="size-3.5 text-brand-600" />
         <span>Reception Desk</span>
       </button>
     </div>
   );
 }
 
-/**
- * Colour carries the meaning, because the word may not.
- *
- * Reception is often run by someone whose English is limited and who is
- * working fast with a queue of people in front of them. Reading "Skip" and
- * "Cancel" under pressure and picking correctly is a demand the interface can
- * remove: the two are never confused when one is amber and the other is red.
- *
- * The scale is consequence, not category — how hard the action is to undo:
- *
- *   slate   start/resume   routine, reversible
- *   amber   hold           paused, the patient keeps their place
- *   blue    skip · recall  reorders the queue, fully reversible
- *   rose    cancel         ends the appointment, messages the patient
- *   red     no-show        ends it and records a permanent absence
- *
- * Colour is never the only signal: each button keeps its label, so nothing
- * here depends on distinguishing red from amber. That matters for the roughly
- * one in twelve Indian men with red-green colour blindness.
- */
 const ACTION_TONES: Partial<Record<QueueAction, string>> = {
   hold:
     'bg-amber-50 text-amber-900 ring-1 ring-inset ring-amber-300 ' +
@@ -415,22 +408,6 @@ const ACTION_TONES: Partial<Record<QueueAction, string>> = {
   mark_no_show:
     'bg-red-600 text-white ring-1 ring-inset ring-red-700 ' +
     'hover:bg-red-700 active:bg-red-800 focus-visible:outline-red-700',
-};
-
-/**
- * A shape for each action, for when colour alone will not do.
- *
- * Printed, photocopied, on a sun-bleached monitor, or read by someone who
- * cannot separate the reds from the ambers — the glyph still distinguishes
- * them. Chosen to be legible at a glance rather than decorative.
- */
-const ACTION_GLYPHS: Partial<Record<QueueAction, string>> = {
-  hold: '⏸',
-  resume: '▶',
-  skip: '⤼',
-  recall: '↩',
-  cancel: '✕',
-  mark_no_show: '⊘',
 };
 
 export function QueueActionButton({
@@ -468,23 +445,18 @@ export function QueueActionButton({
   };
 
   const tone = ACTION_TONES[action];
-  const glyph = ACTION_GLYPHS[action];
 
   return (
     <Button
       type="button"
       size={size}
-      // A toned action supplies its own colours, so the base variant would
-      // otherwise fight them. Anything without a tone keeps the default.
       variant={tone ? 'ghost' : variant}
       onClick={handleAction}
       isLoading={isPending}
       className={cn(tone, className)}
     >
-      {glyph && !isPending ? (
-        <span aria-hidden="true" className="text-base leading-none">
-          {glyph}
-        </span>
+      {action === 'mark_no_show' ? (
+        <XIcon className="size-3.5" />
       ) : null}
       {label}
     </Button>
@@ -519,7 +491,9 @@ export function PriorityButton({
       title="Move to the front of the waiting line"
       onClick={handlePriority}
       isLoading={isPending}
+      className="inline-flex items-center gap-1 bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100"
     >
+      <ZapIcon className="size-3 text-amber-600" />
       Priority
     </Button>
   );
@@ -553,9 +527,6 @@ export function TogglePauseButton({
     <Button
       type="button"
       size="sm"
-      // Named for what the doctor is doing, not what the software does to the
-      // queue. "Pause queue" read as a setting, so doctors stepped out without
-      // pressing it and patients watched a token that never moved.
       title={
         paused
           ? 'Doctor is back: the queue moves again'
@@ -563,7 +534,9 @@ export function TogglePauseButton({
       }
       onClick={handleTogglePause}
       isLoading={isPending}
+      className="inline-flex items-center gap-1.5"
     >
+      <PauseIcon className="size-3.5 text-amber-600" />
       {paused ? 'End break' : 'Start break'}
     </Button>
   );
@@ -617,9 +590,9 @@ export function PausePatientButton({
         size={size}
         variant="ghost"
         onClick={() => setIsOpen(true)}
-        className="bg-amber-50 text-amber-900 ring-1 ring-inset ring-amber-300 hover:bg-amber-100 font-medium"
+        className="bg-amber-50 text-amber-900 ring-1 ring-inset ring-amber-300 hover:bg-amber-100 font-medium inline-flex items-center gap-1.5"
       >
-        <span aria-hidden="true">⏸</span>
+        <PauseIcon className="size-3.5 text-amber-700" />
         Pause / Hold
       </Button>
 
@@ -633,9 +606,9 @@ export function PausePatientButton({
               <button
                 type="button"
                 onClick={() => setIsOpen(false)}
-                className="rounded-lg p-1 text-ink-400 hover:bg-ink-100 hover:text-ink-700"
+                className="rounded-lg p-1 text-ink-400 hover:bg-ink-100 hover:text-ink-700 cursor-pointer"
               >
-                ✕
+                <XIcon className="size-4" />
               </button>
             </div>
 
@@ -659,7 +632,7 @@ export function PausePatientButton({
                       type="button"
                       onClick={() => setMinutes(opt.val)}
                       className={cn(
-                        'rounded-lg px-2.5 py-2 text-xs font-semibold ring-1 transition-all',
+                        'rounded-lg px-2.5 py-2 text-xs font-semibold ring-1 transition-all cursor-pointer',
                         minutes === opt.val
                           ? 'bg-amber-500 text-white ring-amber-500 shadow-sm'
                           : 'bg-ink-50 text-ink-700 ring-ink-200 hover:bg-ink-100',
@@ -745,10 +718,101 @@ export function ResumePatientButton({
       variant="ghost"
       onClick={handleResume}
       isLoading={isPending}
-      className="bg-emerald-50 text-emerald-900 ring-1 ring-inset ring-emerald-300 hover:bg-emerald-100 font-medium"
+      className="bg-emerald-50 text-emerald-900 ring-1 ring-inset ring-emerald-300 hover:bg-emerald-100 font-medium inline-flex items-center gap-1.5"
     >
-      <span aria-hidden="true">▶</span>
+      <CheckIcon className="size-3.5 text-emerald-700" />
       Resume
     </Button>
+  );
+}
+
+/**
+ * Mobile-First Segmented Dashboard Layout for Receptionist & Owner View
+ *
+ * On mobile (< lg): Provides clean sticky tabs (Live Queue | Add Walk-In | Overview)
+ * so staff can add a patient in 1 tap with zero vertical scrolling.
+ * On desktop (>= lg): Displays the full multi-column layout side-by-side.
+ */
+export function ReceptionDashboardLayout({
+  waitingCount,
+  queueContent,
+  addContent,
+  overviewContent,
+}: {
+  waitingCount: number;
+  queueContent: React.ReactNode;
+  addContent: React.ReactNode;
+  overviewContent: React.ReactNode;
+}) {
+  const [activeTab, setActiveTab] = useState<'queue' | 'add' | 'overview'>('queue');
+
+  return (
+    <div>
+      {/* Mobile Sticky Segmented Controller (< lg) */}
+      <div className="lg:hidden sticky top-2 z-30 mb-4 grid grid-cols-3 gap-1 rounded-2xl bg-white/95 p-1.5 border border-ink-200 shadow-md backdrop-blur-md">
+        <button
+          type="button"
+          onClick={() => setActiveTab('queue')}
+          className={cn(
+            'flex items-center justify-center gap-1.5 rounded-xl py-2 px-1 text-xs font-bold transition-all cursor-pointer select-none',
+            activeTab === 'queue'
+              ? 'bg-brand-600 text-white shadow-sm'
+              : 'text-ink-600 hover:text-ink-900 hover:bg-ink-50',
+          )}
+        >
+          <FileTextIcon className="size-3.5 shrink-0" />
+          <span className="truncate">Queue ({waitingCount})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('add')}
+          className={cn(
+            'flex items-center justify-center gap-1.5 rounded-xl py-2 px-1 text-xs font-bold transition-all cursor-pointer select-none',
+            activeTab === 'add'
+              ? 'bg-brand-600 text-white shadow-sm'
+              : 'text-ink-600 hover:text-ink-900 hover:bg-ink-50',
+          )}
+        >
+          <UserPlusIcon className="size-3.5 shrink-0" />
+          <span className="truncate">Add Walk-In</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('overview')}
+          className={cn(
+            'flex items-center justify-center gap-1.5 rounded-xl py-2 px-1 text-xs font-bold transition-all cursor-pointer select-none',
+            activeTab === 'overview'
+              ? 'bg-brand-600 text-white shadow-sm'
+              : 'text-ink-600 hover:text-ink-900 hover:bg-ink-50',
+          )}
+        >
+          <BarChartIcon className="size-3.5 shrink-0" />
+          <span className="truncate">Overview</span>
+        </button>
+      </div>
+
+      {/* Desktop Layout: Multi-column 3 cols side-by-side */}
+      <div className="hidden lg:grid items-start gap-5 lg:grid-cols-3">
+        <div className="space-y-5 lg:col-span-2">{queueContent}</div>
+        <div className="space-y-5">
+          {addContent}
+          {overviewContent}
+        </div>
+      </div>
+
+      {/* Mobile Layout: Only show active tab */}
+      <div className="lg:hidden space-y-5">
+        {activeTab === 'queue' && queueContent}
+        {activeTab === 'add' && addContent}
+        {activeTab === 'overview' && (
+          <>
+            {addContent}
+            {overviewContent}
+          </>
+        )}
+      </div>
+    </div>
   );
 }

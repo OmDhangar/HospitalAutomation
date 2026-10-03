@@ -1,7 +1,8 @@
 # Progress log
 
 What each phase delivered, in the order it was built. The roadmap and the
-reasoning behind it are in [../plans/hms-expansion-plan.md](../plans/hms-expansion-plan.md).
+reasoning behind it are in [../plans/hms-expansion-plan.md](../plans/hms-expansion-plan.md);
+from IPD onwards, in [../plans/ipd-mvp-implementation-plan.md](../plans/ipd-mvp-implementation-plan.md).
 The decisions made along the way are in [decisions.md](decisions.md).
 
 | Phase | What | Status |
@@ -10,8 +11,8 @@ The decisions made along the way are in [decisions.md](decisions.md).
 | 1 | Walk-in address, billing foundation, Paid toggle | Done, committed (`ae68611`), migrated |
 | 1+ | Security fix: RLS on two schedule tables | Done, committed (`ae68611`), migrated |
 | 2 | Medicine catalogue, OPD consultation and prescription, print, history | Built and tested, **not yet committed or migrated** |
-| 3 | IPD: admission, ward timeline, drugs given, IPD bill, discharge | Next |
-| 4 | Lab: orders, worklist, results, lab billing | Planned |
+| 3 | IPD: Shift to IPD, beds, nurse bedside entries, bed-days, discharge bill, doctor phone view (IPD plan T1.1–T3.1) | Built and tested on branch `feat/ipd-mvp`, **migrations 0031–0034 not yet applied** |
+| 4 | Lab-lite, reports, hardening (IPD plan Stage 4) | Planned: 8 Feb – 26 Mar 2027 |
 
 ---
 
@@ -120,3 +121,20 @@ nurse or lab login would have seen Reports and the reception desk.
 - Discharge summary and printout.
 
 Open questions for the pilot are in [../plans/hms-expansion-plan.md §12](../plans/hms-expansion-plan.md).
+
+## Phase 3: IPD (IPD plan T1.1–T3.1)
+
+Built on `feat/ipd-mvp`, one commit per task. Plan: [../plans/ipd-mvp-implementation-plan.md](../plans/ipd-mvp-implementation-plan.md).
+
+**For the hospital:**
+- Doctor: one-click **Shift to IPD** (with Undo) on the OPD dashboard; **My patients** phone view with Discharge ready and Tests.
+- Desk: IPD home (Awaiting bed · Wards · Discharge ready), admission sheet with payer and deposit, emergency admission, bed transfer, patient IPD page.
+- Nurse: ward grid → bed → item → Save on a phone, offline outbox, 2-minute Undo; shared ward tablets with 4-digit PINs.
+- Billing: every bedside entry is a bill line at once; nightly bed-day charges; discharge bill with flags, reasoned corrections, payer split, gap-free numbers; A4 itemised print; family running-bill link (en/hi/mr).
+- Owner: wards and beds, IPD price list with CSV import, one-screen "Set prices", starter catalogues loaded for new hospitals.
+
+**Built:** migrations 0031 (enums), 0032 (IPD core), 0033 (ward devices), 0034 (discharge billing); `proxy.ts` keeps ward-tablet PIN sessions on the ward screens.
+
+**Verified:** typecheck, lint, `next build`; 513 unit tests; migrations rehearsed on `qurio_scratch` (35 apply); IPD integration suites (schema, set-up, admissions, care entries, ward devices, bed-days, discharge billing, doctor view) pass there; a 33-check HTTP smoke test of every new screen ran against a production build on the scratch database. The one existing integration failure (`usage.integration.test.ts`, a fixed-date subscription case) is unrelated and predates this work.
+
+**Before go-live:** review and merge; apply 0031–0034 with `npm run db:migrate` (0031 must commit before 0032, which the runner does); price the starter items; register ward tablets. WhatsApp sending of the running-bill link uses a wa.me link from the desk; an approved template for automatic sending is not yet added.

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import { BellIcon, BellOffIcon } from '@/components/icons';
 import { playChime } from '@/lib/utils/sound';
 
 export type ServingTokenState = {
@@ -88,9 +89,11 @@ export function DisplayAudioNotifier({
         }`}
         title={audioEnabled ? 'Click to mute TV chime' : 'Click to enable TV bell chime for new tokens'}
       >
-        <span className="text-base leading-none">
-          {audioEnabled ? '🔔' : '🔕'}
-        </span>
+        {audioEnabled ? (
+          <BellIcon className="size-4 shrink-0 text-emerald-400" />
+        ) : (
+          <BellOffIcon className="size-4 shrink-0 text-slate-400" />
+        )}
         <span className="hidden sm:inline">
           {audioEnabled ? 'Chime Alert ON' : 'Turn Sound ON'}
         </span>

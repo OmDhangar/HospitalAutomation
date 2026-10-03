@@ -2,6 +2,7 @@ import { and, eq, lt, lte, sql } from 'drizzle-orm';
 import { getAdminDb } from '@/lib/db/admin';
 import { appointments, queueEvents, rateLimitEvents } from '@/lib/db/schema';
 import type { AppointmentStatus } from '@/lib/domain/types';
+import { postBedDayCharges } from './bed-days';
 import { expireStalePaymentLinks } from './payments';
 import { expireLapsedSubscriptions } from './subscriptions';
 
@@ -159,6 +160,8 @@ export type SweepResult = {
   appointmentsResumed: number;
   subscriptionsExpired: number;
   paymentLinksExpired: number;
+  /** IPD room charges posted (T1.10): one line per occupied bed per day. */
+  bedDaysCharged: number;
 };
 
 /**
@@ -174,6 +177,7 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
     appointmentsResumed: 0,
     subscriptionsExpired: 0,
     paymentLinksExpired: 0,
+    bedDaysCharged: 0,
   };
 
   try {
@@ -212,9 +216,17 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
     console.error('[sweeps] throttle pruning failed', error);
   }
 
+  try {
+    // Idempotent: computes every day of every stay and adds only what is
+    // missing, so running it each tick keeps the running bill current.
+    result.bedDaysCharged = await postBedDayCharges(now);
+  } catch (error) {
+    console.error('[sweeps] bed-day charges failed', error);
+  }
+
   const total =
     result.appointmentsMarkedNoShow + result.appointmentsResumed +
-    result.subscriptionsExpired + result.paymentLinksExpired;
+    result.subscriptionsExpired + result.paymentLinksExpired + result.bedDaysCharged;
   if (total > 0) {
     console.log('[sweeps] completed', JSON.stringify(result));
   }

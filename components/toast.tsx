@@ -2,19 +2,32 @@
 
 import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
 import { cn } from '@/components/ui';
+import { CheckIcon, XIcon, AlertTriangleIcon, InfoIcon } from '@/components/icons';
 
 export type ToastType = 'success' | 'error' | 'info' | 'warn';
+
+/** A button inside the toast, such as Undo. */
+export type ToastAction = { label: string; onClick: () => void };
 
 export type ToastMessage = {
   id: string;
   title: string;
   description?: string;
   type: ToastType;
+  action?: ToastAction;
+};
+
+type ToastOptions = {
+  description?: string;
+  type?: ToastType;
+  action?: ToastAction;
+  /** How long it stays. Undo toasts stay as long as the undo is possible. */
+  durationMs?: number;
 };
 
 type ToastContextType = {
   toasts: ToastMessage[];
-  showToast: (title: string, options?: { description?: string; type?: ToastType }) => void;
+  showToast: (title: string, options?: ToastOptions) => void;
   removeToast: (id: string) => void;
   success: (title: string, description?: string) => void;
   error: (title: string, description?: string) => void;
@@ -31,18 +44,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const showToast = useCallback(
-    (title: string, options?: { description?: string; type?: ToastType }) => {
+    (title: string, options?: ToastOptions) => {
       const id = Math.random().toString(36).substring(2, 9);
       const type = options?.type ?? 'info';
       const description = options?.description;
 
-      const newToast: ToastMessage = { id, title, description, type };
+      const newToast: ToastMessage = { id, title, description, type, action: options?.action };
 
       setToasts((prev) => [...prev.slice(-4), newToast]); // Keep maximum 5 toasts
 
       setTimeout(() => {
         removeToast(id);
-      }, 4000);
+      }, options?.durationMs ?? 4000);
     },
     [removeToast],
   );
@@ -78,25 +91,37 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             )}
           >
             <div className="flex items-start gap-2.5 min-w-0">
-              <span className="text-base shrink-0 mt-0.5">
-                {toast.type === 'success' && '✓'}
-                {toast.type === 'error' && '✕'}
-                {toast.type === 'warn' && '⚠️'}
-                {toast.type === 'info' && 'ℹ️'}
+              <span className="shrink-0 mt-0.5">
+                {toast.type === 'success' && <CheckIcon className="h-4 w-4" />}
+                {toast.type === 'error' && <XIcon className="h-4 w-4" />}
+                {toast.type === 'warn' && <AlertTriangleIcon className="h-4 w-4" />}
+                {toast.type === 'info' && <InfoIcon className="h-4 w-4" />}
               </span>
               <div className="min-w-0">
                 <p className="text-sm font-semibold leading-tight truncate">{toast.title}</p>
                 {toast.description ? (
                   <p className="mt-1 text-xs opacity-90 leading-snug">{toast.description}</p>
                 ) : null}
+                {toast.action ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      toast.action?.onClick();
+                      removeToast(toast.id);
+                    }}
+                    className="mt-2 inline-flex min-h-9 items-center rounded-lg bg-white/15 px-3 text-sm font-semibold hover:bg-white/25"
+                  >
+                    {toast.action.label}
+                  </button>
+                ) : null}
               </div>
             </div>
             <button
               onClick={() => removeToast(toast.id)}
-              className="text-white/70 hover:text-white text-xs font-bold shrink-0 p-1"
+              className="text-white/70 hover:text-white shrink-0 p-1 rounded hover:bg-white/10 transition-colors"
               aria-label="Close toast"
             >
-              ✕
+              <XIcon className="h-3.5 w-3.5" />
             </button>
           </div>
         ))}

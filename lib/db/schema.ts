@@ -377,6 +377,12 @@ export const sessions = pgTable(
     returnHospitalId: uuid('return_hospital_id').references(() => hospitals.id, {
       onDelete: 'set null',
     }),
+    /**
+     * Set on a PIN session opened on a shared ward device (0033). Such a
+     * session resolves as a nurse whatever the person's role, slides a
+     * 10-minute idle expiry, and ends when the device is revoked.
+     */
+    wardDeviceId: uuid('ward_device_id').references(() => wardDevices.id, { onDelete: 'cascade' }),
     createdAt: createdAt(),
   },
   (t) => [
@@ -400,6 +406,8 @@ export const staffMemberships = pgTable(
     branchId: uuid('branch_id').references(() => branches.id, { onDelete: 'set null' }),
     role: staffRole('role').notNull(),
     active: boolean('active').notNull().default(true),
+    /** scrypt hash of the 4-digit PIN for shared ward devices (0033). */
+    pinHash: text('pin_hash'),
     createdAt: createdAt(),
   },
   (t) => [
@@ -1128,7 +1136,16 @@ export const encounterStatus = pgEnum('encounter_status', ['open', 'closed', 'ca
 export const encounterOrigin = pgEnum('encounter_origin', ['queue', 'emergency', 'direct']);
 export const serviceKind = pgEnum('service_kind', ['consultation']);
 export const billStatus = pgEnum('bill_status', ['draft', 'final', 'cancelled']);
-export const billItemType = pgEnum('bill_item_type', ['consultation', 'medicine', 'other']);
+export const billItemType = pgEnum('bill_item_type', [
+  'consultation',
+  'medicine',
+  'other',
+  // IPD sources (0031). Each has its own typed column and CHECK in 0032.
+  'consumable',
+  'procedure',
+  'service',
+  'room',
+]);
 export const patientPaymentKind = pgEnum('patient_payment_kind', ['payment', 'refund']);
 export const patientPaymentMethod = pgEnum('patient_payment_method', [
   'cash',
@@ -1288,6 +1305,20 @@ export const billItems = pgTable(
     taxRateBp: integer('tax_rate_bp').notNull().default(0),
     taxPaise: integer('tax_paise').notNull().default(0),
     totalPaise: integer('total_paise').notNull(),
+    /**
+     * IPD sources (0032). Each item type has exactly its own source (the
+     * bill_items_source CHECK). Their composite keys to medicines, charge
+     * items, care entries and bed assignments live in the migration only:
+     * those tables are declared further down this file.
+     */
+    medicineId: uuid('medicine_id'),
+    chargeItemId: uuid('charge_item_id'),
+    careEntryId: uuid('care_entry_id'),
+    bedAssignmentId: uuid('bed_assignment_id'),
+    /** The day a room line charges for (YYYY-MM-DD, hospital time). */
+    serviceDate: date('service_date', { mode: 'string' }),
+    /** Why discount_paise is not zero (0034). */
+    discountReason: text('discount_reason'),
     createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     createdAt: createdAt(),
     ...voidColumns(),
@@ -1307,6 +1338,12 @@ export const billItems = pgTable(
     uniqueIndex('bill_items_consultation_once')
       .on(t.appointmentId)
       .where(sql`appointment_id is not null and voided_at is null`),
+    uniqueIndex('bill_items_care_entry_once')
+      .on(t.careEntryId)
+      .where(sql`care_entry_id is not null and voided_at is null`),
+    uniqueIndex('bill_items_bed_day_once')
+      .on(t.bedAssignmentId, t.serviceDate)
+      .where(sql`bed_assignment_id is not null and voided_at is null`),
   ],
 );
 
@@ -1562,11 +1599,356 @@ export const recordAccessLogs = pgTable(
       .notNull()
       .references(() => patients.id, { onDelete: 'cascade' }),
     encounterId: uuid('encounter_id').references(() => encounters.id, { onDelete: 'cascade' }),
-    action: text('action').$type<'view_history' | 'print_prescription'>().notNull(),
+    action: text('action')
+      .$type<'view_history' | 'print_prescription' | 'view_admission' | 'print_ipd_bill'>()
+      .notNull(),
     createdAt: createdAt(),
   },
   (t) => [
     index('record_access_logs_patient_idx').on(t.patientId, t.createdAt),
     index('record_access_logs_hospital_idx').on(t.hospitalId, t.createdAt),
   ],
+);
+
+/* ------------------------------------------------------------------- IPD */
+
+/**
+ * IPD: wards and beds, admissions, bedside care entries, the non-medicine
+ * price list and payers. Migration 0032 carries the reasoning; the design is
+ * docs/plans/ipd-mvp-implementation-plan.md §3.
+ *
+ * `admissions` and `care_entries` are clinical: invisible unless withTenant()
+ * was called with `{ clinical: true }`.
+ */
+
+export const admissionStatus = pgEnum('admission_status', [
+  'awaiting_bed',
+  'admitted',
+  'discharge_ready',
+  'discharged',
+  'cancelled',
+]);
+export const chargeItemKind = pgEnum('charge_item_kind', [
+  'consumable',
+  'procedure',
+  'service',
+  'room',
+]);
+export const payerKind = pgEnum('payer_kind', ['self', 'insurer', 'tpa', 'corporate']);
+
+/** Everything chargeable that is not a medicine. Null price = not priced yet. */
+export const chargeItems = pgTable(
+  'charge_items',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    kind: chargeItemKind('kind').notNull(),
+    name: text('name').notNull(),
+    unit: text('unit').notNull().default('unit'),
+    sellingPricePaise: integer('selling_price_paise'),
+    taxRateBp: integer('tax_rate_bp').notNull().default(0),
+    isTest: boolean('is_test').notNull().default(false),
+    active: boolean('active').notNull().default(true),
+    createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('charge_items_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('charge_items_identity_key').on(t.hospitalId, t.kind, sql`lower(name)`),
+    check('charge_items_test_is_service', sql`not is_test or kind = 'service'`),
+  ],
+);
+
+export const wards = pgTable(
+  'wards',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull(),
+    name: text('name').notNull(),
+    sortOrder: smallint('sort_order').notNull().default(0),
+    /** The room charge per day: a charge item of kind 'room'. */
+    dailyChargeItemId: uuid('daily_charge_item_id'),
+    active: boolean('active').notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('wards_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('wards_name_key').on(t.hospitalId, t.branchId, sql`lower(name)`),
+    foreignKey({
+      name: 'wards_daily_charge_fk',
+      columns: [t.hospitalId, t.dailyChargeItemId],
+      foreignColumns: [chargeItems.hospitalId, chargeItems.id],
+    }),
+  ],
+);
+
+export const beds = pgTable(
+  'beds',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    wardId: uuid('ward_id').notNull(),
+    label: text('label').notNull(),
+    sortOrder: smallint('sort_order').notNull().default(0),
+    active: boolean('active').notNull().default(true),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('beds_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('beds_label_key').on(t.wardId, sql`lower(label)`),
+    foreignKey({
+      name: 'beds_ward_fk',
+      columns: [t.hospitalId, t.wardId],
+      foreignColumns: [wards.hospitalId, wards.id],
+    }).onDelete('cascade'),
+  ],
+);
+
+/** Clinical. One stay, from Shift to IPD (or an emergency admission) to discharge. */
+export const admissions = pgTable(
+  'admissions',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    branchId: uuid('branch_id').notNull(),
+    admittingDoctorId: uuid('admitting_doctor_id').notNull(),
+    status: admissionStatus('status').notNull().default('awaiting_bed'),
+    reason: text('reason'),
+    requestedByUserId: uuid('requested_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+    admittedAt: timestamp('admitted_at', { withTimezone: true }),
+    admittedByUserId: uuid('admitted_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    dischargeReadyAt: timestamp('discharge_ready_at', { withTimezone: true }),
+    dischargeReadyByUserId: uuid('discharge_ready_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    dischargedAt: timestamp('discharged_at', { withTimezone: true }),
+    dischargedByUserId: uuid('discharged_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    cancelledByUserId: uuid('cancelled_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    cancelReason: text('cancel_reason'),
+    /** The family's running-bill link (0034): hashed token, expiry 7 days after discharge. */
+    billLinkTokenHash: text('bill_link_token_hash'),
+    billLinkCreatedAt: timestamp('bill_link_created_at', { withTimezone: true }),
+    billLinkExpiresAt: timestamp('bill_link_expires_at', { withTimezone: true }),
+    billLinkRevokedAt: timestamp('bill_link_revoked_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('admissions_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('admissions_tenant_encounter_key').on(
+      t.hospitalId,
+      t.id,
+      t.encounterId,
+      t.patientId,
+    ),
+    uniqueIndex('admissions_one_live_per_encounter')
+      .on(t.encounterId)
+      .where(sql`status <> 'cancelled'`),
+    index('admissions_census_idx')
+      .on(t.hospitalId, t.branchId, t.status)
+      .where(sql`status in ('awaiting_bed', 'admitted', 'discharge_ready')`),
+    foreignKey({
+      name: 'admissions_encounter_fk',
+      columns: [t.hospitalId, t.encounterId, t.patientId],
+      foreignColumns: [encounters.hospitalId, encounters.id, encounters.patientId],
+    }).onDelete('cascade'),
+  ],
+);
+
+/** Which bed, from when to when. Closed once by trigger; never edited. */
+export const bedAssignments = pgTable(
+  'bed_assignments',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id').notNull(),
+    bedId: uuid('bed_id').notNull(),
+    fromAt: timestamp('from_at', { withTimezone: true }).notNull().defaultNow(),
+    toAt: timestamp('to_at', { withTimezone: true }),
+    assignedByUserId: uuid('assigned_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('bed_assignments_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('bed_assignments_bed_occupied').on(t.bedId).where(sql`to_at is null`),
+    uniqueIndex('bed_assignments_admission_current')
+      .on(t.admissionId)
+      .where(sql`to_at is null`),
+    foreignKey({
+      name: 'bed_assignments_admission_fk',
+      columns: [t.hospitalId, t.admissionId],
+      foreignColumns: [admissions.hospitalId, admissions.id],
+    }).onDelete('cascade'),
+    foreignKey({
+      name: 'bed_assignments_bed_fk',
+      columns: [t.hospitalId, t.bedId],
+      foreignColumns: [beds.hospitalId, beds.id],
+    }),
+  ],
+);
+
+/** Clinical. What was given or used at the bedside. Void-only by trigger. */
+export const careEntries = pgTable(
+  'care_entries',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id').notNull(),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    medicineId: uuid('medicine_id'),
+    chargeItemId: uuid('charge_item_id'),
+    description: text('description').notNull(),
+    quantity: integer('quantity').notNull(),
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    clientId: uuid('client_id').notNull(),
+    createdAt: createdAt(),
+    ...voidColumns(),
+  },
+  (t) => [
+    uniqueIndex('care_entries_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('care_entries_client_key').on(t.hospitalId, t.clientId),
+    index('care_entries_admission_idx')
+      .on(t.admissionId, t.occurredAt)
+      .where(sql`voided_at is null`),
+    foreignKey({
+      name: 'care_entries_admission_fk',
+      columns: [t.hospitalId, t.admissionId, t.encounterId, t.patientId],
+      foreignColumns: [
+        admissions.hospitalId,
+        admissions.id,
+        admissions.encounterId,
+        admissions.patientId,
+      ],
+    }).onDelete('cascade'),
+    foreignKey({
+      name: 'care_entries_medicine_fk',
+      columns: [t.hospitalId, t.medicineId],
+      foreignColumns: [medicines.hospitalId, medicines.id],
+    }),
+    foreignKey({
+      name: 'care_entries_charge_item_fk',
+      columns: [t.hospitalId, t.chargeItemId],
+      foreignColumns: [chargeItems.hospitalId, chargeItems.id],
+    }),
+  ],
+);
+
+/** Who pays for the encounter. Billing data, not clinical. Void-only. */
+export const encounterPayers = pgTable(
+  'encounter_payers',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    kind: payerKind('kind').notNull(),
+    payerName: text('payer_name'),
+    policyNumber: text('policy_number'),
+    preauthAmountPaise: integer('preauth_amount_paise'),
+    approvedAmountPaise: integer('approved_amount_paise'),
+    createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    ...voidColumns(),
+  },
+  (t) => [
+    uniqueIndex('encounter_payers_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('encounter_payers_one_active')
+      .on(t.encounterId)
+      .where(sql`voided_at is null`),
+    foreignKey({
+      name: 'encounter_payers_encounter_fk',
+      columns: [t.hospitalId, t.encounterId, t.patientId],
+      foreignColumns: [encounters.hospitalId, encounters.id, encounters.patientId],
+    }).onDelete('cascade'),
+  ],
+);
+
+/** A registered shared ward tablet (0033). The cookie is never stored, only its hash. */
+export const wardDevices = pgTable(
+  'ward_devices',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull(),
+    label: text('label').notNull(),
+    tokenHash: text('token_hash').notNull().unique(),
+    registeredByUserId: uuid('registered_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    registeredAt: timestamp('registered_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => [uniqueIndex('ward_devices_tenant_key').on(t.hospitalId, t.id)],
+);
+
+/** Failed PIN tries per person per device, for the five-tries lock-out. */
+export const wardDevicePinAttempts = pgTable(
+  'ward_device_pin_attempts',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    deviceId: uuid('device_id').notNull(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    failedCount: integer('failed_count').notNull().default(0),
+    lockedUntil: timestamp('locked_until', { withTimezone: true }),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('ward_device_pin_attempts_key').on(t.deviceId, t.userId)],
+);
+
+/** Gap-free document numbers per hospital, kind and financial year (0034). */
+export const documentSequences = pgTable(
+  'document_sequences',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    fiscalYear: text('fiscal_year').notNull(),
+    lastNumber: integer('last_number').notNull().default(0),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('document_sequences_key').on(t.hospitalId, t.kind, t.fiscalYear)],
 );

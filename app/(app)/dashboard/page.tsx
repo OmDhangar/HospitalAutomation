@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { AutoRefresh } from '@/components/auto-refresh';
 import {
   Alert,
@@ -10,16 +11,37 @@ import {
   Stat,
   cn,
 } from '@/components/ui';
+import {
+  StethoscopeIcon,
+  PhoneIcon,
+  ClockIcon,
+  ZapIcon,
+  BuildingIcon,
+  FileTextIcon,
+  BedIcon,
+} from '@/components/icons';
 import { ConsultationGateProvider } from '@/components/clinical/consultation-gate';
 import { PaidToggle } from '@/components/paid-toggle';
 import { SubscriptionCard, UsageNotice } from '@/components/subscription';
 import { requireSession } from '@/lib/auth/session';
-import { can, canSwitchDashboardView, dashboardViewFor } from '@/lib/domain/permissions';
+import {
+  can,
+  canSwitchDashboardView,
+  dashboardViewFor,
+  homePathFor,
+} from '@/lib/domain/permissions';
 import type { PaymentStatus } from '@/lib/domain/patient-billing';
+import { formatIndianPhone } from '@/lib/domain/phone';
 import { formatTimeIn, minutesBetween } from '@/lib/domain/time';
 import { loadDashboardData } from '@/lib/services/dashboard-loader';
 import type { QueueRow } from '@/lib/services/queue';
+import {
+  countAdmittedForDoctorUser,
+  getIpdStatusesForAppointments,
+  type IpdStatus,
+} from '@/lib/services/ipd-census';
 import { ConsultationPanel } from './consultation-panel';
+import { IpdBadge, ShiftToIpdButton } from './shift-to-ipd-button';
 import {
   AddWalkInForm,
   CallNextButton,
@@ -27,6 +49,7 @@ import {
   PausePatientButton,
   PriorityButton,
   QueueActionButton,
+  ReceptionDashboardLayout,
   ResumePatientButton,
   TogglePauseButton,
   ViewModeToggle,
@@ -43,6 +66,8 @@ const waitedFor = (since: Date | null, now: Date): string => {
 
 export default async function DashboardPage({ searchParams }: PageProps<'/dashboard'>) {
   const session = await requireSession();
+  // A role that cannot work the queue (a nurse) has no business on it.
+  if (!can(session.role, 'queue.mutate')) redirect(homePathFor(session.role));
   const params = await searchParams;
   const now = new Date();
   const requestId = `page_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
@@ -114,6 +139,19 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
   const scheduledToday = snapshot?.rows.filter((row) => Boolean(row.scheduledSlotAt)) ?? [];
   const seenToday = snapshot?.completed ?? [];
 
+  // Shift to IPD (T1.4): the doctor's one click, and the badge that replaces it.
+  const canShift = can(session.role, 'ipd.shift') && !session.readOnly;
+  const ipdStatuses: Record<string, IpdStatus> = can(session.role, 'ipd.view')
+    ? await getIpdStatusesForAppointments(session.hospitalId, [
+        ...(serving ? [serving.appointmentId] : []),
+        ...seenToday.map((row) => row.appointmentId),
+      ])
+    : {};
+  const ipd: IpdRowContext = { statuses: ipdStatuses, canShift };
+  // The doctor's one tap to their admitted patients (T3.1).
+  const canSeeAdmitted = effectiveView === 'doctor' && can(session.role, 'ipd.dischargeReady');
+  const admittedCount = canSeeAdmitted ? await countAdmittedForDoctorUser(session.hospitalId, session.userId) : 0;
+
   /**
    * Everything a payment pill needs except the row. The doctor view always
    * gets a read-only pill: the doctor may be the owner, but in the consulting
@@ -139,8 +177,8 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
           {/* Personalized Doctor Header Bar */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-ink-200 bg-white p-4 sm:px-6 shadow-xs">
             <div className="flex items-center gap-3.5 min-w-0">
-              <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-brand-50 border border-brand-200 text-brand-700 text-xl font-bold">
-                🩺
+              <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-brand-50 border border-brand-200 text-brand-700 shadow-xs">
+                <StethoscopeIcon className="size-6 text-brand-600" />
               </div>
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
@@ -169,13 +207,23 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                     {snapshot?.paused ? 'On a break' : 'Live Consultations'}
                   </span>
                 </div>
-                <p className="text-xs text-ink-500 mt-0.5">
+                <p className="text-xs text-ink-500 mt-0.5 flex items-center gap-1.5">
+                  <BuildingIcon className="size-3 text-ink-400" />
                   {currentDoctor.branchName} · Consultation Room
                 </p>
               </div>
             </div>
 
             <div className="flex items-center gap-2.5 self-end sm:self-auto shrink-0">
+              {canSeeAdmitted ? (
+                <Link
+                  href="/ipd/my-patients"
+                  className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-brand-50 px-3 text-sm font-semibold text-brand-800 ring-1 ring-inset ring-brand-200 hover:bg-brand-100"
+                >
+                  <BedIcon className="size-4" />
+                  Admitted <span className="numeric">({admittedCount})</span>
+                </Link>
+              ) : null}
               <TogglePauseButton
                 doctorId={selectedId!}
                 paused={snapshot?.paused ?? false}
@@ -206,7 +254,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
             {/* Main Clinical Focus Area */}
             <ConsultationGateProvider>
             <div className="space-y-5 lg:col-span-2">
-              {/* NOW SERVING CARD (Large, High-Contrast with the 3 Core Clinical Actions) */}
+              {/* NOW SERVING CARD */}
               <Card>
                 <CardHeader
                   title="Now Serving"
@@ -238,6 +286,16 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                         </p>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <StatusPill status={serving.status} />
+                          {serving.patientPhone ? (
+                            <a
+                              href={`tel:${serving.patientPhone}`}
+                              className="inline-flex items-center gap-1.5 rounded-md bg-ink-100 px-2 py-0.5 text-xs font-semibold text-ink-700 hover:bg-ink-200 transition-colors"
+                              title="Call patient"
+                            >
+                              <PhoneIcon className="size-3 text-ink-500" />
+                              <span>{formatIndianPhone(serving.patientPhone)}</span>
+                            </a>
+                          ) : null}
                           <RowPaidToggle row={serving} payment={payment} />
                           <span className="text-sm text-ink-600 font-medium">
                             {serving.status === 'CALLED'
@@ -282,7 +340,6 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
 
                   {serving ? (
                     <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 sm:gap-2.5 w-full sm:w-auto">
-                      {/* Button 2: Pause Patient (Lab test / X-ray / Investigation) */}
                       <PausePatientButton
                         doctorId={selectedId!}
                         appointmentId={serving.appointmentId}
@@ -291,13 +348,18 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                         size="md"
                       />
 
-                      {/* Button 3: Skip Patient */}
                       <QueueActionButton
                         doctorId={selectedId!}
                         appointmentId={serving.appointmentId}
                         action="skip"
                         label="Skip"
                       />
+
+                      {ipd.statuses[serving.appointmentId] ? (
+                        <IpdBadge label={ipdLabel(ipd.statuses[serving.appointmentId])} />
+                      ) : canShift ? (
+                        <ShiftToIpdButton appointmentId={serving.appointmentId} />
+                      ) : null}
 
                       {serving.status === 'CALLED' ? (
                         <div className="col-span-2 sm:col-auto">
@@ -315,10 +377,6 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                 </div>
               </Card>
 
-              {/*
-               * Keyed by appointment so a new patient gets a fresh panel, and
-               * so the panel is never re-initialised from props mid-typing.
-               */}
               {serving && showConsultation ? (
                 <ConsultationPanel key={serving.appointmentId} appointmentId={serving.appointmentId} />
               ) : null}
@@ -355,7 +413,6 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
 
             {/* Sidebar: Stats & Needs Attention (Skipped & Paused) */}
             <div className="space-y-5">
-              {/* Today's Stats Card */}
               <Card>
                 <CardHeader title="Today's Overview" hint={snapshot?.serviceDate} />
                 <dl className="grid grid-cols-2 divide-x divide-y divide-ink-200 [&>*]:border-ink-200">
@@ -378,7 +435,6 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                 </dl>
               </Card>
 
-              {/* Parked / Needs Attention List (Skipped & On-Hold patients) */}
               <ParkedPatientsCard
                 parked={snapshot?.parked ?? []}
                 doctorId={selectedId!}
@@ -386,7 +442,10 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                 payment={payment}
               />
 
-              {/* Scheduled Appointments Preview */}
+              {canShift && seenToday.length > 0 ? (
+                <DoctorSeenTodayCard rows={seenToday} ipd={ipd} />
+              ) : null}
+
               {scheduledToday.length > 0 ? (
                 <Card>
                   <CardHeader
@@ -402,8 +461,9 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                           </p>
                           <p className="text-ink-500">Token #{s.tokenNumber}</p>
                         </div>
-                        <span className="rounded bg-brand-50 border border-brand-200 px-2 py-1 font-bold text-brand-900">
-                          🕒 {formatTimeIn(session.timezone, s.scheduledSlotAt!)}
+                        <span className="inline-flex items-center gap-1 rounded-md bg-brand-50 border border-brand-200 px-2 py-1 font-bold text-brand-900">
+                          <ClockIcon className="size-3 text-brand-700" />
+                          <span>{formatTimeIn(session.timezone, s.scheduledSlotAt!)}</span>
                         </span>
                       </li>
                     ))}
@@ -455,7 +515,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
           {scheduledToday.length > 0 ? (
             <div className="rounded-xl border border-brand-200 bg-brand-50/70 p-3.5 text-xs text-brand-950 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <span className="text-base">🕒</span>
+                <ClockIcon className="size-4 text-brand-700 shrink-0" />
                 <span>
                   <strong>
                     {scheduledToday.length} Scheduled Appointment{scheduledToday.length === 1 ? '' : 's'} Today:
@@ -474,135 +534,146 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
             </div>
           ) : null}
 
-          <div className="grid items-start gap-5 lg:grid-cols-3">
-            {/* Left 2 cols: Live Queue Table */}
-            <div className="space-y-5 lg:col-span-2">
-              <Card>
-                <CardHeader
-                  title="Now serving"
-                  hint={snapshot?.doctorName}
-                  action={
-                    <TogglePauseButton
-                      doctorId={selectedId ?? ''}
-                      paused={snapshot?.paused ?? false}
-                    />
-                  }
-                />
-
-                <div className="p-4 sm:p-6">
-                  {serving ? (
-                    <div className="flex flex-wrap items-center gap-4 sm:gap-6">
-                      <div
-                        className={cn(
-                          'flex size-20 shrink-0 items-center justify-center rounded-2xl sm:size-28',
-                          'bg-brand-600 text-white',
-                          serving.status === 'CALLED' && 'pulse-ring',
-                        )}
-                      >
-                        <span className="numeric text-4xl font-bold sm:text-5xl">
-                          {serving.tokenNumber}
-                        </span>
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-2xl font-semibold text-ink-900">
-                          {serving.patientName}
-                          {serving.patientAge ? (
-                            <span className="ml-2 text-lg font-normal text-ink-500">
-                              ({serving.patientAge} yrs)
-                            </span>
-                          ) : null}
-                        </p>
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <StatusPill status={serving.status} />
-                          <RowPaidToggle row={serving} payment={payment} />
-                          <span className="text-sm text-ink-500">
-                            {serving.status === 'CALLED'
-                              ? `called ${waitedFor(serving.calledAt, now)} ago`
-                              : `with doctor ${waitedFor(serving.calledAt, now)}`}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-4 py-2 sm:gap-6">
-                      <div className="flex size-20 shrink-0 items-center justify-center rounded-2xl bg-ink-100 text-ink-300 sm:size-28">
-                        <span className="numeric text-4xl font-bold sm:text-5xl">–</span>
-                      </div>
-                      <div>
-                        <p className="text-lg font-medium text-ink-700">
-                          Nobody has been called yet
-                        </p>
-                        <p className="mt-1 text-sm text-ink-500">
-                          {waiting.length > 0
-                            ? `${waiting.length} patient${waiting.length === 1 ? '' : 's'} waiting.`
-                            : 'The queue is empty.'}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-ink-200 bg-ink-50 p-4 sm:px-6 sm:py-4">
-                  <CallNextButton
-                    doctorId={selectedId ?? ''}
-                    disabled={waiting.length === 0 && !serving}
+          {/* Responsive Layout (Mobile Segmented Tabs + Desktop Multi-Column) */}
+          <ReceptionDashboardLayout
+            waitingCount={waiting.length}
+            queueContent={
+              <>
+                <Card>
+                  <CardHeader
+                    title="Now serving"
+                    hint={snapshot?.doctorName}
+                    action={
+                      <TogglePauseButton
+                        doctorId={selectedId ?? ''}
+                        paused={snapshot?.paused ?? false}
+                      />
+                    }
                   />
 
-                  {serving ? (
-                    <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 sm:gap-2.5 w-full sm:w-auto">
-                      <QueueActionButton
-                        doctorId={selectedId!}
-                        appointmentId={serving.appointmentId}
-                        action="skip"
-                        label="Skip"
-                      />
-                      <PausePatientButton
-                        doctorId={selectedId!}
-                        appointmentId={serving.appointmentId}
-                        patientName={serving.patientName}
-                        tokenNumber={serving.tokenNumber}
-                        size="md"
-                      />
-                      {serving.status === 'CALLED' ? (
-                        <div className="col-span-2 sm:col-auto">
-                          <QueueActionButton
-                            doctorId={selectedId!}
-                            appointmentId={serving.appointmentId}
-                            action="start_consultation"
-                            label="Start consultation"
-                            className="w-full sm:w-auto"
-                          />
+                  <div className="p-4 sm:p-6">
+                    {serving ? (
+                      <div className="flex flex-wrap items-center gap-4 sm:gap-6">
+                        <div
+                          className={cn(
+                            'flex size-20 shrink-0 items-center justify-center rounded-2xl sm:size-28',
+                            'bg-brand-600 text-white',
+                            serving.status === 'CALLED' && 'pulse-ring',
+                          )}
+                        >
+                          <span className="numeric text-4xl font-bold sm:text-5xl">
+                            {serving.tokenNumber}
+                          </span>
                         </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              </Card>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-2xl font-semibold text-ink-900">
+                            {serving.patientName}
+                            {serving.patientAge ? (
+                              <span className="ml-2 text-lg font-normal text-ink-500">
+                                ({serving.patientAge} yrs)
+                              </span>
+                            ) : null}
+                          </p>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <StatusPill status={serving.status} />
+                            {serving.patientPhone ? (
+                              <a
+                                href={`tel:${serving.patientPhone}`}
+                                className="inline-flex items-center gap-1.5 rounded-md bg-ink-100 px-2 py-0.5 text-xs font-semibold text-ink-700 hover:bg-ink-200 transition-colors"
+                                title="Call patient"
+                              >
+                                <PhoneIcon className="size-3 text-ink-500" />
+                                <span>{formatIndianPhone(serving.patientPhone)}</span>
+                              </a>
+                            ) : null}
+                            <RowPaidToggle row={serving} payment={payment} />
+                            <span className="text-sm text-ink-500">
+                              {serving.status === 'CALLED'
+                                ? `called ${waitedFor(serving.calledAt, now)} ago`
+                                : `with doctor ${waitedFor(serving.calledAt, now)}`}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-4 py-2 sm:gap-6">
+                        <div className="flex size-20 shrink-0 items-center justify-center rounded-2xl bg-ink-100 text-ink-300 sm:size-28">
+                          <span className="numeric text-4xl font-bold sm:text-5xl">–</span>
+                        </div>
+                        <div>
+                          <p className="text-lg font-medium text-ink-700">
+                            Nobody has been called yet
+                          </p>
+                          <p className="mt-1 text-sm text-ink-500">
+                            {waiting.length > 0
+                              ? `${waiting.length} patient${waiting.length === 1 ? '' : 's'} waiting.`
+                              : 'The queue is empty.'}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
 
-              <Card>
-                <CardHeader title="Waiting" hint={`${waiting.length} in line`} />
-                {waiting.length === 0 ? (
-                  <EmptyState title="Nobody is waiting" hint="Add a walk-in to start the queue." />
-                ) : (
-                  <ul className="divide-y divide-ink-200">
-                    {waiting.map((row, index) => (
-                      <WaitingRow
-                        key={row.appointmentId}
-                        row={row}
-                        position={index + 1}
-                        doctorId={selectedId!}
-                        now={now}
-                        timezone={session.timezone}
-                        payment={payment}
-                      />
-                    ))}
-                  </ul>
-                )}
-              </Card>
-            </div>
+                  <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-ink-200 bg-ink-50 p-4 sm:px-6 sm:py-4">
+                    <CallNextButton
+                      doctorId={selectedId ?? ''}
+                      disabled={waiting.length === 0 && !serving}
+                    />
 
-            {/* Right col: Add Walk-in, Stats, Needs Attention, Subscriptions */}
-            <div className="space-y-5">
+                    {serving ? (
+                      <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 sm:gap-2.5 w-full sm:w-auto">
+                        <QueueActionButton
+                          doctorId={selectedId!}
+                          appointmentId={serving.appointmentId}
+                          action="skip"
+                          label="Skip"
+                        />
+                        <PausePatientButton
+                          doctorId={selectedId!}
+                          appointmentId={serving.appointmentId}
+                          patientName={serving.patientName}
+                          tokenNumber={serving.tokenNumber}
+                          size="md"
+                        />
+                        {serving.status === 'CALLED' ? (
+                          <div className="col-span-2 sm:col-auto">
+                            <QueueActionButton
+                              doctorId={selectedId!}
+                              appointmentId={serving.appointmentId}
+                              action="start_consultation"
+                              label="Start consultation"
+                              className="w-full sm:w-auto"
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                </Card>
+
+                <Card>
+                  <CardHeader title="Waiting" hint={`${waiting.length} in line`} />
+                  {waiting.length === 0 ? (
+                    <EmptyState title="Nobody is waiting" hint="Add a walk-in to start the queue." />
+                  ) : (
+                    <ul className="divide-y divide-ink-200">
+                      {waiting.map((row, index) => (
+                        <WaitingRow
+                          key={row.appointmentId}
+                          row={row}
+                          position={index + 1}
+                          doctorId={selectedId!}
+                          now={now}
+                          timezone={session.timezone}
+                          payment={payment}
+                        />
+                      ))}
+                    </ul>
+                  )}
+                </Card>
+              </>
+            }
+            addContent={
               <Card>
                 <CardHeader title="Add walk-in" hint="Issues a token and sends the queue link" />
                 <AddWalkInForm
@@ -613,49 +684,52 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                   feeKnown={consultationFeePaise !== null}
                 />
               </Card>
+            }
+            overviewContent={
+              <>
+                {seenToday.length > 0 ? (
+                  <SeenTodayCard rows={seenToday} payment={payment} ipd={ipd} />
+                ) : null}
 
-              {seenToday.length > 0 ? (
-                <SeenTodayCard rows={seenToday} payment={payment} />
-              ) : null}
+                <Card>
+                  <CardHeader title="Today" hint={snapshot?.serviceDate} />
+                  <dl className="grid grid-cols-2 divide-x divide-y divide-ink-200 [&>*]:border-ink-200">
+                    <Stat label="Waiting" value={snapshot?.waitingCount ?? 0} tone="brand" />
+                    <Stat label="Completed" value={snapshot?.completedCount ?? 0} />
+                    <Stat
+                      label="Avg consult"
+                      value={
+                        snapshot?.medianConsultMinutes
+                          ? `${Math.round(snapshot.medianConsultMinutes)}m`
+                          : '—'
+                      }
+                      hint="median today"
+                    />
+                    <Stat
+                      label="Running late"
+                      value={snapshot?.delayMinutes ? `${snapshot.delayMinutes}m` : 'On time'}
+                      tone={snapshot && snapshot.delayMinutes > 20 ? 'warn' : 'default'}
+                    />
+                  </dl>
+                </Card>
 
-              <Card>
-                <CardHeader title="Today" hint={snapshot?.serviceDate} />
-                <dl className="grid grid-cols-2 divide-x divide-y divide-ink-200 [&>*]:border-ink-200">
-                  <Stat label="Waiting" value={snapshot?.waitingCount ?? 0} tone="brand" />
-                  <Stat label="Completed" value={snapshot?.completedCount ?? 0} />
-                  <Stat
-                    label="Avg consult"
-                    value={
-                      snapshot?.medianConsultMinutes
-                        ? `${Math.round(snapshot.medianConsultMinutes)}m`
-                        : '—'
-                    }
-                    hint="median today"
-                  />
-                  <Stat
-                    label="Running late"
-                    value={snapshot?.delayMinutes ? `${snapshot.delayMinutes}m` : 'On time'}
-                    tone={snapshot && snapshot.delayMinutes > 20 ? 'warn' : 'default'}
-                  />
-                </dl>
-              </Card>
-
-              <ParkedPatientsCard
-                parked={snapshot?.parked ?? []}
-                doctorId={selectedId!}
-                timezone={session.timezone}
-                payment={payment}
-              />
-
-              {usage ? (
-                <SubscriptionCard
-                  usage={usage}
-                  tierName={tierName}
+                <ParkedPatientsCard
+                  parked={snapshot?.parked ?? []}
+                  doctorId={selectedId!}
                   timezone={session.timezone}
+                  payment={payment}
                 />
-              ) : null}
-            </div>
-          </div>
+
+                {usage ? (
+                  <SubscriptionCard
+                    usage={usage}
+                    tierName={tierName}
+                    timezone={session.timezone}
+                  />
+                ) : null}
+              </>
+            }
+          />
         </div>
       )}
     </>
@@ -700,6 +774,16 @@ function ParkedPatientsCard({
                   </p>
                   <div className="mt-0.5 flex flex-wrap items-center gap-2">
                     <StatusPill status={row.status} />
+                    {row.patientPhone ? (
+                      <a
+                        href={`tel:${row.patientPhone}`}
+                        className="inline-flex items-center gap-1.5 rounded-md bg-ink-100 px-2 py-0.5 text-xs font-semibold text-ink-700 hover:bg-ink-200 transition-colors"
+                        title="Call patient"
+                      >
+                        <PhoneIcon className="size-3 text-ink-500" />
+                        <span>{formatIndianPhone(row.patientPhone)}</span>
+                      </a>
+                    ) : null}
                     <RowPaidToggle row={row} payment={payment} />
                     {row.status === 'HELD' && row.resumeAt ? (
                       <span className="text-xs text-amber-800 font-medium">
@@ -770,14 +854,29 @@ function WaitingRow({
             </p>
             {row.scheduledSlotAt ? (
               <span className="inline-flex items-center gap-1 rounded bg-brand-100 px-1.5 py-0.5 text-[10px] font-bold text-brand-900">
-                🕒 {formatTimeIn(timezone, row.scheduledSlotAt)}
+                <ClockIcon className="size-3 text-brand-800" />
+                <span>{formatTimeIn(timezone, row.scheduledSlotAt)}</span>
               </span>
+            ) : null}
+            {row.patientPhone ? (
+              <a
+                href={`tel:${row.patientPhone}`}
+                className="inline-flex items-center gap-1.5 rounded-md bg-ink-100 px-2 py-0.5 text-xs font-semibold text-ink-700 hover:bg-ink-200 transition-colors"
+                title="Call patient"
+              >
+                <PhoneIcon className="size-3 text-ink-500" />
+                <span>{formatIndianPhone(row.patientPhone)}</span>
+              </a>
             ) : null}
             <RowPaidToggle row={row} payment={payment} />
           </div>
-          <p className="text-xs text-ink-500 mt-0.5">
-            #{position} in line · waiting {waitedFor(row.enqueuedAt, now)}
-            {row.priority > 0 ? ' · ⚡ priority' : ''}
+          <p className="text-xs text-ink-500 mt-0.5 flex items-center gap-1">
+            <span>#{position} in line · waiting {waitedFor(row.enqueuedAt, now)}</span>
+            {row.priority > 0 ? (
+              <span className="inline-flex items-center gap-0.5 text-amber-700 font-semibold ml-1">
+                · <ZapIcon className="size-3 text-amber-600 inline" /> priority
+              </span>
+            ) : null}
           </p>
         </div>
       </div>
@@ -832,7 +931,15 @@ function RowPaidToggle({ row, payment }: { row: QueueRow; payment: PaymentPillCo
  * Patients the doctor has finished with. The queue forgets them; the desk
  * cannot, because in most OPDs the fee is paid on the way out.
  */
-function SeenTodayCard({ rows, payment }: { rows: QueueRow[]; payment: PaymentPillContext }) {
+function SeenTodayCard({
+  rows,
+  payment,
+  ipd,
+}: {
+  rows: QueueRow[];
+  payment: PaymentPillContext;
+  ipd: IpdRowContext;
+}) {
   const unpaid = rows.filter((row) => (payment.statuses[row.appointmentId] ?? 'unpaid') !== 'paid');
   return (
     <Card>
@@ -849,7 +956,49 @@ function SeenTodayCard({ rows, payment }: { rows: QueueRow[]; payment: PaymentPi
               </span>
               <p className="truncate text-sm font-semibold text-ink-900">{row.patientName}</p>
             </div>
-            <RowPaidToggle row={row} payment={payment} />
+            <div className="flex shrink-0 items-center gap-2">
+              {ipd.statuses[row.appointmentId] ? (
+                <IpdBadge label={ipdLabel(ipd.statuses[row.appointmentId])} />
+              ) : ipd.canShift ? (
+                <ShiftToIpdButton appointmentId={row.appointmentId} compact />
+              ) : null}
+              <RowPaidToggle row={row} payment={payment} />
+            </div>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+/** Which OPD rows are on the IPD side, and whether this user may shift one. */
+type IpdRowContext = { statuses: Record<string, IpdStatus>; canShift: boolean };
+
+const ipdLabel = (status: IpdStatus): string =>
+  status === 'awaiting_bed' ? 'awaiting bed' : status === 'discharge_ready' ? 'going home' : 'admitted';
+
+/**
+ * The doctor's own Seen today: the doctor may decide to admit after the
+ * consultation is over, so each finished patient keeps a one-tap Shift to IPD.
+ */
+function DoctorSeenTodayCard({ rows, ipd }: { rows: QueueRow[]; ipd: IpdRowContext }) {
+  return (
+    <Card>
+      <CardHeader title="Seen today" hint="Admit a patient after the consultation" />
+      <ul className="max-h-80 divide-y divide-ink-200 overflow-y-auto">
+        {rows.map((row) => (
+          <li key={row.appointmentId} className="flex items-center justify-between gap-3 px-4 py-2.5">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="numeric flex size-8 shrink-0 items-center justify-center rounded-lg bg-ink-100 text-sm font-bold text-ink-600">
+                {row.tokenNumber}
+              </span>
+              <p className="truncate text-sm font-semibold text-ink-900">{row.patientName}</p>
+            </div>
+            {ipd.statuses[row.appointmentId] ? (
+              <IpdBadge label={ipdLabel(ipd.statuses[row.appointmentId])} />
+            ) : (
+              <ShiftToIpdButton appointmentId={row.appointmentId} compact />
+            )}
           </li>
         ))}
       </ul>

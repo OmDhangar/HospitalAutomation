@@ -3,12 +3,14 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { requireWritableSession } from '@/lib/auth/session';
+import { parsePriceEdits } from '@/lib/domain/ipd-config';
 import { parsePercentToBasisPoints, parseRupeesToPaise } from '@/lib/domain/patient-billing';
 import { can } from '@/lib/domain/permissions';
 import {
   MedicineError,
   addStarterMedicines,
   createMedicine,
+  setMedicinePrices,
   setMedicineActive,
   updateMedicine,
 } from '@/lib/services/medicines';
@@ -32,7 +34,7 @@ async function authorize() {
 const back = (params: Record<string, string>, keep: FormData): never => {
   const query = new URLSearchParams(params);
   // Return to the same filter and search the owner was looking at.
-  for (const key of ['q', 'filter']) {
+  for (const key of ['q', 'filter', 'mode']) {
     const value = String(keep.get(`_${key}`) ?? '');
     if (value) query.set(key, value);
   }
@@ -132,6 +134,33 @@ export async function addStarterMedicinesAction(form: FormData) {
         added > 0
           ? `Added ${added} common medicines. Set prices for the ones you stock.`
           : 'All the common medicines are already in your list.',
+    },
+    form,
+  );
+}
+
+/**
+ * The "Set prices" screen's single Save: one box per unpriced medicine. A
+ * medicine priced for the first time also bills the bedside entries that were
+ * waiting for it.
+ */
+export async function setMedicinePricesAction(form: FormData) {
+  const session = await authorize();
+  const edits = parsePriceEdits(
+    [...form.entries()].map(([key, value]) => [key, String(value)] as [string, string]),
+  );
+  if (!edits.ok) back({ error: edits.error }, form);
+  const { changed, billed } = await setMedicinePrices({
+    hospitalId: session.hospitalId,
+    edits: (edits as { ok: true; value: { id: string; sellingPricePaise: number }[] }).value,
+    actorUserId: session.userId,
+  });
+  back(
+    {
+      saved:
+        changed === 0
+          ? 'No prices changed.'
+          : `${changed} price${changed === 1 ? '' : 's'} saved${billed > 0 ? `, and ${billed} waiting entries billed` : ''}.`,
     },
     form,
   );

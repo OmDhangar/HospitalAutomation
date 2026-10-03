@@ -15,6 +15,8 @@ import {
 } from '@/lib/db/schema';
 import { hashPassword, passwordProblem, unguessablePassword } from '@/lib/security/password';
 import { assertEmailUnclaimed, StaffAccountError } from './auth';
+import { addStarterChargeItemsInTx } from './ipd-config';
+import { addStarterMedicinesInTx } from './medicines';
 import { startSubscription } from './subscriptions';
 import { bindHospitalWaba } from './whatsapp-byo';
 import { assignNumberToHospital } from './whatsapp-integration';
@@ -397,6 +399,22 @@ export async function createHospital(args: CreateHospitalParams): Promise<Create
         effectiveFrom: today,
       });
     }
+  }
+
+  /**
+   * Starter catalogues (D19, D-SC): common medicines and IPD items, loaded
+   * unpriced so staff pick from a list on day one and the owner only enters
+   * prices. A warning rather than a failure, like the subscription above: a
+   * hospital without them is still usable, and Settings offers the same lists
+   * as a button.
+   */
+  try {
+    await db.transaction(async (tx) => {
+      await addStarterMedicinesInTx(tx, { hospitalId: hospital.id, actorUserId: null });
+      await addStarterChargeItemsInTx(tx, { hospitalId: hospital.id, actorUserId: null });
+    });
+  } catch (err) {
+    console.warn('[platform:createHospital] starter catalogue warning:', err);
   }
 
   /**

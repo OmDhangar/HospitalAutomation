@@ -297,6 +297,8 @@ export async function setConsultationPaid(args: {
    * checked the actor may set prices.
    */
   setFeePaise?: number;
+  reason?: string;
+  waiveCharges?: boolean;
   actorUserId: string;
 }): Promise<Settlement> {
   return withTenant(args.hospitalId, async (tx) => {
@@ -346,15 +348,33 @@ export async function setConsultationPaid(args: {
         metadata: { encounterId: encounter.id, amountPaise: outstanding, method: args.method ?? 'cash' },
       });
     } else {
+      const voidReason = args.reason || 'Marked unpaid at the desk';
+
       const voided = await tx
         .update(patientPayments)
         .set({
           voidedAt: new Date(),
           voidedByUserId: args.actorUserId,
-          voidReason: 'Marked unpaid at the desk',
+          voidReason,
         })
         .where(and(eq(patientPayments.encounterId, encounter.id), isNull(patientPayments.voidedAt)))
         .returning({ id: patientPayments.id, amountPaise: patientPayments.amountPaise });
+
+      if (args.waiveCharges) {
+        await tx
+          .update(billItems)
+          .set({
+            voidedAt: new Date(),
+            voidedByUserId: args.actorUserId,
+            voidReason,
+          })
+          .where(
+            and(
+              eq(billItems.appointmentId, args.appointmentId),
+              isNull(billItems.voidedAt),
+            ),
+          );
+      }
 
       if (voided.length > 0) {
         await tx.insert(auditLogs).values({
@@ -363,13 +383,74 @@ export async function setConsultationPaid(args: {
           action: 'billing.payment_voided',
           objectType: 'encounter',
           objectId: encounter.id,
-          metadata: { paymentIds: voided.map((p) => p.id), reason: 'Marked unpaid at the desk' },
+          metadata: {
+            paymentIds: voided.map((p) => p.id),
+            reason: voidReason,
+            waiveCharges: args.waiveCharges ?? false,
+          },
         });
       }
     }
 
     return settlementInTx(tx, encounter.id);
   });
+}
+
+/**
+ * The running total of a stay: what has been charged on every bill that is
+ * not cancelled, and what has been received (deposits and payments, less
+ * refunds). For the patient IPD page; the caller checks `billing.collect`.
+ */
+export async function getEncounterSettlement(hospitalId: string, encounterId: string): Promise<Settlement> {
+  return withTenant(hospitalId, (tx) => settlementInTx(tx, encounterId));
+}
+
+/**
+ * Money taken before the bill is final: an IPD deposit at admission, or a
+ * part-payment during the stay. It hangs off the encounter, not a bill
+ * (0026), and counts towards whatever the final bill comes to. The caller
+ * must have checked `billing.collect`.
+ */
+export async function recordDepositInTx(
+  tx: Tx,
+  args: {
+    encounter: Pick<EncounterRow, 'id' | 'hospitalId' | 'patientId'>;
+    amountPaise: number;
+    method?: (typeof patientPayments.$inferInsert)['method'];
+    reference?: string | null;
+    actorUserId: string;
+  },
+): Promise<{ id: string }> {
+  if (!Number.isSafeInteger(args.amountPaise) || args.amountPaise <= 0) {
+    throw new PatientBillingError('Enter a deposit of more than ₹0');
+  }
+  const [payment] = await tx
+    .insert(patientPayments)
+    .values({
+      hospitalId: args.encounter.hospitalId,
+      encounterId: args.encounter.id,
+      patientId: args.encounter.patientId,
+      amountPaise: args.amountPaise,
+      method: args.method ?? 'cash',
+      reference: args.reference ?? null,
+      receivedByUserId: args.actorUserId,
+    })
+    .returning({ id: patientPayments.id });
+
+  await tx.insert(auditLogs).values({
+    hospitalId: args.encounter.hospitalId,
+    actorUserId: args.actorUserId,
+    action: 'billing.payment_recorded',
+    objectType: 'patient_payment',
+    objectId: payment.id,
+    metadata: {
+      encounterId: args.encounter.id,
+      amountPaise: args.amountPaise,
+      method: args.method ?? 'cash',
+      kind: 'deposit',
+    },
+  });
+  return payment;
 }
 
 /**
