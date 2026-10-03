@@ -1,10 +1,11 @@
+import { SavedNotice } from '@/components/saved-notice';
 import Link from 'next/link';
 import { Alert, Button, Card, EmptyState, cn } from '@/components/ui';
 import { requireSession } from '@/lib/auth/session';
 import { dayOfStay, sinceLabel } from '@/lib/domain/admission';
 import { can } from '@/lib/domain/permissions';
 import { getTestChips, listMyAdmittedPatients } from '@/lib/services/doctor-ipd';
-import { orderTestsAction, setDischargeReadyAction } from '../actions';
+import { orderTestsAction, setDischargeReadyAction, undoIpdAction } from '../actions';
 
 export const metadata = { title: 'My patients · IPD' };
 
@@ -38,7 +39,13 @@ export default async function MyPatientsPage({ searchParams }: PageProps<'/ipd/m
         My patients <span className="numeric font-normal text-ink-500">({patients.length})</span>
       </h1>
       {typeof params.error === 'string' ? <Alert tone="error">{params.error}</Alert> : null}
-      {typeof params.saved === 'string' ? <Alert tone="success">{params.saved}</Alert> : null}
+      {typeof params.saved === 'string' ? (
+        <SavedNotice
+          message={params.saved}
+          undo={typeof params.undo === 'string' ? params.undo : null}
+          action={undoIpdAction} hidden={{ _back: '/ipd/my-patients' }}
+        />
+      ) : null}
 
       {!linkedDoctor && !seeAll ? (
         <Card>

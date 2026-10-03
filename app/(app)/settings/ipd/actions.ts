@@ -24,6 +24,8 @@ import {
   updateChargeItem,
   updateWard,
 } from '@/lib/services/ipd-config';
+import { UndoError, undoAddBeds, undoCreateItem, undoCreateWard, undoPriceBatch } from '@/lib/services/ipd-undo';
+import { formatUndoToken, idList, isId, parseUndoToken } from '@/lib/domain/undo';
 
 /**
  * Settings → IPD. Plain form posts that redirect back with a message, the
@@ -84,6 +86,7 @@ export async function createWardAction(form: FormData) {
   );
   back(WARDS_PAGE, {
     saved: result.bedsAdded > 0 ? `Ward added with ${result.bedsAdded} beds` : 'Ward added. Now add its beds.',
+    undo: formatUndoToken('ward', result.wardId),
   });
 }
 
@@ -112,12 +115,15 @@ export async function toggleWardAction(form: FormData) {
       actorUserId: session.userId,
     }),
   );
-  back(WARDS_PAGE, { saved: active ? 'Ward reopened' : 'Ward closed. Its history is kept.' });
+  back(WARDS_PAGE, {
+    saved: active ? 'Ward reopened' : 'Ward closed. Its history is kept.',
+    undo: formatUndoToken('toggle-ward', text(form, 'wardId'), String(active)),
+  });
 }
 
 export async function addBedsAction(form: FormData) {
   const session = await authorize('ipd.configure');
-  const { added, skipped } = await attempt(WARDS_PAGE, form, () =>
+  const { added, skipped, bedIds } = await attempt(WARDS_PAGE, form, () =>
     addBeds({
       hospitalId: session.hospitalId,
       wardId: text(form, 'wardId'),
@@ -130,6 +136,7 @@ export async function addBedsAction(form: FormData) {
       skipped > 0
         ? `Added ${added} beds. ${skipped} already existed.`
         : `Added ${added} bed${added === 1 ? '' : 's'}`,
+    ...(bedIds.length > 0 ? { undo: formatUndoToken('beds', bedIds.join(',')) } : {}),
   });
 }
 
@@ -144,7 +151,10 @@ export async function toggleBedAction(form: FormData) {
       actorUserId: session.userId,
     }),
   );
-  back(WARDS_PAGE, { saved: active ? 'Bed back in use' : 'Bed taken out of use. Its history is kept.' });
+  back(WARDS_PAGE, {
+    saved: active ? 'Bed back in use' : 'Bed taken out of use. Its history is kept.',
+    undo: formatUndoToken('toggle-bed', text(form, 'bedId'), String(active)),
+  });
 }
 
 /* ------------------------------------------------------------ price list */
@@ -175,21 +185,21 @@ export async function createChargeItemAction(form: FormData) {
   const session = await authorize('billing.price');
   const read = readChargeItem(form);
   if ('error' in read) back(ITEMS_PAGE, { error: read.error }, form);
-  await attempt(ITEMS_PAGE, form, () =>
+  const created = await attempt(ITEMS_PAGE, form, () =>
     createChargeItem({
       hospitalId: session.hospitalId,
       input: (read as { input: Record<string, unknown> }).input,
       actorUserId: session.userId,
     }),
   );
-  back(ITEMS_PAGE, { saved: 'Item added' }, form);
+  back(ITEMS_PAGE, { saved: 'Item added', undo: formatUndoToken('item', created.id) }, form);
 }
 
 export async function updateChargeItemAction(form: FormData) {
   const session = await authorize('billing.price');
   const read = readChargeItem(form);
   if ('error' in read) back(ITEMS_PAGE, { error: read.error }, form);
-  const { billed } = await attempt(ITEMS_PAGE, form, () =>
+  const { billed, batch } = await attempt(ITEMS_PAGE, form, () =>
     updateChargeItem({
       hospitalId: session.hospitalId,
       chargeItemId: text(form, 'chargeItemId'),
@@ -204,6 +214,7 @@ export async function updateChargeItemAction(form: FormData) {
         billed > 0
           ? `Saved, and ${billed} entr${billed === 1 ? 'y' : 'ies'} waiting for this price ${billed === 1 ? 'is' : 'are'} now billed.`
           : 'Saved. Bills already issued keep their old price.',
+      undo: formatUndoToken('prices', batch),
     },
     form,
   );
@@ -220,12 +231,19 @@ export async function toggleChargeItemAction(form: FormData) {
       actorUserId: session.userId,
     }),
   );
-  back(ITEMS_PAGE, { saved: active ? 'Item restored' : 'Item removed. Old bills still show it.' }, form);
+  back(
+    ITEMS_PAGE,
+    {
+      saved: active ? 'Item restored' : 'Item removed. Old bills still show it.',
+      undo: formatUndoToken('toggle-item', text(form, 'chargeItemId'), String(active)),
+    },
+    form,
+  );
 }
 
 export async function addStarterChargeItemsAction(form: FormData) {
   const session = await authorize('billing.price');
-  const { added } = await addStarterChargeItems({
+  const { added, batch } = await addStarterChargeItems({
     hospitalId: session.hospitalId,
     actorUserId: session.userId,
   });
@@ -236,6 +254,7 @@ export async function addStarterChargeItemsAction(form: FormData) {
         added > 0
           ? `Added ${added} common items without prices. Set prices for the ones you charge.`
           : 'All the common items are already in your list.',
+      ...(added > 0 ? { undo: formatUndoToken('prices', batch) } : {}),
     },
     form,
   );
@@ -259,7 +278,7 @@ export async function importChargeItemsAction(form: FormData) {
   if (result.unchanged > 0) parts.push(`${result.unchanged} unchanged`);
   if (preview.errors.length > 0) parts.push(`${preview.errors.length} skipped`);
   if (result.billed > 0) parts.push(`${result.billed} waiting entries billed`);
-  back(ITEMS_PAGE, { saved: `Imported: ${parts.join(', ')}.` });
+  back(ITEMS_PAGE, { saved: `Imported: ${parts.join(', ')}.`, undo: formatUndoToken('prices', result.batch) });
 }
 
 /** The "Set prices" screen's single Save. */
@@ -269,7 +288,7 @@ export async function setChargeItemPricesAction(form: FormData) {
     [...form.entries()].map(([key, value]) => [key, String(value)] as [string, string]),
   );
   if (!edits.ok) back(ITEMS_PAGE, { error: edits.error, mode: 'prices' }, form);
-  const { changed, billed } = await setChargeItemPrices({
+  const { changed, billed, batch } = await setChargeItemPrices({
     hospitalId: session.hospitalId,
     edits: (edits as { ok: true; value: { id: string; sellingPricePaise: number }[] }).value,
     actorUserId: session.userId,
@@ -281,7 +300,52 @@ export async function setChargeItemPricesAction(form: FormData) {
         changed === 0
           ? 'No prices changed.'
           : `${changed} price${changed === 1 ? '' : 's'} saved${billed > 0 ? `, and ${billed} waiting entries billed` : ''}.`,
+      ...(changed > 0 ? { undo: formatUndoToken('prices', batch) } : {}),
     },
     form,
   );
+}
+
+/* ------------------------------------------------------------------ undo */
+
+/**
+ * The Undo button on Settings → IPD and its price list. Each kind needs the
+ * permission its original action needed; the service re-checks the window and
+ * that nothing has used the change since.
+ */
+export async function undoSettingsAction(form: FormData) {
+  const page = text(form, '_page') === ITEMS_PAGE ? ITEMS_PAGE : WARDS_PAGE;
+  const token = parseUndoToken(text(form, 'undo'));
+  if (!token) back(page, { error: 'Nothing to undo.' });
+  const { kind, args } = token!;
+  const configure = kind === 'ward' || kind === 'beds' || kind === 'toggle-ward' || kind === 'toggle-bed';
+  const session = await authorize(configure ? 'ipd.configure' : 'billing.price');
+  let message = 'Undone.';
+  try {
+    if (kind === 'ward' && isId(args[0])) {
+      await undoCreateWard({ hospitalId: session.hospitalId, wardId: args[0], actorUserId: session.userId });
+      message = 'Undone: the ward and its beds were removed.';
+    } else if (kind === 'beds') {
+      await undoAddBeds({ hospitalId: session.hospitalId, bedIds: idList(args[0]), actorUserId: session.userId });
+      message = 'Undone: those beds were removed.';
+    } else if (kind === 'toggle-ward' && isId(args[0])) {
+      await setWardActive({ hospitalId: session.hospitalId, wardId: args[0], active: args[1] !== 'true', actorUserId: session.userId });
+    } else if (kind === 'toggle-bed' && isId(args[0])) {
+      await setBedActive({ hospitalId: session.hospitalId, bedId: args[0], active: args[1] !== 'true', actorUserId: session.userId });
+    } else if (kind === 'item' && isId(args[0])) {
+      await undoCreateItem({ hospitalId: session.hospitalId, kind: 'charge_item', id: args[0], actorUserId: session.userId });
+      message = 'Undone: the item was removed.';
+    } else if (kind === 'toggle-item' && isId(args[0])) {
+      await setChargeItemActive({ hospitalId: session.hospitalId, chargeItemId: args[0], active: args[1] !== 'true', actorUserId: session.userId });
+    } else if (kind === 'prices' && isId(args[0])) {
+      const { restored, removed } = await undoPriceBatch({ hospitalId: session.hospitalId, batch: args[0], actorUserId: session.userId });
+      message = `Undone: ${restored} price${restored === 1 ? '' : 's'} restored${removed > 0 ? `, ${removed} added item${removed === 1 ? '' : 's'} removed` : ''}.`;
+    } else {
+      back(page, { error: 'Nothing to undo.' });
+    }
+  } catch (err) {
+    if (err instanceof UndoError || err instanceof IpdConfigError) back(page, { error: err.message });
+    throw err;
+  }
+  back(page, { saved: message });
 }

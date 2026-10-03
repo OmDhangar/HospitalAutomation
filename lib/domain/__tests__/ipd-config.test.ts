@@ -38,6 +38,25 @@ describe('parseBedLabels', () => {
     expect(labels('1-3, 2, a1, A1')).toEqual(['1', '2', '3', 'a1']);
   });
 
+  it('reads a single number as how many beds, numbered from 1', () => {
+    expect(labels('12')).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12']);
+    expect(labels('1')).toEqual(['1']);
+  });
+
+  it('numbers more beds after the ward’s highest bed', () => {
+    const more = parseBedLabels('4', ['1', '2', '12', 'ICU-1']);
+    expect(more).toEqual({ ok: true, value: ['13', '14', '15', '16'] });
+  });
+
+  it('still makes one exact bed from a one-number range', () => {
+    expect(labels('13-13')).toEqual(['13']);
+  });
+
+  it('refuses zero beds or too many at once', () => {
+    expect(parseBedLabels('0').ok).toBe(false);
+    expect(parseBedLabels(String(MAX_BEDS_PER_RANGE + 1)).ok).toBe(false);
+  });
+
   it('refuses nothing, a backwards range, or a flood', () => {
     expect(parseBedLabels('  ').ok).toBe(false);
     expect(parseBedLabels('12-1').ok).toBe(false);

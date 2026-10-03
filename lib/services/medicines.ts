@@ -233,9 +233,11 @@ export async function updateMedicine(args: {
   medicineId: string;
   input: unknown;
   actorUserId: string;
-}): Promise<void> {
+}): Promise<{ batch: string }> {
   const parsed = parseMedicineInput(args.input);
   if (!parsed.ok) throw new MedicineError(parsed.error);
+  // Ties this change's audit row to its Undo (lib/services/ipd-undo.ts).
+  const batch = crypto.randomUUID();
 
   try {
     await withTenant(args.hospitalId, async (tx) => {
@@ -261,6 +263,7 @@ export async function updateMedicine(args: {
         objectType: 'medicine',
         objectId: before.id,
         metadata: {
+          batch,
           label: medicineLabel(parsed.value),
           ...(priceChanged
             ? {
@@ -277,6 +280,7 @@ export async function updateMedicine(args: {
     if (isUniqueViolation(err)) throw new MedicineError('Another medicine already has this name, strength and form');
     throw err;
   }
+  return { batch };
 }
 
 /**
@@ -364,7 +368,7 @@ const findByIdentityInTx = (
 export async function addStarterMedicinesInTx(
   tx: Tx,
   args: { hospitalId: string; actorUserId: string | null },
-): Promise<number> {
+): Promise<string[]> {
   const inserted = await tx
     .insert(medicines)
     .values(
@@ -379,24 +383,25 @@ export async function addStarterMedicinesInTx(
     )
     .onConflictDoNothing()
     .returning({ id: medicines.id });
-  return inserted.length;
+  return inserted.map((row) => row.id);
 }
 
 /** Adds the starter list; anything already present is left untouched. */
 export async function addStarterMedicines(args: {
   hospitalId: string;
   actorUserId: string;
-}): Promise<{ added: number }> {
+}): Promise<{ added: number; batch: string }> {
+  const batch = crypto.randomUUID();
   return withTenant(args.hospitalId, async (tx) => {
-    const added = await addStarterMedicinesInTx(tx, args);
+    const ids = await addStarterMedicinesInTx(tx, args);
     await tx.insert(auditLogs).values({
       hospitalId: args.hospitalId,
       actorUserId: args.actorUserId,
       action: 'medicine.starter_list_added',
       objectType: 'medicine',
-      metadata: { added },
+      metadata: { batch, added: ids.length, ids },
     });
-    return { added };
+    return { added: ids.length, batch };
   });
 }
 
@@ -410,8 +415,9 @@ export async function setMedicinePrices(args: {
   hospitalId: string;
   edits: readonly { id: string; sellingPricePaise: number }[];
   actorUserId: string;
-}): Promise<{ changed: number; billed: number }> {
-  if (args.edits.length === 0) return { changed: 0, billed: 0 };
+}): Promise<{ changed: number; billed: number; batch: string }> {
+  const batch = crypto.randomUUID();
+  if (args.edits.length === 0) return { changed: 0, billed: 0, batch };
   return withTenant(
     args.hospitalId,
     async (tx) => {
@@ -443,7 +449,7 @@ export async function setMedicinePrices(args: {
           action: 'billing.price_changed',
           objectType: 'medicine',
           objectId: row.id,
-          metadata: { label: medicineLabel(row), fromPaise: row.price, toPaise: edit.sellingPricePaise },
+          metadata: { batch, label: medicineLabel(row), fromPaise: row.price, toPaise: edit.sellingPricePaise },
         });
         if (row.price === null) newlyPriced.push(row.id);
         changed += 1;
@@ -452,7 +458,7 @@ export async function setMedicinePrices(args: {
         medicineIds: newlyPriced,
         actorUserId: args.actorUserId,
       });
-      return { changed, billed };
+      return { changed, billed, batch };
     },
     { clinical: true },
   );

@@ -16,6 +16,15 @@ import {
   voidBillLine,
 } from '@/lib/services/discharge-billing';
 import { PatientBillingError } from '@/lib/services/patient-billing';
+import {
+  UndoError,
+  reopenDischarge,
+  undoApprovedAmount,
+  undoDiscount,
+  undoPayment,
+  undoVoidBillLine,
+} from '@/lib/services/ipd-undo';
+import { formatUndoToken, isId, parseUndoToken } from '@/lib/domain/undo';
 
 /**
  * The discharge billing screen's actions (IPD plan §T2.2). Every correction
@@ -51,10 +60,11 @@ async function attempt(admissionId: string, work: () => Promise<unknown>) {
 export async function voidLineAction(form: FormData) {
   const session = await authorize('ipd.correct');
   const admissionId = text(form, 'admissionId');
+  const lineId = text(form, 'lineId');
   await attempt(admissionId, () =>
-    voidBillLine({ hospitalId: session.hospitalId, lineId: text(form, 'lineId'), reason: text(form, 'reason'), actorUserId: session.userId }),
+    voidBillLine({ hospitalId: session.hospitalId, lineId, reason: text(form, 'reason'), actorUserId: session.userId }),
   );
-  go(admissionId, { saved: 'Line removed, with your reason.' });
+  go(admissionId, { saved: 'Line removed, with your reason.', undo: formatUndoToken('void-line', lineId) });
 }
 
 export async function discountLineAction(form: FormData) {
@@ -62,16 +72,17 @@ export async function discountLineAction(form: FormData) {
   const admissionId = text(form, 'admissionId');
   const discount = parseRupeesToPaise(text(form, 'discount'));
   if (discount === null) go(admissionId, { error: 'Enter the discount in rupees, like 50' });
-  await attempt(admissionId, () =>
-    discountBillLine({
+  let lineId = '';
+  await attempt(admissionId, async () => {
+    ({ lineId } = await discountBillLine({
       hospitalId: session.hospitalId,
       lineId: text(form, 'lineId'),
       discountPaise: discount!,
       reason: text(form, 'reason'),
       actorUserId: session.userId,
-    }),
-  );
-  go(admissionId, { saved: 'Discount applied.' });
+    }));
+  });
+  go(admissionId, { saved: 'Discount applied.', undo: formatUndoToken('discount', lineId) });
 }
 
 export async function recordPaymentAction(form: FormData) {
@@ -81,8 +92,9 @@ export async function recordPaymentAction(form: FormData) {
   if (amount === null || amount <= 0) go(admissionId, { error: 'Enter the amount in rupees' });
   const kind = text(form, 'kind') === 'refund' ? 'refund' : 'payment';
   const method = text(form, 'method');
-  await attempt(admissionId, () =>
-    recordIpdPayment({
+  let paymentId = '';
+  await attempt(admissionId, async () => {
+    ({ paymentId } = await recordIpdPayment({
       hospitalId: session.hospitalId,
       admissionId,
       kind,
@@ -90,9 +102,12 @@ export async function recordPaymentAction(form: FormData) {
       method: method === 'upi' || method === 'card' || method === 'bank' || method === 'other' ? method : 'cash',
       reference: text(form, 'reference'),
       actorUserId: session.userId,
-    }),
-  );
-  go(admissionId, { saved: kind === 'refund' ? 'Refund recorded.' : 'Payment recorded.' });
+    }));
+  });
+  go(admissionId, {
+    saved: kind === 'refund' ? 'Refund recorded.' : 'Payment recorded.',
+    undo: formatUndoToken('payment', paymentId),
+  });
 }
 
 export async function setApprovedAmountAction(form: FormData) {
@@ -104,7 +119,7 @@ export async function setApprovedAmountAction(form: FormData) {
   await attempt(admissionId, () =>
     setApprovedAmount({ hospitalId: session.hospitalId, admissionId, approvedAmountPaise: approved, actorUserId: session.userId }),
   );
-  go(admissionId, { saved: 'Approved amount saved.' });
+  go(admissionId, { saved: 'Approved amount saved.', undo: formatUndoToken('approved', admissionId) });
 }
 
 export async function finalizeAction(form: FormData) {
@@ -114,7 +129,48 @@ export async function finalizeAction(form: FormData) {
   await attempt(admissionId, async () => {
     ({ billNumber } = await finalizeDischarge({ hospitalId: session.hospitalId, admissionId, actorUserId: session.userId }));
   });
-  go(admissionId, { saved: `Discharged. Bill ${billNumber} is final.` });
+  go(admissionId, { saved: `Discharged. Bill ${billNumber} is final.`, undo: formatUndoToken('finalize', admissionId) });
+}
+
+/**
+ * The Undo button on the discharge bill. A final bill is "reopened" rather
+ * than undone: it needs a reason, keeps its number (as cancelled), and its
+ * lines move to a new draft.
+ */
+export async function undoBillAction(form: FormData) {
+  const admissionId = text(form, 'admissionId');
+  const token = parseUndoToken(text(form, 'undo'));
+  if (!token) go(admissionId, { error: 'Nothing to undo.' });
+  const { kind, args } = token!;
+  const permission: Permission =
+    kind === 'payment' ? 'billing.collect' : kind === 'void-line' || kind === 'discount' ? 'ipd.correct' : 'ipd.discharge';
+  const session = await authorize(permission);
+  const base = { hospitalId: session.hospitalId, actorUserId: session.userId };
+  let message = 'Undone.';
+  try {
+    if (kind === 'void-line' && isId(args[0])) {
+      await undoVoidBillLine({ ...base, lineId: args[0] });
+      message = 'Undone: the line is back on the bill.';
+    } else if (kind === 'discount' && isId(args[0])) {
+      await undoDiscount({ ...base, lineId: args[0] });
+      message = 'Undone: the discount was removed.';
+    } else if (kind === 'payment' && isId(args[0])) {
+      await undoPayment({ ...base, paymentId: args[0] });
+      message = 'Undone: the payment was voided.';
+    } else if (kind === 'approved' && isId(args[0])) {
+      await undoApprovedAmount({ ...base, admissionId: args[0] });
+      message = 'Undone: the payer is as it was.';
+    } else if (kind === 'finalize' && isId(args[0])) {
+      await reopenDischarge({ ...base, admissionId: args[0], reason: text(form, 'reason') });
+      message = 'Bill reopened. The patient is back on Discharge ready; finalise again when done.';
+    } else {
+      go(admissionId, { error: 'Nothing to undo.' });
+    }
+  } catch (err) {
+    if (err instanceof UndoError || err instanceof DischargeBillError) go(admissionId, { error: err.message });
+    throw err;
+  }
+  go(admissionId, { saved: message });
 }
 
 export async function shareBillLinkAction(form: FormData) {

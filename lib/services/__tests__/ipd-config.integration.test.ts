@@ -69,7 +69,7 @@ describe.skipIf(!enabled)('IPD set-up', () => {
     expect(bedsAdded).toBe(12);
 
     const more = await addBeds({ hospitalId, wardId, labels: '11-14', actorUserId: ownerId });
-    expect(more).toEqual({ added: 2, skipped: 2 });
+    expect(more).toMatchObject({ added: 2, skipped: 2 });
 
     const [ward] = (await listWardSetup(hospitalId)).filter((w) => w.id === wardId);
     expect(ward.beds.map((b) => b.label)).toEqual(

@@ -141,7 +141,7 @@ export async function createWard(args: {
   dailyChargeItemId: string | null;
   bedLabels?: string;
   actorUserId: string;
-}): Promise<{ wardId: string; bedsAdded: number }> {
+}): Promise<{ wardId: string; bedsAdded: number; bedIds: string[] }> {
   const name = tidy(args.name);
   if (!name || name.length > 60) throw new IpdConfigError('Enter a ward name (up to 60 characters)');
   const labels = args.bedLabels?.trim() ? parseBedLabels(args.bedLabels) : null;
@@ -170,7 +170,8 @@ export async function createWard(args: {
         })
         .returning({ id: wards.id });
 
-      const bedsAdded = labels?.ok ? await insertBedsInTx(tx, args.hospitalId, ward.id, labels.value) : 0;
+      const bedIds = labels?.ok ? await insertBedsInTx(tx, args.hospitalId, ward.id, labels.value) : [];
+      const bedsAdded = bedIds.length;
       await tx.insert(auditLogs).values({
         hospitalId: args.hospitalId,
         actorUserId: args.actorUserId,
@@ -179,7 +180,7 @@ export async function createWard(args: {
         objectId: ward.id,
         metadata: { name, bedsAdded },
       });
-      return { wardId: ward.id, bedsAdded };
+      return { wardId: ward.id, bedsAdded, bedIds };
     });
   } catch (err) {
     if (isUniqueViolation(err)) throw new IpdConfigError(`There is already a ward called ${name}`);
@@ -258,8 +259,8 @@ async function insertBedsInTx(
   hospitalId: string,
   wardId: string,
   labels: readonly string[],
-): Promise<number> {
-  if (labels.length === 0) return 0;
+): Promise<string[]> {
+  if (labels.length === 0) return [];
   const [{ top }] = await tx
     .select({ top: max(beds.sortOrder) })
     .from(beds)
@@ -274,22 +275,27 @@ async function insertBedsInTx(
     )
     .onConflictDoNothing()
     .returning({ id: beds.id });
-  return inserted.length;
+  return inserted.map((row) => row.id);
 }
 
-/** "1-12" → twelve beds. Labels already in the ward are skipped, not errors. */
+/**
+ * "4" → four more beds, numbered after the ward's highest; "13-16" → those
+ * beds exactly. Labels already in the ward are skipped, not errors.
+ */
 export async function addBeds(args: {
   hospitalId: string;
   wardId: string;
   labels: string;
   actorUserId: string;
-}): Promise<{ added: number; skipped: number }> {
-  const parsed = parseBedLabels(args.labels);
-  if (!parsed.ok) throw new IpdConfigError(parsed.error);
+}): Promise<{ added: number; skipped: number; bedIds: string[] }> {
   return withTenant(args.hospitalId, async (tx) => {
     const [ward] = await tx.select({ id: wards.id }).from(wards).where(eq(wards.id, args.wardId));
     if (!ward) throw new IpdConfigError('Ward not found');
-    const added = await insertBedsInTx(tx, args.hospitalId, ward.id, parsed.value);
+    const existing = await tx.select({ label: beds.label }).from(beds).where(eq(beds.wardId, ward.id));
+    const parsed = parseBedLabels(args.labels, existing.map((row) => row.label));
+    if (!parsed.ok) throw new IpdConfigError(parsed.error);
+    const bedIds = await insertBedsInTx(tx, args.hospitalId, ward.id, parsed.value);
+    const added = bedIds.length;
     await tx.insert(auditLogs).values({
       hospitalId: args.hospitalId,
       actorUserId: args.actorUserId,
@@ -298,7 +304,7 @@ export async function addBeds(args: {
       objectId: ward.id,
       metadata: { added, requested: parsed.value.length },
     });
-    return { added, skipped: parsed.value.length - added };
+    return { added, skipped: parsed.value.length - added, bedIds };
   });
 }
 
@@ -454,8 +460,10 @@ export async function updateChargeItem(args: {
   chargeItemId: string;
   input: unknown;
   actorUserId: string;
-}): Promise<{ billed: number }> {
+}): Promise<{ billed: number; batch: string }> {
   const parsed = parseChargeItemInput(args.input);
+  // Ties this change's audit row to its Undo (lib/services/ipd-undo.ts).
+  const batch = crypto.randomUUID();
   if (!parsed.ok) throw new IpdConfigError(parsed.error);
   try {
     return await withTenant(
@@ -482,6 +490,7 @@ export async function updateChargeItem(args: {
           objectType: 'charge_item',
           objectId: before.id,
           metadata: {
+            batch,
             name: parsed.value.name,
             ...(priceChanged
               ? {
@@ -500,7 +509,7 @@ export async function updateChargeItem(args: {
                 actorUserId: args.actorUserId,
               })
             : 0;
-        return { billed };
+        return { billed, batch };
       },
       { clinical: true },
     );
@@ -543,8 +552,9 @@ export async function importChargeItems(args: {
   hospitalId: string;
   rows: readonly CsvImportRow[];
   actorUserId: string;
-}): Promise<{ added: number; repriced: number; unchanged: number; billed: number }> {
-  if (args.rows.length === 0) return { added: 0, repriced: 0, unchanged: 0, billed: 0 };
+}): Promise<{ added: number; repriced: number; unchanged: number; billed: number; batch: string }> {
+  const batch = crypto.randomUUID();
+  if (args.rows.length === 0) return { added: 0, repriced: 0, unchanged: 0, billed: 0, batch };
   return withTenant(
     args.hospitalId,
     async (tx) => {
@@ -569,15 +579,26 @@ export async function importChargeItems(args: {
       for (const row of args.rows) {
         const found = byKey.get(`${row.kind}:${row.name.toLowerCase()}`);
         if (!found) {
-          await tx.insert(chargeItems).values({
+          const [created] = await tx
+            .insert(chargeItems)
+            .values({
+              hospitalId: args.hospitalId,
+              kind: row.kind,
+              name: row.name,
+              unit: row.unit,
+              sellingPricePaise: row.sellingPricePaise,
+              taxRateBp: row.taxRateBp,
+              isTest: row.isTest,
+              createdByUserId: args.actorUserId,
+            })
+            .returning({ id: chargeItems.id });
+          await tx.insert(auditLogs).values({
             hospitalId: args.hospitalId,
-            kind: row.kind,
-            name: row.name,
-            unit: row.unit,
-            sellingPricePaise: row.sellingPricePaise,
-            taxRateBp: row.taxRateBp,
-            isTest: row.isTest,
-            createdByUserId: args.actorUserId,
+            actorUserId: args.actorUserId,
+            action: 'ipd.charge_item_created',
+            objectType: 'charge_item',
+            objectId: created.id,
+            metadata: { batch, name: row.name, imported: true },
           });
           added += 1;
           continue;
@@ -601,6 +622,21 @@ export async function importChargeItems(args: {
             updatedAt: new Date(),
           })
           .where(eq(chargeItems.id, found.id));
+        await tx.insert(auditLogs).values({
+          hospitalId: args.hospitalId,
+          actorUserId: args.actorUserId,
+          action: 'billing.price_changed',
+          objectType: 'charge_item',
+          objectId: found.id,
+          metadata: {
+            batch,
+            fromPaise: found.sellingPricePaise,
+            toPaise: row.sellingPricePaise,
+            fromTaxRateBp: found.taxRateBp,
+            toTaxRateBp: row.taxRateBp,
+            fromUnit: found.unit,
+          },
+        });
         repriced.push({ id: found.id, from: found.sellingPricePaise, to: row.sellingPricePaise });
         if (found.sellingPricePaise === null) newlyPriced.push(found.id);
       }
@@ -610,13 +646,13 @@ export async function importChargeItems(args: {
         actorUserId: args.actorUserId,
         action: 'ipd.charge_items_imported',
         objectType: 'charge_item',
-        metadata: { added, unchanged, repriced },
+        metadata: { batch, added, unchanged, repriced },
       });
       const billed = await billUnbilledEntriesForItemsInTx(tx, {
         chargeItemIds: newlyPriced,
         actorUserId: args.actorUserId,
       });
-      return { added, repriced: repriced.length, unchanged, billed };
+      return { added, repriced: repriced.length, unchanged, billed, batch };
     },
     { clinical: true },
   );
@@ -631,8 +667,9 @@ export async function setChargeItemPrices(args: {
   hospitalId: string;
   edits: readonly PriceEdit[];
   actorUserId: string;
-}): Promise<{ changed: number; billed: number }> {
-  if (args.edits.length === 0) return { changed: 0, billed: 0 };
+}): Promise<{ changed: number; billed: number; batch: string }> {
+  const batch = crypto.randomUUID();
+  if (args.edits.length === 0) return { changed: 0, billed: 0, batch };
   return withTenant(
     args.hospitalId,
     async (tx) => {
@@ -659,7 +696,7 @@ export async function setChargeItemPrices(args: {
           action: 'billing.price_changed',
           objectType: 'charge_item',
           objectId: row.id,
-          metadata: { name: row.name, fromPaise: row.price, toPaise: edit.sellingPricePaise },
+          metadata: { batch, name: row.name, fromPaise: row.price, toPaise: edit.sellingPricePaise },
         });
         if (row.price === null) newlyPriced.push(row.id);
         changed += 1;
@@ -668,7 +705,7 @@ export async function setChargeItemPrices(args: {
         chargeItemIds: newlyPriced,
         actorUserId: args.actorUserId,
       });
-      return { changed, billed };
+      return { changed, billed, batch };
     },
     { clinical: true },
   );
@@ -683,7 +720,7 @@ export async function setChargeItemPrices(args: {
 export async function addStarterChargeItemsInTx(
   tx: Tx,
   args: { hospitalId: string; actorUserId: string | null },
-): Promise<number> {
+): Promise<string[]> {
   const inserted = await tx
     .insert(chargeItems)
     .values(
@@ -698,23 +735,24 @@ export async function addStarterChargeItemsInTx(
     )
     .onConflictDoNothing()
     .returning({ id: chargeItems.id });
-  return inserted.length;
+  return inserted.map((row) => row.id);
 }
 
 export async function addStarterChargeItems(args: {
   hospitalId: string;
   actorUserId: string;
-}): Promise<{ added: number }> {
+}): Promise<{ added: number; batch: string }> {
+  const batch = crypto.randomUUID();
   return withTenant(args.hospitalId, async (tx) => {
-    const added = await addStarterChargeItemsInTx(tx, args);
+    const ids = await addStarterChargeItemsInTx(tx, args);
     await tx.insert(auditLogs).values({
       hospitalId: args.hospitalId,
       actorUserId: args.actorUserId,
       action: 'ipd.starter_items_added',
       objectType: 'charge_item',
-      metadata: { added },
+      metadata: { batch, added: ids.length, ids },
     });
-    return { added };
+    return { added: ids.length, batch };
   });
 }
 

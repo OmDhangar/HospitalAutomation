@@ -59,3 +59,35 @@ BEGIN
     FOR DELETE USING (NOT public.app_read_only());
 END
 $outer$;
+--> statement-breakpoint
+
+-- Reopening a finalised bill (within a day, with a reason) cancels it — its
+-- number stays used, so numbering stays gap-free — and posts its lines again
+-- on a new draft. The old lines must be voided first, or the "bill each
+-- source once" indexes would refuse the re-post. So a one-way void is now
+-- allowed on a cancelled bill as well as a draft; adding a line still needs
+-- a draft, and nothing else about a line can ever change.
+CREATE OR REPLACE FUNCTION bill_items_guard() RETURNS trigger AS $fn$
+DECLARE
+  bill_state bill_status;
+BEGIN
+  IF TG_OP = 'UPDATE' THEN
+    IF only_user_refs_cleared(to_jsonb(OLD), to_jsonb(NEW),
+                              ARRAY['created_by_user_id', 'voided_by_user_id']) THEN
+      RETURN NEW;
+    END IF;
+    IF NOT is_one_way_void(to_jsonb(OLD), to_jsonb(NEW)) THEN
+      RAISE EXCEPTION 'bill_items may only be voided, never edited'
+        USING ERRCODE = 'restrict_violation';
+    END IF;
+  END IF;
+
+  SELECT status INTO bill_state FROM bills WHERE id = NEW.bill_id FOR SHARE;
+  IF bill_state = 'draft' OR (TG_OP = 'UPDATE' AND bill_state = 'cancelled') THEN
+    RETURN NEW;
+  END IF;
+  RAISE EXCEPTION 'bill % is %; its items can no longer change',
+    NEW.bill_id, coalesce(bill_state::text, 'missing')
+    USING ERRCODE = 'restrict_violation';
+END;
+$fn$ LANGUAGE plpgsql;

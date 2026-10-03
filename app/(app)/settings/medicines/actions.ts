@@ -4,6 +4,8 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { requireWritableSession } from '@/lib/auth/session';
 import { parsePriceEdits } from '@/lib/domain/ipd-config';
+import { formatUndoToken, isId, parseUndoToken } from '@/lib/domain/undo';
+import { UndoError, undoCreateItem, undoPriceBatch } from '@/lib/services/ipd-undo';
 import { parsePercentToBasisPoints, parseRupeesToPaise } from '@/lib/domain/patient-billing';
 import { can } from '@/lib/domain/permissions';
 import {
@@ -72,35 +74,37 @@ export async function createMedicineAction(form: FormData) {
   const session = await authorize();
   const read = readMedicine(form);
   if ('error' in read) back({ error: read.error }, form);
+  let createdId = '';
   try {
-    await createMedicine({
+    ({ id: createdId } = await createMedicine({
       hospitalId: session.hospitalId,
       input: (read as { input: Record<string, unknown> }).input,
       actorUserId: session.userId,
-    });
+    }));
   } catch (err) {
     if (err instanceof MedicineError) back({ error: err.message }, form);
     throw err;
   }
-  back({ saved: 'Medicine added' }, form);
+  back({ saved: 'Medicine added', undo: formatUndoToken('medicine', createdId) }, form);
 }
 
 export async function updateMedicineAction(form: FormData) {
   const session = await authorize();
   const read = readMedicine(form);
   if ('error' in read) back({ error: read.error }, form);
+  let batch = '';
   try {
-    await updateMedicine({
+    ({ batch } = await updateMedicine({
       hospitalId: session.hospitalId,
       medicineId: String(form.get('medicineId') ?? ''),
       input: (read as { input: Record<string, unknown> }).input,
       actorUserId: session.userId,
-    });
+    }));
   } catch (err) {
     if (err instanceof MedicineError) back({ error: err.message }, form);
     throw err;
   }
-  back({ saved: 'Saved. Bills already issued keep their old price.' }, form);
+  back({ saved: 'Saved. Bills already issued keep their old price.', undo: formatUndoToken('prices', batch) }, form);
 }
 
 export async function toggleMedicineAction(form: FormData) {
@@ -117,6 +121,7 @@ export async function toggleMedicineAction(form: FormData) {
       saved: active
         ? 'Medicine restored'
         : 'Medicine removed from the list. Old prescriptions still show it.',
+      undo: formatUndoToken('toggle-medicine', String(form.get('medicineId') ?? ''), String(active)),
     },
     form,
   );
@@ -124,7 +129,7 @@ export async function toggleMedicineAction(form: FormData) {
 
 export async function addStarterMedicinesAction(form: FormData) {
   const session = await authorize();
-  const { added } = await addStarterMedicines({
+  const { added, batch } = await addStarterMedicines({
     hospitalId: session.hospitalId,
     actorUserId: session.userId,
   });
@@ -134,6 +139,7 @@ export async function addStarterMedicinesAction(form: FormData) {
         added > 0
           ? `Added ${added} common medicines. Set prices for the ones you stock.`
           : 'All the common medicines are already in your list.',
+      ...(added > 0 ? { undo: formatUndoToken('prices', batch) } : {}),
     },
     form,
   );
@@ -150,7 +156,7 @@ export async function setMedicinePricesAction(form: FormData) {
     [...form.entries()].map(([key, value]) => [key, String(value)] as [string, string]),
   );
   if (!edits.ok) back({ error: edits.error }, form);
-  const { changed, billed } = await setMedicinePrices({
+  const { changed, billed, batch } = await setMedicinePrices({
     hospitalId: session.hospitalId,
     edits: (edits as { ok: true; value: { id: string; sellingPricePaise: number }[] }).value,
     actorUserId: session.userId,
@@ -161,7 +167,41 @@ export async function setMedicinePricesAction(form: FormData) {
         changed === 0
           ? 'No prices changed.'
           : `${changed} price${changed === 1 ? '' : 's'} saved${billed > 0 ? `, and ${billed} waiting entries billed` : ''}.`,
+      ...(changed > 0 ? { undo: formatUndoToken('prices', batch) } : {}),
     },
     form,
   );
+}
+
+/** The Undo button on the medicine list: same rules as Settings → IPD. */
+export async function undoMedicinesAction(form: FormData) {
+  const session = await authorize();
+  const token = parseUndoToken(String(form.get('undo') ?? ''));
+  let message = 'Undone.';
+  try {
+    if (token?.kind === 'medicine' && isId(token.args[0])) {
+      await undoCreateItem({ hospitalId: session.hospitalId, kind: 'medicine', id: token.args[0], actorUserId: session.userId });
+      message = 'Undone: the medicine was removed.';
+    } else if (token?.kind === 'toggle-medicine' && isId(token.args[0])) {
+      await setMedicineActive({
+        hospitalId: session.hospitalId,
+        medicineId: token.args[0],
+        active: token.args[1] !== 'true',
+        actorUserId: session.userId,
+      });
+    } else if (token?.kind === 'prices' && isId(token.args[0])) {
+      const { restored, removed } = await undoPriceBatch({
+        hospitalId: session.hospitalId,
+        batch: token.args[0],
+        actorUserId: session.userId,
+      });
+      message = `Undone: ${restored} price${restored === 1 ? '' : 's'} restored${removed > 0 ? `, ${removed} medicine${removed === 1 ? '' : 's'} removed` : ''}.`;
+    } else {
+      back({ error: 'Nothing to undo.' }, form);
+    }
+  } catch (err) {
+    if (err instanceof UndoError || err instanceof MedicineError) back({ error: err.message }, form);
+    throw err;
+  }
+  back({ saved: message }, form);
 }
