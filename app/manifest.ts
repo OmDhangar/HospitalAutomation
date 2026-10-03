@@ -7,8 +7,8 @@ import type { MetadataRoute } from 'next';
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Qurio Ward',
-    short_name: 'Qurio Ward',
+    name: 'QuriioHQ Ward',
+    short_name: 'QuriioHQ Ward',
     description: 'Record medicines and items at the bedside.',
     start_url: '/ipd/ward',
     scope: '/',

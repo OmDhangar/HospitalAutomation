@@ -26,7 +26,7 @@ import {
 import { getHospitalUsage, getMessageBreakdown } from '@/lib/services/usage';
 import { checkPaymentStatus, renewPlan } from './actions';
 
-export const metadata = { title: 'Subscription · Qurio' };
+export const metadata = { title: 'Subscription · QuriioHQ' };
 
 export default async function SubscriptionPage({
   searchParams,
@@ -59,7 +59,7 @@ export default async function SubscriptionPage({
       <Card>
         <EmptyState
           title="No plan assigned yet"
-          hint="Your queue works normally. Ask your Qurio contact to set up a plan."
+          hint="Your queue works normally. Ask your QuriioHQ contact to set up a plan."
         />
       </Card>
     );
@@ -264,7 +264,7 @@ export default async function SubscriptionPage({
 
               {!paymentsEnabled ? (
                 <p className="text-xs leading-relaxed text-ink-500">
-                  To renew or change plan, contact your Qurio representative. Online
+                  To renew or change plan, contact your QuriioHQ representative. Online
                   payment is not enabled for this hospital yet.
                 </p>
               ) : openPayment?.shortUrl ? (

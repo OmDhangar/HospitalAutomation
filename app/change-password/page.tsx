@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { clearSessionCookie, requireSession } from '@/lib/auth/session';
 import { AccountAdminError, changeOwnPassword } from '@/lib/services/platform-admin';
 
-export const metadata = { title: 'Choose a password · Qurio' };
+export const metadata = { title: 'Choose a password · QuriioHQ' };
 
 const ERRORS: Record<string, string> = {
   mismatch: 'The two passwords do not match.',

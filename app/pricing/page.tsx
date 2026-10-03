@@ -7,7 +7,7 @@ import { SEED_PLAN_TIERS } from '@/lib/domain/pricing';
 import { getCurrentSubscription, listActiveTiers } from '@/lib/services/subscriptions';
 
 export const metadata: Metadata = {
-  title: 'Pricing & Plans · Qurio',
+  title: 'Pricing & Plans · QuriioHQ',
   description:
     'Transparent, capacity-based pricing for clinics and hospitals. Every plan includes the full product: WhatsApp booking, live queue tracker, TV display, and reception caller.',
 };
@@ -80,7 +80,7 @@ export default async function PricingPage() {
             </span>
             <div className="flex flex-col">
               <span className="text-lg font-bold tracking-tight text-ink-900 leading-none">
-                Qurio
+                QuriioHQ
               </span>
               <span className="text-[10px] font-medium text-ink-500 tracking-wide uppercase mt-0.5">
                 Hospital Queue Automation
@@ -127,7 +127,7 @@ export default async function PricingPage() {
         <div className="mx-auto max-w-6xl px-4 sm:px-6">
           <div className="flex flex-col items-center justify-between gap-6 sm:flex-row">
             <div>
-              <p className="text-sm font-bold text-white">Qurio</p>
+              <p className="text-sm font-bold text-white">QuriioHQ</p>
               <p className="text-xs text-ink-400 mt-0.5">
                 OPD queue and patient flow management for Indian hospitals.
               </p>
@@ -156,7 +156,7 @@ export default async function PricingPage() {
           </div>
 
           <div className="mt-8 border-t border-ink-800 pt-6 text-center text-[11px] text-ink-500">
-            © {new Date().getFullYear()} Qurio. All rights reserved. Privacy by design.
+            © {new Date().getFullYear()} QuriioHQ. All rights reserved. Privacy by design.
           </div>
         </div>
       </footer>

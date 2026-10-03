@@ -66,7 +66,7 @@ export function PricingView({
     },
     {
       q: 'Do we need to purchase new computers, scanners, or tablets?',
-      a: 'No special hardware is required. Qurio runs completely in the web browser on any existing desktop, laptop, smartphone, or tablet at your reception. The waiting room live screen works on any smart TV or tablet with a browser.',
+      a: 'No special hardware is required. QuriioHQ runs completely in the web browser on any existing desktop, laptop, smartphone, or tablet at your reception. The waiting room live screen works on any smart TV or tablet with a browser.',
     },
     {
       q: 'How does the Annual Billing discount work?',
@@ -82,10 +82,10 @@ export function PricingView({
     },
     {
       q: 'What happens if our clinic internet connection drops?',
-      a: 'Qurio is built for resilience. Existing token numbers already issued to patients remain completely valid, and reception can continue queue management with built-in offline synchronization or simple paper tokens until connection restores.',
+      a: 'QuriioHQ is built for resilience. Existing token numbers already issued to patients remain completely valid, and reception can continue queue management with built-in offline synchronization or simple paper tokens until connection restores.',
     },
     {
-      q: 'What patient data is stored by Qurio?',
+      q: 'What patient data is stored by QuriioHQ?',
       a: 'Strict privacy-by-design: We only store the patient’s name and mobile number needed to message their token and queue updates. We never request, collect, or store medical histories, diagnoses, or prescriptions.',
     },
   ];
@@ -432,7 +432,7 @@ export function PricingView({
               </div>
               <h3 className="text-base font-bold text-ink-900">First-Morning Live Support</h3>
               <p className="mt-2 text-xs text-ink-600 leading-relaxed">
-                A dedicated Qurio specialist is live on phone and remote assist during your first OPD
+                A dedicated QuriioHQ specialist is live on phone and remote assist during your first OPD
                 session to ensure smooth operations and answer any instant queries.
               </p>
             </div>
@@ -684,7 +684,7 @@ export function PricingView({
             Schedule a 10-Minute Hospital Demo
           </h2>
           <p className="mt-2 text-xs sm:text-sm text-ink-600">
-            See how Qurio runs your physical OPD smoothly. Fill out this brief form and our team will
+            See how QuriioHQ runs your physical OPD smoothly. Fill out this brief form and our team will
             connect with you today.
           </p>
         </div>

@@ -46,8 +46,8 @@ export class PaymentError extends Error {
 
 const MESSAGES: Record<PaymentError['code'], string> = {
   NOT_CONFIGURED:
-    'Online payment is not available yet. Contact your Qurio representative to renew.',
-  NO_SUBSCRIPTION: 'There is no plan to renew. Contact your Qurio representative.',
+    'Online payment is not available yet. Contact your QuriioHQ representative to renew.',
+  NO_SUBSCRIPTION: 'There is no plan to renew. Contact your QuriioHQ representative.',
   NOT_PERMITTED: 'Only the hospital owner can make payments.',
   GATEWAY_UNAVAILABLE:
     'The payment page could not be opened just now. Please try again in a few minutes.',
