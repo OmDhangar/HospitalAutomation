@@ -33,7 +33,7 @@ import {
   homePathFor,
 } from '@/lib/domain/permissions';
 import type { PaymentStatus } from '@/lib/domain/patient-billing';
-import { formatIndianPhone } from '@/lib/domain/phone';
+import { formatIndianPhone, isMockPhone } from '@/lib/domain/phone';
 import { formatTimeIn, minutesBetween } from '@/lib/domain/time';
 import { loadDashboardData } from '@/lib/services/dashboard-loader';
 import type { QueueRow } from '@/lib/services/queue';
@@ -293,7 +293,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                         </p>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <StatusPill status={serving.status} />
-                          {serving.patientPhone ? (
+                          {serving.patientPhone && !isMockPhone(serving.patientPhone) ? (
                             <a
                               href={`tel:${serving.patientPhone}`}
                               className="inline-flex items-center gap-1.5 rounded-md bg-ink-100 px-2 py-0.5 text-xs font-semibold text-ink-700 hover:bg-ink-200 transition-colors"
@@ -571,7 +571,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                           </p>
                           <div className="mt-2 flex flex-wrap items-center gap-2">
                             <StatusPill status={serving.status} />
-                            {serving.patientPhone ? (
+                            {serving.patientPhone && !isMockPhone(serving.patientPhone) ? (
                               <a
                                 href={`tel:${serving.patientPhone}`}
                                 className="inline-flex items-center gap-1.5 rounded-md bg-ink-100 px-2 py-0.5 text-xs font-semibold text-ink-700 hover:bg-ink-200 transition-colors"
@@ -758,7 +758,7 @@ function ParkedPatientsCard({
                   </p>
                   <div className="mt-0.5 flex flex-wrap items-center gap-2">
                     <StatusPill status={row.status} />
-                    {row.patientPhone ? (
+                    {row.patientPhone && !isMockPhone(row.patientPhone) ? (
                       <a
                         href={`tel:${row.patientPhone}`}
                         className="inline-flex items-center gap-1.5 rounded-md bg-ink-100 px-2 py-0.5 text-xs font-semibold text-ink-700 hover:bg-ink-200 transition-colors"
@@ -842,7 +842,7 @@ function WaitingRow({
                 <span>{formatTimeIn(timezone, row.scheduledSlotAt)}</span>
               </span>
             ) : null}
-            {row.patientPhone ? (
+            {row.patientPhone && !isMockPhone(row.patientPhone) ? (
               <a
                 href={`tel:${row.patientPhone}`}
                 className="inline-flex items-center gap-1.5 rounded-md bg-ink-100 px-2 py-0.5 text-xs font-semibold text-ink-700 hover:bg-ink-200 transition-colors"

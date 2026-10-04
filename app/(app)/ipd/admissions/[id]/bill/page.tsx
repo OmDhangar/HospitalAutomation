@@ -8,6 +8,7 @@ import { formatRupees } from '@/lib/domain/billing';
 import type { AdmissionStatus } from '@/lib/domain/admission';
 import { PAYER_KIND_LABELS } from '@/lib/domain/payer';
 import { can } from '@/lib/domain/permissions';
+import { isMockPhone } from '@/lib/domain/phone';
 import { formatTimeIn, serviceDateIn } from '@/lib/domain/time';
 import { getDischargeBillView, type BillLine } from '@/lib/services/discharge-billing';
 import {
@@ -99,14 +100,18 @@ export default async function DischargeBillPage({ params, searchParams }: PagePr
           <CardHeader title="Running bill link" hint="Send it now: it is shown only once." />
           <div className="space-y-3 p-4 sm:p-5">
             <p className="break-all rounded-lg bg-ink-50 px-3 py-2 font-mono text-sm text-ink-800">{shareUrl}</p>
-            <a
-              href={`https://wa.me/${view.admission.phoneE164.replace(/^\+/, '')}?text=${encodeURIComponent(whatsappText)}`}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex min-h-12 items-center rounded-lg bg-emerald-600 px-5 font-semibold text-white hover:bg-emerald-700"
-            >
-              Send on WhatsApp
-            </a>
+            {isMockPhone(view.admission.phoneE164) ? (
+              <p className="text-sm text-ink-600">No phone on file: copy the link or print the bill.</p>
+            ) : (
+              <a
+                href={`https://wa.me/${view.admission.phoneE164.replace(/^\+/, '')}?text=${encodeURIComponent(whatsappText)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex min-h-12 items-center rounded-lg bg-emerald-600 px-5 font-semibold text-white hover:bg-emerald-700"
+              >
+                Send on WhatsApp
+              </a>
+            )}
           </div>
         </Card>
       ) : null}

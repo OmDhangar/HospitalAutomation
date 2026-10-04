@@ -5,7 +5,7 @@ import { AdmissionExtras } from '@/components/ipd/admission-extras';
 import { BedPicker } from '@/components/ipd/bed-picker';
 import { requireSession } from '@/lib/auth/session';
 import { can } from '@/lib/domain/permissions';
-import { formatIndianPhone, normalizeIndianPhone } from '@/lib/domain/phone';
+import { formatIndianPhone, isMockPhone, normalizeStaffPhone } from '@/lib/domain/phone';
 import { listBranches } from '@/lib/services/auth';
 import { listDoctors } from '@/lib/services/hospital';
 import { findPatientsByPhone, listFreeBeds } from '@/lib/services/ipd-census';
@@ -37,11 +37,11 @@ export default async function NewAdmissionPage({ searchParams }: PageProps<'/ipd
   }
 
   const typedPhone = typeof query.phone === 'string' ? query.phone : '';
-  const phoneE164 = typedPhone ? normalizeIndianPhone(typedPhone) : null;
+  const phoneE164 = typedPhone ? (normalizeStaffPhone(typedPhone)?.phoneE164 ?? null) : null;
   const branchRows = await listBranches(session.hospitalId);
   const branchId = session.branchId ?? branchRows[0]?.id ?? '';
   const [matches, doctorRows, freeWards] = await Promise.all([
-    phoneE164 ? findPatientsByPhone(session.hospitalId, phoneE164) : Promise.resolve([]),
+    phoneE164 && !isMockPhone(phoneE164) ? findPatientsByPhone(session.hospitalId, phoneE164) : Promise.resolve([]),
     listDoctors({ hospitalId: session.hospitalId, branchId }),
     branchId ? listFreeBeds({ hospitalId: session.hospitalId, branchId }) : Promise.resolve([]),
   ]);
@@ -60,7 +60,7 @@ export default async function NewAdmissionPage({ searchParams }: PageProps<'/ipd
       <Card>
         <div className="border-b border-ink-200 px-4 py-3 sm:px-5">
           <h2 className="text-base font-bold text-ink-900">1. Patient</h2>
-          <p className="text-sm text-ink-500">Search by mobile number first.</p>
+          <p className="text-sm text-ink-500">Search by mobile number first. No phone? Enter 0000000000.</p>
         </div>
         <form className="flex gap-2 p-4 sm:px-5">
           <Input
@@ -79,7 +79,7 @@ export default async function NewAdmissionPage({ searchParams }: PageProps<'/ipd
           </Button>
         </form>
         {typedPhone && !phoneE164 ? (
-          <p className="px-4 pb-4 text-sm text-rose-700 sm:px-5">Enter a 10-digit mobile number.</p>
+          <p className="px-4 pb-4 text-sm text-rose-700 sm:px-5">Enter a 10-digit mobile number, or 0000000000 for no phone.</p>
         ) : null}
         {phoneE164 && matches.length > 0 ? (
           <div className="space-y-2 px-4 pb-4 sm:px-5">

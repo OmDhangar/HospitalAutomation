@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation';
 import { requireWritableSession } from '@/lib/auth/session';
 import { parseDepositRupees, parsePayerInput } from '@/lib/domain/payer';
 import { can, type Permission } from '@/lib/domain/permissions';
-import { normalizeIndianPhone } from '@/lib/domain/phone';
+import { normalizeStaffPhone } from '@/lib/domain/phone';
 import {
   AdmissionError,
   assignBed,
@@ -148,8 +148,8 @@ export async function createDirectAdmissionAction(form: FormData) {
   const keep = { phone: text(form, 'phone'), name: text(form, 'name') };
   const back = (error: string): never => go('/ipd/new', { error, ...keep });
 
-  const phoneE164 = normalizeIndianPhone(text(form, 'phone'));
-  if (!phoneE164) back('Enter a valid 10-digit mobile number');
+  const phoneE164 = normalizeStaffPhone(text(form, 'phone'))?.phoneE164;
+  if (!phoneE164) back('Enter a valid 10-digit mobile number, or 0000000000 for no phone');
   const name = text(form, 'name').trim();
   if (!name) back('Enter the patient’s name');
   const rawAge = text(form, 'age').trim();
