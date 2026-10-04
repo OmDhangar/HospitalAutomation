@@ -25,6 +25,7 @@ import { LOCALE_NAMES, LOCALES, t, type Locale } from '@/lib/i18n/patient';
 import { getProvider, type InteractiveButton, type ListRow } from '@/lib/notify/provider';
 import { listDoctors } from './hospital';
 import { createWalkIn, getQueueSnapshot } from './queue';
+import { getPlanAccess } from './subscriptions';
 import { getDoctorSlotsForDate } from './scheduling';
 import { bookScheduledSlot, BookingError } from './web-booking';
 
@@ -504,6 +505,11 @@ export async function handleInboundMessage(
       signing_hospital: options.expectedHospitalId,
     });
   }
+  // A revoked or lapsed plan stops WhatsApp booking, without a reply: the
+  // staff are locked out of the queue it would join.
+  if ((await getPlanAccess(hospitalId)).state === 'locked') {
+    return dropped(inbound, 'plan_inactive', { hospitalId });
+  }
 
   const phoneE164 = normalizeIndianPhone(inbound.fromPhone);
   if (!phoneE164) {
@@ -615,7 +621,36 @@ export async function handleInboundMessage(
     );
   };
 
-  const sendList = async (bodyText: string, rows: ListRow[], milestone: string) => {
+  /**
+   * The booking reply in the chat is the patient's queue link, so it is
+   * recorded under the queue_link milestone. That keeps the meter honest and,
+   * through the outbox's one-per-milestone index, stops any paid template for
+   * the same news from being queued afterwards.
+   */
+  const recordChatConfirmation = async (
+    appointment: { id: string; patientId: string },
+    providerMessageId: string | null | undefined,
+  ) => {
+    await withTenant(hospitalId, (tx) =>
+      tx
+        .insert(notificationOutbox)
+        .values({
+          hospitalId,
+          appointmentId: appointment.id,
+          patientId: appointment.patientId,
+          milestone: 'queue_link',
+          templateCode: 'conversation',
+          locale,
+          payload: { inChat: true },
+          status: 'sent',
+          providerMessageId: providerMessageId ?? null,
+          sentAt: new Date(),
+        })
+        .onConflictDoNothing(),
+    );
+  };
+
+  const sendList =async (bodyText: string, rows: ListRow[], milestone: string) => {
     if (!decision.send) return;
     promptsSent += 1;
 
@@ -860,6 +895,7 @@ export async function handleInboundMessage(
         },
         source: 'whatsapp',
         whatsappOptIn: true,
+        confirmationSentInChat: true,
       });
 
       const snapshot = await getQueueSnapshot({
@@ -892,21 +928,7 @@ export async function handleInboundMessage(
         ),
       });
 
-      await withTenant(hospitalId, (tx) =>
-        tx
-          .update(notificationOutbox)
-          .set({
-            status: 'sent',
-            providerMessageId: sent.providerMessageId,
-            sentAt: new Date(),
-          })
-          .where(
-            and(
-              eq(notificationOutbox.appointmentId, created.appointment.id),
-              eq(notificationOutbox.milestone, 'queue_link'),
-            ),
-          ),
-      );
+      await recordChatConfirmation(created.appointment, sent.providerMessageId);
       break;
     }
 
@@ -1061,6 +1083,7 @@ export async function handleInboundMessage(
           phoneE164,
           slotDatetimeIso: slotIso,
           locale,
+          confirmationSentInChat: true,
         });
       } catch (error) {
         if (!(error instanceof BookingError)) throw error;
@@ -1107,21 +1130,7 @@ export async function handleInboundMessage(
         ),
       });
 
-      await withTenant(hospitalId, (tx) =>
-        tx
-          .update(notificationOutbox)
-          .set({
-            status: 'sent',
-            providerMessageId: sent.providerMessageId,
-            sentAt: new Date(),
-          })
-          .where(
-            and(
-              eq(notificationOutbox.appointmentId, booked.appointment.id),
-              eq(notificationOutbox.milestone, 'queue_link'),
-            ),
-          ),
-      );
+      await recordChatConfirmation(booked.appointment, sent.providerMessageId);
       break;
     }
 

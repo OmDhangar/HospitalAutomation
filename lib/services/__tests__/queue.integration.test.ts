@@ -13,6 +13,7 @@ import {
   setPriority,
 } from '@/lib/services/queue';
 import { markStaleAppointmentsNoShowForHospital } from '@/lib/services/sweeps';
+import { makeNoPhonePlaceholder } from '@/lib/domain/phone';
 import { serviceDateIn } from '@/lib/domain/time';
 
 const adminUrl = process.env.DATABASE_ADMIN_URL;
@@ -160,6 +161,44 @@ describe.skipIf(!enabled)('queue engine', () => {
 
       // The token still exists and the printed QR still works; we simply do
       // not message them.
+      expect(await outboxFor(appointment.id)).toHaveLength(0);
+    });
+
+    it('sends nothing to a patient with no phone, even if the box was ticked', async () => {
+      const first = await createWalkIn({
+        hospitalId,
+        branchId,
+        doctorId,
+        timezone: TZ,
+        patient: { phoneE164: makeNoPhonePlaceholder(), name: 'No Phone' },
+        whatsappOptIn: true,
+      });
+      const second = await createWalkIn({
+        hospitalId,
+        branchId,
+        doctorId,
+        timezone: TZ,
+        patient: { phoneE164: makeNoPhonePlaceholder(), name: 'No Phone' },
+        whatsappOptIn: true,
+      });
+
+      expect(await outboxFor(first.appointment.id)).toHaveLength(0);
+      // Two people with the same name and no phone stay two patients.
+      expect(second.appointment.patientId).not.toBe(first.appointment.patientId);
+    });
+
+    it('queues no template when the booking chat already confirmed', async () => {
+      const { appointment } = await createWalkIn({
+        hospitalId,
+        branchId,
+        doctorId,
+        timezone: TZ,
+        patient: { phoneE164: '+919900004444', name: 'Chat Booker' },
+        source: 'whatsapp',
+        whatsappOptIn: true,
+        confirmationSentInChat: true,
+      });
+
       expect(await outboxFor(appointment.id)).toHaveLength(0);
     });
 

@@ -21,10 +21,16 @@ describe('can', () => {
     expect(can('doctor', 'hospital.configure')).toBe(false);
   });
 
-  it('hides reports and the plan notice from doctors', () => {
+  it('hides reports from doctors', () => {
     expect(can('doctor', 'reports.view')).toBe(false);
-    expect(can('doctor', 'subscription.notice')).toBe(false);
     expect(can('receptionist', 'reports.view')).toBe(true);
+  });
+
+  it('shows the renewal notice to the owner and doctors, not the desk or the ward', () => {
+    expect(can('owner', 'subscription.notice')).toBe(true);
+    expect(can('doctor', 'subscription.notice')).toBe(true);
+    expect(can('receptionist', 'subscription.notice')).toBe(false);
+    expect(can('nurse', 'subscription.notice')).toBe(false);
   });
 
   it('gives the till to reception, not the doctor', () => {

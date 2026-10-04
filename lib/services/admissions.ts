@@ -263,21 +263,22 @@ async function freeBedInTx(tx: Tx, args: { bedId: string; branchId: string }) {
   return bed;
 }
 
+/** Writes the payer and the deposit; returns the deposit's id, for Undo. */
 async function writeExtrasInTx(
   tx: Tx,
   args: { encounter: EncounterRow; extras: AdmissionExtras; actorUserId: string },
-) {
+): Promise<string | null> {
   if (args.extras.payer) {
     await setPayerInTx(tx, { encounter: args.encounter, payer: args.extras.payer, actorUserId: args.actorUserId });
   }
-  if (args.extras.depositPaise) {
-    await recordDepositInTx(tx, {
-      encounter: args.encounter,
-      amountPaise: args.extras.depositPaise,
-      method: args.extras.depositMethod,
-      actorUserId: args.actorUserId,
-    });
-  }
+  if (!args.extras.depositPaise) return null;
+  const deposit = await recordDepositInTx(tx, {
+    encounter: args.encounter,
+    amountPaise: args.extras.depositPaise,
+    method: args.extras.depositMethod,
+    actorUserId: args.actorUserId,
+  });
+  return deposit.id;
 }
 
 /**
@@ -311,8 +312,8 @@ export async function assignBed(args: {
   bedId: string;
   extras?: AdmissionExtras;
   actorUserId: string;
-}): Promise<void> {
-  await withBedRace(labelOf(args.hospitalId, args.bedId), () =>
+}): Promise<{ depositId: string | null }> {
+  return withBedRace(labelOf(args.hospitalId, args.bedId), () =>
     withTenant(
       args.hospitalId,
       async (tx) => {
@@ -345,8 +346,9 @@ export async function assignBed(args: {
           .where(eq(admissions.id, admission.id));
 
         const encounter = await getEncounterInTx(tx, admission.encounterId, { lock: true });
-        await writeExtrasInTx(tx, { encounter, extras: args.extras ?? {}, actorUserId: args.actorUserId });
+        const depositId = await writeExtrasInTx(tx, { encounter, extras: args.extras ?? {}, actorUserId: args.actorUserId });
         await audit(tx, admission, args.actorUserId, 'ipd.bed_assigned', { bedId: bed.id, bedLabel: bed.label });
+        return { depositId };
       },
       { clinical: true },
     ),
@@ -364,8 +366,8 @@ export async function transferBed(args: {
   admissionId: string;
   bedId: string;
   actorUserId: string;
-}): Promise<void> {
-  await withBedRace(labelOf(args.hospitalId, args.bedId), () =>
+}): Promise<{ previousBedId: string | null }> {
+  return withBedRace(labelOf(args.hospitalId, args.bedId), () =>
     withTenant(
       args.hospitalId,
       async (tx) => {
@@ -397,6 +399,7 @@ export async function transferBed(args: {
           toBedId: bed.id,
           toBedLabel: bed.label,
         });
+        return { previousBedId: current?.bedId ?? null };
       },
       { clinical: true },
     ),
@@ -424,7 +427,7 @@ export async function createDirectAdmission(args: {
   bedId?: string | null;
   extras?: AdmissionExtras;
   actorUserId: string;
-}): Promise<{ admissionId: string; patientName: string }> {
+}): Promise<{ admissionId: string; patientName: string; depositId: string | null }> {
   const work = () =>
     withTenant(
       args.hospitalId,
@@ -500,12 +503,12 @@ export async function createDirectAdmission(args: {
             assignedByUserId: args.actorUserId,
           });
         }
-        await writeExtrasInTx(tx, { encounter, extras: args.extras ?? {}, actorUserId: args.actorUserId });
+        const depositId = await writeExtrasInTx(tx, { encounter, extras: args.extras ?? {}, actorUserId: args.actorUserId });
         await audit(tx, admission, args.actorUserId, 'ipd.admitted_direct', {
           encounterId: encounter.id,
           bedId: bed?.id ?? null,
         });
-        return { admissionId: admission.id, patientName: patient.name };
+        return { admissionId: admission.id, patientName: patient.name, depositId };
       },
       { clinical: true },
     );

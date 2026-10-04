@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation';
 import { requireWritableSession } from '@/lib/auth/session';
 import { parseDepositRupees, parsePayerInput } from '@/lib/domain/payer';
 import { can, type Permission } from '@/lib/domain/permissions';
-import { normalizeIndianPhone } from '@/lib/domain/phone';
+import { normalizeStaffPhone } from '@/lib/domain/phone';
 import {
   AdmissionError,
   assignBed,
@@ -15,9 +15,17 @@ import {
   transferBed,
   type AdmissionExtras,
 } from '@/lib/services/admissions';
-import { CareEntryError, voidCareEntry } from '@/lib/services/care-entries';
+import { CareEntryError, undoCareEntry, voidCareEntry } from '@/lib/services/care-entries';
+import {
+  UndoError,
+  undoAssignBed,
+  undoCancelAdmission,
+  undoDirectAdmission,
+  undoTransfer,
+  undoVoidCareEntry,
+} from '@/lib/services/ipd-undo';
+import { formatUndoToken, idList, isId, parseUndoToken } from '@/lib/domain/undo';
 import { PatientBillingError } from '@/lib/services/patient-billing';
-import { WardDeviceError, setOwnPin } from '@/lib/services/ward-devices';
 import { DoctorIpdError, orderTests } from '@/lib/services/doctor-ipd';
 
 /**
@@ -76,19 +84,23 @@ export async function assignBedAction(form: FormData) {
 
   const extras = readExtras(form, can(session.role, 'billing.collect'));
   if ('error' in extras) go(sheet, { error: extras.error, bed: bedId });
+  let depositId: string | null = null;
   try {
-    await assignBed({
+    ({ depositId } = await assignBed({
       hospitalId: session.hospitalId,
       admissionId,
       bedId,
       extras: extras as AdmissionExtras,
       actorUserId: session.userId,
-    });
+    }));
   } catch (err) {
     if (isActionError(err)) go(sheet, { error: (err as Error).message });
     throw err;
   }
-  go(`/ipd/admissions/${admissionId}`, { saved: 'Admitted. The bed is on the ward grid.' });
+  go(`/ipd/admissions/${admissionId}`, {
+    saved: 'Admitted. The bed is on the ward grid.',
+    undo: formatUndoToken('assign', admissionId, depositId),
+  });
 }
 
 export async function transferBedAction(form: FormData) {
@@ -97,13 +109,17 @@ export async function transferBedAction(form: FormData) {
   const page = `/ipd/admissions/${admissionId}/transfer`;
   const bedId = text(form, 'bedId');
   if (!bedId) go(page, { error: 'Tap the new bed first' });
+  let previousBedId: string | null = null;
   try {
-    await transferBed({ hospitalId: session.hospitalId, admissionId, bedId, actorUserId: session.userId });
+    ({ previousBedId } = await transferBed({ hospitalId: session.hospitalId, admissionId, bedId, actorUserId: session.userId }));
   } catch (err) {
     if (isActionError(err)) go(page, { error: (err as Error).message });
     throw err;
   }
-  go(`/ipd/admissions/${admissionId}`, { saved: 'Moved to the new bed. Everything recorded stays with the stay.' });
+  go(`/ipd/admissions/${admissionId}`, {
+    saved: 'Moved to the new bed. Everything recorded stays with the stay.',
+    ...(previousBedId ? { undo: formatUndoToken('transfer', admissionId, previousBedId) } : {}),
+  });
 }
 
 export async function cancelAdmissionAction(form: FormData) {
@@ -120,7 +136,10 @@ export async function cancelAdmissionAction(form: FormData) {
     if (isActionError(err)) go(`/ipd/admissions/${admissionId}`, { error: (err as Error).message });
     throw err;
   }
-  go('/ipd', { tab: 'awaiting' });
+  go(`/ipd/admissions/${admissionId}`, {
+    saved: 'Admission cancelled.',
+    undo: formatUndoToken('cancel', admissionId),
+  });
 }
 
 /** Emergency admission: no OPD token (IPD plan §5.4). */
@@ -129,8 +148,8 @@ export async function createDirectAdmissionAction(form: FormData) {
   const keep = { phone: text(form, 'phone'), name: text(form, 'name') };
   const back = (error: string): never => go('/ipd/new', { error, ...keep });
 
-  const phoneE164 = normalizeIndianPhone(text(form, 'phone'));
-  if (!phoneE164) back('Enter a valid 10-digit mobile number');
+  const phoneE164 = normalizeStaffPhone(text(form, 'phone'))?.phoneE164;
+  if (!phoneE164) back('Enter a valid 10-digit mobile number, or 0000000000 for no phone');
   const name = text(form, 'name').trim();
   if (!name) back('Enter the patient’s name');
   const rawAge = text(form, 'age').trim();
@@ -144,6 +163,7 @@ export async function createDirectAdmissionAction(form: FormData) {
   if ('error' in extras) back(extras.error);
 
   let admissionId = '';
+  let depositId: string | null = null;
   try {
     const result = await createDirectAdmission({
       hospitalId: session.hospitalId,
@@ -161,12 +181,14 @@ export async function createDirectAdmissionAction(form: FormData) {
       actorUserId: session.userId,
     });
     admissionId = result.admissionId;
+    depositId = result.depositId;
   } catch (err) {
     if (isActionError(err)) back((err as Error).message);
     throw err;
   }
   go(`/ipd/admissions/${admissionId}`, {
     saved: text(form, 'bedId') ? 'Admitted.' : 'Admitted. Assign a bed when one is free.',
+    undo: formatUndoToken('direct', admissionId, depositId),
   });
 }
 
@@ -183,17 +205,21 @@ export async function setDischargeReadyAction(form: FormData) {
     if (isActionError(err)) go(safeBack, { error: (err as Error).message });
     throw err;
   }
-  go(safeBack, { saved: ready ? 'Marked ready to go home. The desk will prepare the bill.' : 'No longer marked ready.' });
+  go(safeBack, {
+    saved: ready ? 'Marked ready to go home. The desk will prepare the bill.' : 'No longer marked ready.',
+    undo: formatUndoToken('ready', admissionId, String(ready)),
+  });
 }
 
 /** The desk's correction of a bedside entry after the undo window, with a reason (D-UN). */
 export async function voidCareEntryAction(form: FormData) {
   const session = await authorize('ipd.correct');
   const admissionId = text(form, 'admissionId');
+  const entryId = text(form, 'entryId');
   try {
     await voidCareEntry({
       hospitalId: session.hospitalId,
-      entryId: text(form, 'entryId'),
+      entryId,
       reason: text(form, 'reason'),
       actorUserId: session.userId,
     });
@@ -201,22 +227,10 @@ export async function voidCareEntryAction(form: FormData) {
     if (err instanceof CareEntryError) go(`/ipd/admissions/${admissionId}`, { error: err.message });
     throw err;
   }
-  go(`/ipd/admissions/${admissionId}`, { saved: 'Entry removed. Its bill line is voided with your reason.' });
-}
-
-/** A nurse sets her own ward-tablet PIN, signed in with her own login (T1.9). */
-export async function setOwnPinAction(form: FormData) {
-  const session = await authorize('ipd.record');
-  if (session.wardDeviceId) go('/ipd/ward', { error: 'Set your PIN after signing in with your own login' });
-  const pin = text(form, 'pin').trim();
-  if (pin !== text(form, 'confirm').trim()) go('/ipd/ward', { error: 'The two PINs do not match' });
-  try {
-    await setOwnPin({ hospitalId: session.hospitalId, userId: session.userId, pin });
-  } catch (err) {
-    if (err instanceof WardDeviceError) go('/ipd/ward', { error: err.message });
-    throw err;
-  }
-  go('/ipd/ward', { saved: 'Your ward PIN is set. Use it on the shared ward tablet.' });
+  go(`/ipd/admissions/${admissionId}`, {
+    saved: 'Entry removed. Its bill line is voided with your reason.',
+    undo: formatUndoToken('void-entry', entryId),
+  });
 }
 
 /** The doctor's Tests button (T3.1): each tapped test becomes an entry, billed like any other. */
@@ -226,6 +240,7 @@ export async function orderTestsAction(form: FormData) {
   const ids = form.getAll('test').map(String).filter((id) => /^[0-9a-f-]{36}$/i.test(id));
   let ordered = 0;
   let firstError = '';
+  let entryIds: string[] = [];
   try {
     const results = await orderTests({
       hospitalId: session.hospitalId,
@@ -237,11 +252,70 @@ export async function orderTestsAction(form: FormData) {
       seeAll: can(session.role, 'hospital.configure'),
     });
     ordered = results.filter((result) => result.ok).length;
+    entryIds = results.flatMap((result) => (result.ok && !result.repeat ? [result.entryId] : []));
     const refused = results.find((result) => !result.ok);
     firstError = refused && !refused.ok ? refused.error : '';
   } catch (err) {
     if (err instanceof DoctorIpdError) go('/ipd/my-patients', { error: err.message });
     throw err;
   }
-  go('/ipd/my-patients', firstError ? { error: firstError } : { saved: `${ordered} test${ordered === 1 ? '' : 's'} sent.` });
+  go(
+    '/ipd/my-patients',
+    firstError
+      ? { error: firstError }
+      : {
+          saved: `${ordered} test${ordered === 1 ? '' : 's'} sent.`,
+          ...(entryIds.length > 0 ? { undo: formatUndoToken('tests', entryIds.join(',')) } : {}),
+        },
+  );
+}
+
+/* ------------------------------------------------------------------ undo */
+
+/**
+ * The Undo button on the IPD screens. Each kind needs the permission its
+ * original action needed; the undo service re-checks the window and that
+ * nothing has happened to the patient since.
+ */
+export async function undoIpdAction(form: FormData) {
+  const token = parseUndoToken(text(form, 'undo'));
+  const back = text(form, '_back').startsWith('/ipd') ? text(form, '_back') : '/ipd';
+  if (!token) go(back, { error: 'Nothing to undo.' });
+  const { kind, args } = token!;
+  const permission: Permission =
+    kind === 'ready' ? 'ipd.dischargeReady' : kind === 'tests' ? 'ipd.orderTests' : kind === 'void-entry' ? 'ipd.correct' : 'ipd.admit';
+  const session = await authorize(permission);
+  const base = { hospitalId: session.hospitalId, actorUserId: session.userId };
+  let message = 'Undone.';
+  try {
+    if (kind === 'assign' && isId(args[0])) {
+      await undoAssignBed({ ...base, admissionId: args[0], depositId: isId(args[1]) ? args[1] : null });
+      message = 'Undone: the patient is back on Awaiting bed.';
+    } else if (kind === 'transfer' && isId(args[0]) && isId(args[1])) {
+      await undoTransfer({ ...base, admissionId: args[0], previousBedId: args[1] });
+      message = 'Undone: back in the previous bed.';
+    } else if (kind === 'direct' && isId(args[0])) {
+      await undoDirectAdmission({ ...base, admissionId: args[0], depositId: isId(args[1]) ? args[1] : null });
+      go('/ipd', { tab: 'awaiting' });
+    } else if (kind === 'cancel' && isId(args[0])) {
+      await undoCancelAdmission({ ...base, admissionId: args[0] });
+      message = 'Undone: the patient is back on Awaiting bed.';
+    } else if (kind === 'ready' && isId(args[0])) {
+      await setDischargeReady({ ...base, admissionId: args[0], ready: args[1] !== 'true' });
+    } else if (kind === 'void-entry' && isId(args[0])) {
+      await undoVoidCareEntry({ ...base, entryId: args[0] });
+      message = 'Undone: the entry is back on the record and the bill.';
+    } else if (kind === 'tests') {
+      for (const entryId of idList(args[0])) await undoCareEntry({ ...base, entryId });
+      message = 'Undone: the tests were taken back.';
+    } else {
+      go(back, { error: 'Nothing to undo.' });
+    }
+  } catch (err) {
+    if (err instanceof UndoError || err instanceof CareEntryError || isActionError(err)) {
+      go(back, { error: (err as Error).message });
+    }
+    throw err;
+  }
+  go(back, { saved: message });
 }

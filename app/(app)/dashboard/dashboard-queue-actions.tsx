@@ -193,7 +193,7 @@ export function AddWalkInForm({
         </div>
       </div>
 
-      <Field label="Mobile number" hint="10 digits. The queue link goes here.">
+      <Field label="Mobile number" hint="10 digits. The queue link goes here. No phone? Enter 0000000000.">
         <Input
           type="tel"
           value={phone}

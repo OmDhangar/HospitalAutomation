@@ -29,20 +29,34 @@ export const MAX_BEDS_PER_RANGE = 60;
 /**
  * Turns what the owner typed into bed labels.
  *
+ *   "12"        → 12 beds: 1 … 12, or — in a ward that already has beds 1–12 —
+ *                 13 … 24. A single number is a count, because that is what
+ *                 "how many beds?" means to the person typing it.
  *   "1-12"      → 1, 2, … 12
  *   "A1-A6"     → A1 … A6       (the prefix may be repeated on the right)
  *   "ICU 1-4"   → ICU 1 … ICU 4
- *   "1, 2, 5"   → 1, 2, 5
+ *   "1, 2, 5"   → 1, 2, 5       (a list names exact beds)
  *   "ICU-3"     → ICU-3         (a single label: letters before the hyphen)
+ *   "13-13"     → 13            (one bed with an exact number)
  *
  * Duplicates are dropped, case-insensitively, keeping the first spelling.
  */
-export function parseBedLabels(input: string): ParseResult<string[]> {
+export function parseBedLabels(input: string, existingLabels: readonly string[] = []): ParseResult<string[]> {
   const parts = input
     .split(/[,\n;]/)
     .map((part) => tidy(part))
     .filter(Boolean);
-  if (parts.length === 0) return { ok: false, error: 'Enter bed numbers, like 1-12' };
+  if (parts.length === 0) return { ok: false, error: 'Enter how many beds, like 12' };
+
+  if (parts.length === 1 && /^\d{1,3}$/.test(parts[0])) {
+    const count = Number(parts[0]);
+    if (count < 1) return { ok: false, error: 'Enter at least 1 bed' };
+    if (count > MAX_BEDS_PER_RANGE) {
+      return { ok: false, error: `That is more than ${MAX_BEDS_PER_RANGE} beds at once` };
+    }
+    const highest = existingLabels.reduce((max, label) => (/^\d+$/.test(label) ? Math.max(max, Number(label)) : max), 0);
+    return { ok: true, value: Array.from({ length: count }, (_, i) => String(highest + 1 + i)) };
+  }
 
   const labels: string[] = [];
   for (const part of parts) {

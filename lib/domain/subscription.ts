@@ -186,5 +186,88 @@ export function expiryBucket(endsAt: Date | null, now: Date): ExpiryBucket {
   return null;
 }
 
+/**
+ * How far ahead the hospital's own staff are told to renew. The operator's
+ * console still sees the whole 30-day window (expiryBucket); the hospital
+ * only needs the nudge once it is close enough to act on.
+ */
+export const RENEWAL_NOTICE_DAYS = 15;
+
+/** expiryBucket, but silent until the last RENEWAL_NOTICE_DAYS days. */
+export function renewalNoticeBucket(endsAt: Date | null, now: Date): ExpiryBucket {
+  if (!endsAt) return null;
+  if ((endsAt.getTime() - now.getTime()) / DAY_MS > RENEWAL_NOTICE_DAYS) return null;
+  return expiryBucket(endsAt, now);
+}
+
 export const daysUntilExpiry = (endsAt: Date | null, now: Date): number | null =>
   endsAt ? Math.ceil((endsAt.getTime() - now.getTime()) / DAY_MS) : null;
+
+/* ------------------------------------------------------------------ access */
+
+/**
+ * Days a lapsed plan keeps working after its end date. Long enough for an
+ * owner who pays a day or two late not to be stopped mid-OPD; short enough
+ * that an unpaid plan does end.
+ */
+export const LAPSE_GRACE_DAYS = 3;
+
+/** A trial is given in days: 15, 20, whatever was agreed. */
+export const TRIAL_MIN_DAYS = 1;
+export const TRIAL_MAX_DAYS = 90;
+
+export const addDays = (date: Date, days: number): Date => new Date(date.getTime() + days * DAY_MS);
+
+/** Reads a typed trial length, or null if it is not a whole number in range. */
+export function parseTrialDays(input: string): number | null {
+  const trimmed = input.trim();
+  if (!/^\d{1,3}$/.test(trimmed)) return null;
+  const days = Number(trimmed);
+  return days >= TRIAL_MIN_DAYS && days <= TRIAL_MAX_DAYS ? days : null;
+}
+
+type TermForAccess = { status: SubscriptionStatus; startsAt: Date; endsAt: Date };
+
+export type PlanAccess =
+  | { state: 'open' }
+  /** Lapsed, still working until `locksAt`. */
+  | { state: 'grace'; endedAt: Date; locksAt: Date }
+  | { state: 'locked'; reason: 'revoked' | 'suspended' | 'lapsed'; endedAt: Date | null };
+
+/**
+ * Whether a hospital's staff may use the product right now.
+ *
+ * `current` is the term covering this instant; `latest` is the furthest term
+ * on the books, which is the one that has ended when nothing covers today.
+ *
+ * A revoked (cancelled) or suspended plan locks at once. A plan that simply
+ * ran out, trials included, keeps working for LAPSE_GRACE_DAYS first. A
+ * hospital never put on a plan is not locked: that is our omission, not
+ * their lapse.
+ */
+export function planAccess(args: {
+  current: TermForAccess | null;
+  latest: TermForAccess | null;
+  now: Date;
+}): PlanAccess {
+  const { current, latest, now } = args;
+
+  if (current) {
+    if (current.status === 'cancelled') return { state: 'locked', reason: 'revoked', endedAt: null };
+    if (current.status === 'suspended') return { state: 'locked', reason: 'suspended', endedAt: null };
+    // Marked expired by hand while its dates still run: the operator ended it.
+    if (current.status === 'expired') return { state: 'locked', reason: 'lapsed', endedAt: now };
+    return { state: 'open' };
+  }
+
+  // Nothing ever billed, or only a term that starts later: not a lapse.
+  if (!latest || latest.startsAt > now) return { state: 'open' };
+
+  if (latest.status === 'cancelled') return { state: 'locked', reason: 'revoked', endedAt: latest.endsAt };
+  if (latest.status === 'suspended') return { state: 'locked', reason: 'suspended', endedAt: latest.endsAt };
+
+  const locksAt = addDays(latest.endsAt, LAPSE_GRACE_DAYS);
+  return now < locksAt
+    ? { state: 'grace', endedAt: latest.endsAt, locksAt }
+    : { state: 'locked', reason: 'lapsed', endedAt: latest.endsAt };
+}

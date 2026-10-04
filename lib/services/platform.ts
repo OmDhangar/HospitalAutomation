@@ -17,7 +17,7 @@ import { hashPassword, passwordProblem, unguessablePassword } from '@/lib/securi
 import { assertEmailUnclaimed, StaffAccountError } from './auth';
 import { addStarterChargeItemsInTx } from './ipd-config';
 import { addStarterMedicinesInTx } from './medicines';
-import { startSubscription } from './subscriptions';
+import { startSubscription, startTrial } from './subscriptions';
 import { bindHospitalWaba } from './whatsapp-byo';
 import { assignNumberToHospital } from './whatsapp-integration';
 import {
@@ -233,6 +233,8 @@ export type CreateHospitalParams = {
   branchAddress?: string;
   planTierCode?: string;
   billingCycle?: 'monthly' | 'annual';
+  /** Start on a free trial of this many days instead of a paid term. */
+  trialDays?: number;
   initialDoctorName?: string;
   initialDoctorSpecialty?: string;
   initialDoctorMode?: 'queue' | 'slot' | 'both';
@@ -357,13 +359,22 @@ export async function createHospital(args: CreateHospitalParams): Promise<Create
   // Start subscription if plan tier specified
   if (args.planTierCode) {
     try {
-      await startSubscription({
-        hospitalId: hospital.id,
-        tierCode: args.planTierCode,
-        billingCycle: args.billingCycle ?? 'monthly',
-        changeReason: 'initial_onboarding',
-        changedByUserId: args.actorUserId ?? null,
-      });
+      if (args.trialDays) {
+        await startTrial({
+          hospitalId: hospital.id,
+          tierCode: args.planTierCode,
+          days: args.trialDays,
+          changedByUserId: args.actorUserId ?? null,
+        });
+      } else {
+        await startSubscription({
+          hospitalId: hospital.id,
+          tierCode: args.planTierCode,
+          billingCycle: args.billingCycle ?? 'monthly',
+          changeReason: 'initial_onboarding',
+          changedByUserId: args.actorUserId ?? null,
+        });
+      }
     } catch (err) {
       console.warn('[platform:createHospital] startSubscription warning:', err);
     }

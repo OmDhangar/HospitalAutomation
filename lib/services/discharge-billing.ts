@@ -366,10 +366,10 @@ export async function discountBillLine(args: {
   discountPaise: number;
   reason: string;
   actorUserId: string;
-}): Promise<void> {
+}): Promise<{ lineId: string }> {
   const reason = args.reason.trim().slice(0, 200);
   if (!reason) throw new DischargeBillError('Say why the discount is given');
-  await withTenant(args.hospitalId, async (tx) => {
+  return withTenant(args.hospitalId, async (tx) => {
     const line = await lockDraftLineInTx(tx, args.lineId);
     if (args.discountPaise < 0 || args.discountPaise > line.subtotalPaise) {
       throw new DischargeBillError('The discount cannot be more than the line');
@@ -387,7 +387,7 @@ export async function discountBillLine(args: {
       .where(eq(billItems.id, line.id));
     // The same line from the same source, discounted. Everything that says
     // what it is for is copied; only the money and its reason change.
-    await tx.insert(billItems).values({
+    const [replacement] = await tx.insert(billItems).values({
       hospitalId: line.hospitalId,
       billId: line.billId,
       itemType: line.itemType,
@@ -407,15 +407,16 @@ export async function discountBillLine(args: {
       ...amounts,
       discountReason: args.discountPaise > 0 ? reason : null,
       createdByUserId: args.actorUserId,
-    });
+    }).returning({ id: billItems.id });
     await tx.insert(auditLogs).values({
       hospitalId: args.hospitalId,
       actorUserId: args.actorUserId,
       action: 'billing.line_discounted',
       objectType: 'bill_item',
       objectId: line.id,
-      metadata: { reason, discountPaise: args.discountPaise },
+      metadata: { reason, discountPaise: args.discountPaise, replacementId: replacement.id },
     });
+    return { lineId: replacement.id };
   });
 }
 
@@ -428,11 +429,11 @@ export async function recordIpdPayment(args: {
   method: 'cash' | 'upi' | 'card' | 'bank' | 'other';
   reference?: string | null;
   actorUserId: string;
-}): Promise<void> {
+}): Promise<{ paymentId: string }> {
   if (!Number.isSafeInteger(args.amountPaise) || args.amountPaise <= 0) {
     throw new DischargeBillError('Enter an amount of more than ₹0');
   }
-  await withTenant(
+  return withTenant(
     args.hospitalId,
     async (tx) => {
       const [admission] = await tx
@@ -466,6 +467,7 @@ export async function recordIpdPayment(args: {
         objectId: payment.id,
         metadata: { encounterId: admission.encounterId, amountPaise: args.amountPaise, method: args.method },
       });
+      return { paymentId: payment.id };
     },
     { clinical: true },
   );

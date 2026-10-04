@@ -1,18 +1,14 @@
+import { SavedNotice } from '@/components/saved-notice';
 import Link from 'next/link';
 import { Alert, Button, Card, CardHeader, EmptyState, Field, Input, cn } from '@/components/ui';
 import { BedIcon, TagIcon } from '@/components/icons';
+import { BedCountField } from '@/components/ipd/bed-count-field';
 import { requireSession } from '@/lib/auth/session';
 import { formatRupees } from '@/lib/domain/billing';
 import { can } from '@/lib/domain/permissions';
 import { listBranches } from '@/lib/services/auth';
 import { listRoomChargeItems, listWardSetup, type WardSetupRow } from '@/lib/services/ipd-config';
-import {
-  addBedsAction,
-  createWardAction,
-  toggleBedAction,
-  toggleWardAction,
-  updateWardAction,
-} from './actions';
+import { addBedsAction, createWardAction, toggleBedAction, toggleWardAction, updateWardAction, undoSettingsAction } from './actions';
 
 export const metadata = { title: 'IPD · Settings' };
 
@@ -64,7 +60,13 @@ export default async function IpdSettingsPage({ searchParams }: PageProps<'/sett
       </div>
 
       {typeof params.error === 'string' ? <Alert tone="error">{params.error}</Alert> : null}
-      {typeof params.saved === 'string' ? <Alert tone="success">{params.saved}</Alert> : null}
+      {typeof params.saved === 'string' ? (
+        <SavedNotice
+          message={params.saved}
+          undo={typeof params.undo === 'string' ? params.undo : null}
+          action={undoSettingsAction} hidden={{ _page: '/settings/ipd' }}
+        />
+      ) : null}
 
       {can(session.role, 'billing.price') ? (
         <Card>
@@ -86,22 +88,6 @@ export default async function IpdSettingsPage({ searchParams }: PageProps<'/sett
           </div>
         </Card>
       ) : null}
-
-      <Card>
-        <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
-          <div className="min-w-0">
-            <h2 className="text-base font-bold text-ink-900">Ward tablets and PINs</h2>
-            <p className="mt-0.5 text-xs text-ink-500">
-              A shared tablet per ward, unlocked by each nurse’s 4-digit PIN.
-            </p>
-          </div>
-          <Link href="/settings/ipd/devices" className="w-full sm:w-auto">
-            <Button variant="secondary" className="w-full justify-center sm:w-auto">
-              Ward devices
-            </Button>
-          </Link>
-        </div>
-      </Card>
 
       {wardRows.length === 0 ? null : (
         <div className="grid gap-5 lg:grid-cols-2 lg:items-start">
@@ -131,9 +117,7 @@ export default async function IpdSettingsPage({ searchParams }: PageProps<'/sett
             <input type="hidden" name="branchId" value={branchRows[0]?.id ?? ''} />
           )}
           <RoomChargeField roomItems={roomItems} />
-          <Field label="Beds" hint="“1-12” makes twelve beds. Lists work too: “1-6, ICU-1”.">
-            <Input name="beds" placeholder="1-12" />
-          </Field>
+          <BedCountField name="beds" label="How many beds?" />
           <div className="sm:col-span-2">
             <Button type="submit" variant="primary" size="lg" className="w-full sm:w-auto">
               Add ward
@@ -225,14 +209,18 @@ function WardCard({
           </ul>
         )}
 
-        <form action={addBedsAction} className="flex items-end gap-2">
+        <form action={addBedsAction} className="flex items-start gap-2">
           <input type="hidden" name="wardId" value={ward.id} />
           <div className="flex-1">
-            <Field label="Add beds">
-              <Input name="labels" required placeholder="13-16" />
-            </Field>
+            <BedCountField
+              name="labels"
+              label="Add more beds"
+              required
+              placeholder="4"
+              existingLabels={ward.beds.map((bed) => bed.label)}
+            />
           </div>
-          <Button type="submit" size="lg">
+          <Button type="submit" size="lg" className="mt-[26px]">
             Add
           </Button>
         </form>

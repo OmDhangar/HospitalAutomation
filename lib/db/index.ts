@@ -27,8 +27,9 @@ export function getDb() {
     cachedClient = postgres(connectionString, {
       max: 10,
       prepare: false,
-      idle_timeout: 30,
-      connect_timeout: 10,
+      idle_timeout: 20,
+      connect_timeout: 30,
+      max_lifetime: 60 * 30,
     });
     cachedDb = drizzle(cachedClient, { schema });
   }

@@ -20,13 +20,14 @@ import {
 } from '@/lib/services/payments';
 import {
   getCurrentSubscription,
+  renewalPricePaise,
   getSubscriptionHistory,
   listActiveTiers,
 } from '@/lib/services/subscriptions';
 import { getHospitalUsage, getMessageBreakdown } from '@/lib/services/usage';
 import { checkPaymentStatus, renewPlan } from './actions';
 
-export const metadata = { title: 'Subscription · Qurio' };
+export const metadata = { title: 'Subscription · QuriioHQ' };
 
 export default async function SubscriptionPage({
   searchParams,
@@ -59,7 +60,7 @@ export default async function SubscriptionPage({
       <Card>
         <EmptyState
           title="No plan assigned yet"
-          hint="Your queue works normally. Ask your Qurio contact to set up a plan."
+          hint="Your queue works normally. Ask your QuriioHQ contact to set up a plan."
         />
       </Card>
     );
@@ -106,7 +107,8 @@ export default async function SubscriptionPage({
 
   // Shown before the owner commits, so the amount on the Razorpay page is
   // never a surprise. Computed from the same function that creates the charge.
-  const charge = computeCharge(subscription.pricePaise);
+  // A trial renews at the rate card price, not at its own nil price.
+  const charge = computeCharge(await renewalPricePaise(subscription));
 
   // A link already waiting to be paid. Surfaced rather than silently reused, so
   // an owner who lost the tab can find their way back to it.
@@ -264,7 +266,7 @@ export default async function SubscriptionPage({
 
               {!paymentsEnabled ? (
                 <p className="text-xs leading-relaxed text-ink-500">
-                  To renew or change plan, contact your Qurio representative. Online
+                  To renew or change plan, contact your QuriioHQ representative. Online
                   payment is not enabled for this hospital yet.
                 </p>
               ) : openPayment?.shortUrl ? (
@@ -377,6 +379,7 @@ function PaymentNotice({
     'NOT_PERMITTED',
     'GATEWAY_UNAVAILABLE',
     'ALREADY_PAID',
+    'PLAN_REVOKED',
   ];
   const known = KNOWN.find((code) => code === error);
 

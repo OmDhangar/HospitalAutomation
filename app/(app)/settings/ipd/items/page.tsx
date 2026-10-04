@@ -1,3 +1,4 @@
+import { SavedNotice } from '@/components/saved-notice';
 import Link from 'next/link';
 import { Alert, Button, Card, CardHeader, EmptyState, Field, Input, cn } from '@/components/ui';
 import { CsvImport } from '@/components/ipd/csv-import';
@@ -16,14 +17,7 @@ import {
   type ChargeItemFilter,
   type ChargeItemRow,
 } from '@/lib/services/ipd-config';
-import {
-  addStarterChargeItemsAction,
-  createChargeItemAction,
-  importChargeItemsAction,
-  setChargeItemPricesAction,
-  toggleChargeItemAction,
-  updateChargeItemAction,
-} from '../actions';
+import { addStarterChargeItemsAction, createChargeItemAction, importChargeItemsAction, setChargeItemPricesAction, toggleChargeItemAction, updateChargeItemAction, undoSettingsAction } from '../actions';
 
 export const metadata = { title: 'IPD items and prices · Settings' };
 
@@ -104,7 +98,13 @@ export default async function IpdItemsPage({ searchParams }: PageProps<'/setting
       </div>
 
       {typeof params.error === 'string' ? <Alert tone="error">{params.error}</Alert> : null}
-      {typeof params.saved === 'string' ? <Alert tone="success">{params.saved}</Alert> : null}
+      {typeof params.saved === 'string' ? (
+        <SavedNotice
+          message={params.saved}
+          undo={typeof params.undo === 'string' ? params.undo : null}
+          action={undoSettingsAction} hidden={{ _page: '/settings/ipd/items' }}
+        />
+      ) : null}
 
       {counts.total === 0 && counts.inactive === 0 ? (
         <Card>

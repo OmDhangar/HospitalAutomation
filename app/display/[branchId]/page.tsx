@@ -243,7 +243,7 @@ export default async function DisplayPage({
 
       {/* Footer Branding */}
       <footer className="mt-8 flex items-center justify-between border-t border-white/10 pt-4 text-xs font-medium text-slate-500">
-        <p>Qurio QueueCare™ · Real-time OPD Display System</p>
+        <p>QuriioHQ QueueCare™ · Real-time OPD Display System</p>
         <p>Auto-refreshing every 10 seconds</p>
       </footer>
     </main>

@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { requirePlatformAdmin } from '@/lib/auth/platform';
 import { clearSessionCookie, readSessionCookie, setSessionCookie } from '@/lib/auth/session';
+import { parseTrialDays } from '@/lib/domain/subscription';
 import { isPlausiblePhoneNumberId } from '@/lib/domain/whatsapp-integration';
 import { endImpersonation, ImpersonationError } from '@/lib/services/impersonation';
 import { StaffAccountError } from '@/lib/services/auth';
@@ -127,6 +128,11 @@ export async function createHospitalAction(formData: FormData) {
     ? ('annual' as const)
     : ('monthly' as const);
 
+  // Blank means a paid plan from day one; a number means a free trial that long.
+  const rawTrial = String(formData.get('trialDays') ?? '').trim();
+  const trialDays = rawTrial ? parseTrialDays(rawTrial) : undefined;
+  if (trialDays === null) redirect('/admin/onboard?error=INVALID_TRIAL_DAYS');
+
   const initialDoctorName = String(formData.get('initialDoctorName') ?? '').trim() || undefined;
   const initialDoctorSpecialty =
     String(formData.get('initialDoctorSpecialty') ?? '').trim() || undefined;
@@ -179,6 +185,7 @@ export async function createHospitalAction(formData: FormData) {
       branchAddress,
       planTierCode,
       billingCycle,
+      trialDays: trialDays ?? undefined,
       initialDoctorName,
       initialDoctorSpecialty,
       initialDoctorMode,

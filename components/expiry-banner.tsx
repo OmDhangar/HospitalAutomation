@@ -3,7 +3,7 @@ import { cn } from '@/components/ui';
 import type { ExpiryBucket } from '@/lib/domain/subscription';
 
 /**
- * The plan-expiry strip that sits above every page.
+ * The plan-expiry strip, on the dashboard (see PlanExpiryNotice).
  *
  * Deliberately not a card on the subscription page, where it would only be
  * seen by someone already thinking about billing. The person who needs to act
@@ -11,7 +11,7 @@ import type { ExpiryBucket } from '@/lib/domain/subscription';
  * failure is invisible in the product — appointments still book, so nobody
  * discovers it until a patient says they were never messaged.
  *
- * It stays quiet until the last 30 days, then escalates. A banner that is
+ * It stays quiet until the last 15 days, then escalates. A banner that is
  * always on screen is furniture, and furniture does not get clicked.
  */
 
@@ -77,11 +77,16 @@ export function ExpiryBanner({
   bucket,
   daysRemaining,
   canRenew,
+  locksAt,
+  timezone = 'Asia/Kolkata',
 }: {
   bucket: ExpiryBucket;
   daysRemaining: number | null;
   /** Only an owner can pay, so anyone else is pointed at the plan page. */
   canRenew: boolean;
+  /** Set during the grace days after a lapse: when staff will be locked out. */
+  locksAt?: Date;
+  timezone?: string;
 }) {
   // Null bucket means the renewal is comfortably far off. Nothing to say.
   if (bucket === null) return null;
@@ -100,12 +105,16 @@ export function ExpiryBanner({
       <div className="flex min-w-0 items-center gap-2.5">
         <span className={cn('size-2.5 shrink-0 rounded-full', DOT_STYLES[tone])} />
         <p className="min-w-0 text-sm font-medium leading-tight">
-          {message(bucket, daysRemaining)}
+          {locksAt
+            ? `Your plan has expired. QuriioHQ stops working on ${new Intl.DateTimeFormat('en-IN', { timeZone: timezone, day: 'numeric', month: 'short' }).format(locksAt)} unless it is renewed.`
+            : message(bucket, daysRemaining)}
         </p>
       </div>
 
       <Link
-        href="/subscription"
+        // An expired plan has no current term for the plan page to show, so
+        // the grace warning goes where renewing a lapsed plan works.
+        href={locksAt ? '/plan-inactive' : '/subscription'}
         className={cn(
           'w-full sm:w-auto text-center shrink-0 rounded-lg px-3.5 py-2 sm:py-1.5 text-sm font-semibold transition-colors shadow-xs',
           'focus-visible:outline-2 focus-visible:outline-offset-2',

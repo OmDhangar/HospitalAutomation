@@ -1,3 +1,4 @@
+import { SavedNotice } from '@/components/saved-notice';
 import Link from 'next/link';
 import { Alert, Button, Card, CardHeader, EmptyState, Field, Input, cn } from '@/components/ui';
 import { requireSession } from '@/lib/auth/session';
@@ -5,13 +6,7 @@ import { formatRupees } from '@/lib/domain/billing';
 import { can } from '@/lib/domain/permissions';
 import { STARTER_MEDICINES } from '@/lib/domain/starter-medicines';
 import { listCatalogue, type CatalogueFilter, type CatalogueRow } from '@/lib/services/medicines';
-import {
-  addStarterMedicinesAction,
-  createMedicineAction,
-  setMedicinePricesAction,
-  toggleMedicineAction,
-  updateMedicineAction,
-} from './actions';
+import { addStarterMedicinesAction, createMedicineAction, setMedicinePricesAction, toggleMedicineAction, updateMedicineAction, undoMedicinesAction } from './actions';
 
 export const metadata = { title: 'Medicines · Settings' };
 
@@ -77,7 +72,13 @@ export default async function MedicinesPage({ searchParams }: PageProps<'/settin
       </div>
 
       {typeof params.error === 'string' ? <Alert tone="error">{params.error}</Alert> : null}
-      {typeof params.saved === 'string' ? <Alert tone="success">{params.saved}</Alert> : null}
+      {typeof params.saved === 'string' ? (
+        <SavedNotice
+          message={params.saved}
+          undo={typeof params.undo === 'string' ? params.undo : null}
+          action={undoMedicinesAction}
+        />
+      ) : null}
 
       {counts.total === 0 && counts.inactive === 0 ? (
         <Card>

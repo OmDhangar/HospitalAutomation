@@ -4,6 +4,7 @@ import {
   billingPeriod,
   daysUntilExpiry,
   expiryBucket,
+  renewalNoticeBucket,
   isServing,
   setupFeePaise,
   subscriptionEnd,
@@ -182,6 +183,15 @@ describe('expiry', () => {
   it('is null when expiry is comfortably far off', () => {
     expect(expiryBucket(inDays(90), now)).toBeNull();
     expect(expiryBucket(null, now)).toBeNull();
+  });
+
+  it('tells the hospital only in the last 15 days, or once expired', () => {
+    expect(renewalNoticeBucket(inDays(29), now)).toBeNull();
+    expect(renewalNoticeBucket(inDays(16), now)).toBeNull();
+    expect(renewalNoticeBucket(inDays(15), now)).toBe('within_30_days');
+    expect(renewalNoticeBucket(inDays(5), now)).toBe('within_7_days');
+    expect(renewalNoticeBucket(inDays(-1), now)).toBe('expired');
+    expect(renewalNoticeBucket(null, now)).toBeNull();
   });
 
   it('counts days remaining', () => {

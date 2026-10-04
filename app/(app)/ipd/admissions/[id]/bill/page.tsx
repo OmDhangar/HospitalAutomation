@@ -8,6 +8,7 @@ import { formatRupees } from '@/lib/domain/billing';
 import type { AdmissionStatus } from '@/lib/domain/admission';
 import { PAYER_KIND_LABELS } from '@/lib/domain/payer';
 import { can } from '@/lib/domain/permissions';
+import { isMockPhone } from '@/lib/domain/phone';
 import { formatTimeIn, serviceDateIn } from '@/lib/domain/time';
 import { getDischargeBillView, type BillLine } from '@/lib/services/discharge-billing';
 import {
@@ -17,8 +18,11 @@ import {
   revokeBillLinkAction,
   setApprovedAmountAction,
   shareBillLinkAction,
+  undoBillAction,
   voidLineAction,
 } from './actions';
+import { SavedNotice } from '@/components/saved-notice';
+import { UNDO_WINDOWS_MS, formatUndoToken, withinWindow } from '@/lib/domain/undo';
 
 export const metadata = { title: 'Discharge bill · IPD' };
 
@@ -80,21 +84,34 @@ export default async function DischargeBillPage({ params, searchParams }: PagePr
       />
 
       {typeof query.error === 'string' ? <Alert tone="error">{query.error}</Alert> : null}
-      {typeof query.saved === 'string' ? <Alert tone="success">{query.saved}</Alert> : null}
+      {typeof query.saved === 'string' ? (
+        <SavedNotice
+          message={query.saved}
+          undo={typeof query.undo === 'string' ? query.undo : null}
+          action={undoBillAction}
+          hidden={{ admissionId: id }}
+          // A final bill is reopened, with a reason, rather than silently undone.
+          reasonPrompt={typeof query.undo === 'string' && query.undo.startsWith('finalize~') ? 'Why reopen?' : undefined}
+        />
+      ) : null}
 
       {shareUrl ? (
         <Card>
           <CardHeader title="Running bill link" hint="Send it now: it is shown only once." />
           <div className="space-y-3 p-4 sm:p-5">
             <p className="break-all rounded-lg bg-ink-50 px-3 py-2 font-mono text-sm text-ink-800">{shareUrl}</p>
-            <a
-              href={`https://wa.me/${view.admission.phoneE164.replace(/^\+/, '')}?text=${encodeURIComponent(whatsappText)}`}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex min-h-12 items-center rounded-lg bg-emerald-600 px-5 font-semibold text-white hover:bg-emerald-700"
-            >
-              Send on WhatsApp
-            </a>
+            {isMockPhone(view.admission.phoneE164) ? (
+              <p className="text-sm text-ink-600">No phone on file: copy the link or print the bill.</p>
+            ) : (
+              <a
+                href={`https://wa.me/${view.admission.phoneE164.replace(/^\+/, '')}?text=${encodeURIComponent(whatsappText)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex min-h-12 items-center rounded-lg bg-emerald-600 px-5 font-semibold text-white hover:bg-emerald-700"
+              >
+                Send on WhatsApp
+              </a>
+            )}
           </div>
         </Card>
       ) : null}
@@ -123,6 +140,24 @@ export default async function DischargeBillPage({ params, searchParams }: PagePr
               ) : null}
             </div>
           </div>
+          {writable &&
+          view.admission.dischargedAt &&
+          withinWindow(view.admission.dischargedAt, UNDO_WINDOWS_MS.reopenBill) ? (
+            <details className="border-t border-ink-100 px-4 py-3 text-sm sm:px-5">
+              <summary className="cursor-pointer text-ink-500 hover:text-ink-800">Found a mistake? Reopen this bill</summary>
+              <form action={undoBillAction} className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                <input type="hidden" name="admissionId" value={id} />
+                <input type="hidden" name="undo" value={formatUndoToken('finalize', id)} />
+                <Input name="reason" required placeholder="Why reopen?" className="py-2 text-sm" />
+                <Button type="submit" size="sm">
+                  Reopen bill
+                </Button>
+              </form>
+              <p className="mt-2 text-xs text-ink-500">
+                Bill {view.bill.billNumber} is kept as cancelled; its lines move to a new draft. Possible on the day of discharge.
+              </p>
+            </details>
+          ) : null}
         </Card>
       ) : null}
 

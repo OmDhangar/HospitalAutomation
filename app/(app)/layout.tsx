@@ -2,14 +2,10 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { Suspense } from 'react';
 import { ToastProvider } from '@/components/toast';
-import { ExpiryBanner } from '@/components/expiry-banner';
 import { ImpersonationBanner } from '@/components/impersonation-banner';
 import { MobileNav, type NavItem } from '@/components/mobile-nav';
 import { getSession, requireSession } from '@/lib/auth/session';
 import { can, homePathFor } from '@/lib/domain/permissions';
-import { daysUntilExpiry, expiryBucket } from '@/lib/domain/subscription';
-import { getCurrentSubscription } from '@/lib/services/subscriptions';
-import { switchNurseAction } from '../ward-device/actions';
 import { signOutAction } from './dashboard/actions';
 
 /**
@@ -29,7 +25,6 @@ async function AppHeader() {
   if (session.mustChangePassword) redirect('/change-password');
 
   const navItems: NavItem[] = [];
-  const onWardDevice = session.wardDeviceId !== null;
 
   if (can(session.role, 'queue.mutate')) {
     navItems.push({ label: 'Queue', href: '/dashboard' });
@@ -89,71 +84,32 @@ async function AppHeader() {
               {session.role}
             </p>
           </div>
-          {onWardDevice ? (
-            // A shared ward tablet: hand it to the next nurse, never "sign out".
-            <form action={switchNurseAction}>
-              <button
-                type="submit"
-                className="min-h-11 rounded-lg bg-brand-50 px-3 text-sm font-semibold text-brand-800 ring-1 ring-inset ring-brand-200 transition-colors hover:bg-brand-100 cursor-pointer"
-              >
-                Switch nurse
-              </button>
-            </form>
-          ) : (
-            <>
-              <Link
-                href="/change-password"
-                className="hidden rounded-lg px-3 py-1.5 text-sm font-medium text-ink-600 transition-colors hover:bg-ink-100 sm:block"
-              >
-                Password
-              </Link>
-              <form action={signOutAction} className="hidden sm:block">
-                <button
-                  type="submit"
-                  className="rounded-lg px-3 py-1.5 text-sm font-medium text-ink-600 transition-colors hover:bg-ink-100 cursor-pointer"
-                >
-                  Sign out
-                </button>
-              </form>
+          <Link
+            href="/change-password"
+            className="hidden rounded-lg px-3 py-1.5 text-sm font-medium text-ink-600 transition-colors hover:bg-ink-100 sm:block"
+          >
+            Password
+          </Link>
+          <form action={signOutAction} className="hidden sm:block">
+            <button
+              type="submit"
+              className="rounded-lg px-3 py-1.5 text-sm font-medium text-ink-600 transition-colors hover:bg-ink-100 cursor-pointer"
+            >
+              Sign out
+            </button>
+          </form>
 
-              {/* Mobile Hamburger Navigation */}
-              <MobileNav
-                items={[...navItems, { label: 'Change password', href: '/change-password' }]}
-                userName={session.name}
-                userRole={session.role}
-                hospitalName={session.hospitalName}
-                signOutAction={signOutAction}
-              />
-            </>
-          )}
+          {/* Mobile Hamburger Navigation */}
+          <MobileNav
+            items={[...navItems, { label: 'Change password', href: '/change-password' }]}
+            userName={session.name}
+            userRole={session.role}
+            hospitalName={session.hospitalName}
+            signOutAction={signOutAction}
+          />
         </div>
       </div>
     </header>
-  );
-}
-
-/**
- * Reads the current subscription and renders the expiry strip.
- *
- * Its own component so the query lives inside the Suspense boundary above and
- * cannot delay the page shell. Returns nothing at all when the renewal is more
- * than thirty days out, which is the common case.
- */
-async function PlanExpiryNotice() {
-  const session = await getSession();
-  if (!session || !can(session.role, 'subscription.notice')) return null;
-
-  const subscription = await getCurrentSubscription(session.hospitalId);
-  if (!subscription) return null;
-
-  const now = new Date();
-
-  return (
-    <ExpiryBanner
-      bucket={expiryBucket(subscription.endsAt, now)}
-      daysRemaining={daysUntilExpiry(subscription.endsAt, now)}
-      canRenew={can(session.role, 'hospital.configure')}
-    />
   );
 }
 
@@ -218,16 +174,6 @@ export default function AppLayout({ children }: LayoutProps<'/'>) {
          * and generous padding on tablet/desktop (sm:px-6 lg:py-6).
          */}
         <main className="mx-auto w-full max-w-[1600px] px-3.5 py-3.5 sm:px-6 lg:py-6">
-          {/**
-           * Streamed rather than awaited. The banner needs a subscription
-           * lookup, and blocking every page in the app on a billing query to
-           * render a strip that is usually absent would be a poor trade — the
-           * queue has to appear fast. Suspense with no fallback means the page
-           * renders immediately and the banner slots in when it resolves.
-           */}
-          <Suspense fallback={null}>
-            <PlanExpiryNotice />
-          </Suspense>
           {children}
         </main>
       </div>

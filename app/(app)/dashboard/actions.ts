@@ -10,7 +10,7 @@ import {
 } from '@/lib/auth/session';
 import { parseRupeesToPaise, type PaymentStatus } from '@/lib/domain/patient-billing';
 import { can } from '@/lib/domain/permissions';
-import { normalizeIndianPhone } from '@/lib/domain/phone';
+import { normalizeStaffPhone } from '@/lib/domain/phone';
 import type { QueueAction } from '@/lib/domain/types';
 import { canMutateQueue, logout } from '@/lib/services/auth';
 import { EncounterError } from '@/lib/services/encounters';
@@ -53,7 +53,7 @@ export async function addWalkInAction(formData: FormData) {
   const rawAge = formData.get('age');
   const age = rawAge ? parseInt(String(rawAge), 10) : undefined;
 
-  const phoneE164 = normalizeIndianPhone(rawPhone);
+  const phoneE164 = normalizeStaffPhone(rawPhone)?.phoneE164;
   if (!name || !phoneE164) {
     redirect(`/dashboard?doctor=${doctorId}&error=phone`);
   }
@@ -96,13 +96,13 @@ export async function addWalkInDynamic(args: {
     const session = await authorize();
     const tAuth = performance.now();
     const name = args.name.trim();
-    const phoneE164 = normalizeIndianPhone(args.phone);
+    const phoneE164 = normalizeStaffPhone(args.phone)?.phoneE164;
 
     if (!name) {
       return { ok: false, error: 'Patient name is required' };
     }
     if (!phoneE164) {
-      return { ok: false, error: 'Enter a valid 10-digit mobile number' };
+      return { ok: false, error: 'Enter a valid 10-digit mobile number, or 0000000000 for no phone' };
     }
     const address = args.address?.trim() || null;
     if (address && address.length > ADDRESS_MAX) {

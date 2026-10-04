@@ -1,3 +1,4 @@
+import { SavedNotice } from '@/components/saved-notice';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Alert, Button, Card, CardHeader, EmptyState, Field, Input, cn } from '@/components/ui';
@@ -12,7 +13,7 @@ import { PAYER_KIND_LABELS } from '@/lib/domain/payer';
 import { listEntriesForAdmission, type TimelineEntry } from '@/lib/services/care-entries';
 import { getAdmissionSummary } from '@/lib/services/ipd-census';
 import { getEncounterSettlement } from '@/lib/services/patient-billing';
-import { cancelAdmissionAction, setDischargeReadyAction, voidCareEntryAction } from '../../actions';
+import { cancelAdmissionAction, setDischargeReadyAction, voidCareEntryAction, undoIpdAction } from '../../actions';
 
 export const metadata = { title: 'Patient · IPD' };
 
@@ -71,7 +72,13 @@ export default async function AdmissionPage({ params, searchParams }: PageProps<
       />
 
       {typeof query.error === 'string' ? <Alert tone="error">{query.error}</Alert> : null}
-      {typeof query.saved === 'string' ? <Alert tone="success">{query.saved}</Alert> : null}
+      {typeof query.saved === 'string' ? (
+        <SavedNotice
+          message={query.saved}
+          undo={typeof query.undo === 'string' ? query.undo : null}
+          action={undoIpdAction} hidden={{ _back: `/ipd/admissions/${id}` }}
+        />
+      ) : null}
 
       {writable ? (
         <div className="flex flex-wrap gap-2">

@@ -11,7 +11,7 @@ The decisions made along the way are in [decisions.md](decisions.md).
 | 1 | Walk-in address, billing foundation, Paid toggle | Done, committed (`ae68611`), migrated |
 | 1+ | Security fix: RLS on two schedule tables | Done, committed (`ae68611`), migrated |
 | 2 | Medicine catalogue, OPD consultation and prescription, print, history | Built and tested, **not yet committed or migrated** |
-| 3 | IPD: Shift to IPD, beds, nurse bedside entries, bed-days, discharge bill, doctor phone view (IPD plan T1.1–T3.1) | Built and tested on branch `feat/ipd-mvp`, **migrations 0031–0034 not yet applied** |
+| 3 | IPD: Shift to IPD, beds, nurse bedside entries, bed-days, discharge bill, doctor phone view (IPD plan T1.1–T3.1) | Built and tested on branch `feat/ipd-mvp`, **migrations 0031–0033 not yet applied** |
 | 4 | Lab-lite, reports, hardening (IPD plan Stage 4) | Planned: 8 Feb – 26 Mar 2027 |
 
 ---
@@ -129,12 +129,16 @@ Built on `feat/ipd-mvp`, one commit per task. Plan: [../plans/ipd-mvp-implementa
 **For the hospital:**
 - Doctor: one-click **Shift to IPD** (with Undo) on the OPD dashboard; **My patients** phone view with Discharge ready and Tests.
 - Desk: IPD home (Awaiting bed · Wards · Discharge ready), admission sheet with payer and deposit, emergency admission, bed transfer, patient IPD page.
-- Nurse: ward grid → bed → item → Save on a phone, offline outbox, 2-minute Undo; shared ward tablets with 4-digit PINs.
+- Nurse: ward grid → bed → item → Save on a phone, offline outbox, 2-minute Undo. Each nurse signs in with her own login.
 - Billing: every bedside entry is a bill line at once; nightly bed-day charges; discharge bill with flags, reasoned corrections, payer split, gap-free numbers; A4 itemised print; family running-bill link (en/hi/mr).
 - Owner: wards and beds, IPD price list with CSV import, one-screen "Set prices", starter catalogues loaded for new hospitals.
 
-**Built:** migrations 0031 (enums), 0032 (IPD core), 0033 (ward devices), 0034 (discharge billing); `proxy.ts` keeps ward-tablet PIN sessions on the ward screens.
+**Built:** migrations 0031 (enums), 0032 (IPD core), 0033 (discharge billing). A shared-ward-tablet/PIN module (T1.9) was built and then removed on 3 Oct 2026: nurses use their own login (D-DV).
 
 **Verified:** typecheck, lint, `next build`; 513 unit tests; migrations rehearsed on `qurio_scratch` (35 apply); IPD integration suites (schema, set-up, admissions, care entries, ward devices, bed-days, discharge billing, doctor view) pass there; a 33-check HTTP smoke test of every new screen ran against a production build on the scratch database. The one existing integration failure (`usage.integration.test.ts`, a fixed-date subscription case) is unrelated and predates this work.
 
-**Before go-live:** review and merge; apply 0031–0034 with `npm run db:migrate` (0031 must commit before 0032, which the runner does); price the starter items; register ward tablets. WhatsApp sending of the running-bill link uses a wa.me link from the desk; an approved template for automatic sending is not yet added.
+**Before go-live:** review and merge; apply 0031–0033 with `npm run db:migrate` (0031 must commit before 0032, which the runner does); price the starter items; create nurse logins (Settings → Staff → Nurse). WhatsApp sending of the running-bill link uses a wa.me link from the desk; an approved template for automatic sending is not yet added.
+
+**Undo everywhere (3 Oct 2026):** every staff action in IPD and its set-up shows an Undo beside its "Saved" message (`components/saved-notice.tsx`, `lib/services/ipd-undo.ts`). Set-up undoes within 1 hour while unused; desk and bill actions within 10 minutes while nothing has been recorded since; a final bill is *reopened* (with a reason) on the day of discharge — the numbered bill is kept as cancelled so numbering stays gap-free, and 0033 lets a cancelled bill's lines be voided for that. Price changes are tagged with a batch id in `audit_logs`, which is the undo journal; no new table.
+
+**Beds:** typing a single number now means a count ("12" → beds 1–12; in a ward with 1–12, "4" → 13–16), with a live preview of the exact beds before saving.

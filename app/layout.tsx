@@ -20,7 +20,7 @@ const devanagari = Noto_Sans_Devanagari({
 });
 
 export const metadata: Metadata = {
-  title: 'Qurio — Live OPD Queue & WhatsApp Booking',
+  title: 'QuriioHQ — Live OPD Queue & WhatsApp Booking',
   description: 'Live OPD queue and patient flow management for hospitals and clinics',
 };
 
@@ -35,8 +35,9 @@ export default function RootLayout({ children }: LayoutProps<'/'>) {
     <html
       lang="en"
       className={`${inter.variable} ${devanagari.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="min-h-full">{children}</body>
+      <body className="min-h-full" suppressHydrationWarning>{children}</body>
     </html>
   );
 }

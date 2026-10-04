@@ -17,6 +17,7 @@ import { formatTimeIn, serviceDateIn } from '@/lib/domain/time';
 import type { Locale } from '@/lib/i18n/patient';
 import { getProvider } from '@/lib/notify/provider';
 import { getDoctorSlotsForDate } from './scheduling';
+import { getPlanAccess } from './subscriptions';
 
 export type TimeSlot = {
   timeStr: string;
@@ -48,7 +49,7 @@ export type DoctorBookingDetails = {
 /** A booking refused for a reason the patient can be told. */
 export class BookingError extends Error {
   constructor(
-    readonly code: 'INVALID_SLOT' | 'SLOT_UNAVAILABLE' | 'TOO_FAR_AHEAD',
+    readonly code: 'INVALID_SLOT' | 'SLOT_UNAVAILABLE' | 'TOO_FAR_AHEAD' | 'NOT_TAKING_BOOKINGS',
     message: string,
   ) {
     super(message);
@@ -187,6 +188,11 @@ export async function bookScheduledSlot(args: {
   phoneE164: string;
   slotDatetimeIso: string;
   locale?: Locale;
+  /**
+   * Booked inside a WhatsApp chat that has already sent the confirmation for
+   * free, so the paid appointment_confirmed template is not queued as well.
+   */
+  confirmationSentInChat?: boolean;
 }) {
   const slotDate = new Date(args.slotDatetimeIso);
   if (isNaN(slotDate.getTime())) {
@@ -194,6 +200,15 @@ export async function bookScheduledSlot(args: {
   }
 
   const now = new Date();
+
+  // A revoked or lapsed plan stops online booking: the staff who would see
+  // this patient are locked out of the queue it joins.
+  if ((await getPlanAccess(args.hospitalId, now)).state === 'locked') {
+    throw new BookingError(
+      'NOT_TAKING_BOOKINGS',
+      'This hospital is not taking online bookings right now. Please call the hospital.',
+    );
+  }
 
   if (slotDate.getTime() > now.getTime() + MAX_BOOKING_DAYS_AHEAD * 24 * 60 * 60 * 1000) {
     throw new BookingError(
@@ -380,8 +395,8 @@ export async function bookScheduledSlot(args: {
       }
     }
 
-    // Queue confirmation link for patient
-    await tx
+    // Queue confirmation link for patient, unless the booking chat sent it.
+    if (!args.confirmationSentInChat) await tx
       .insert(notificationOutbox)
       .values({
         hospitalId: args.hospitalId,

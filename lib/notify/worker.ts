@@ -8,6 +8,7 @@ import {
   whatsappNumbers,
 } from '@/lib/db/schema';
 import { cleanDoctorName } from '@/lib/domain/booking';
+import { isMockPhone } from '@/lib/domain/phone';
 import { messageRatio, shouldSuppressNonCriticalMessages } from '@/lib/domain/pricing';
 import type { Locale } from '@/lib/i18n/patient';
 import { isTemplateUnderReview, ProviderError } from './errors';
@@ -151,6 +152,16 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
         })
         .where(eq(notificationOutbox.id, id));
       result.failed += 1;
+      continue;
+    }
+
+    // A patient with no phone: there is nobody to reach, and nothing to pay for.
+    if (isMockPhone(row.phoneE164)) {
+      await db
+        .update(notificationOutbox)
+        .set({ status: 'suppressed', failedReason: 'patient has no phone' })
+        .where(eq(notificationOutbox.id, id));
+      result.suppressed += 1;
       continue;
     }
 

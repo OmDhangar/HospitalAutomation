@@ -18,6 +18,7 @@ import {
   orderQueue,
   patientsAhead,
 } from '@/lib/domain/queue';
+import { isMockPhone } from '@/lib/domain/phone';
 import { currentDelayMinutes, serviceDateIn } from '@/lib/domain/time';
 import type { AppointmentStatus, QueueAction, QueueEntry } from '@/lib/domain/types';
 import { generatePublicToken } from '@/lib/security/tokens';
@@ -404,6 +405,14 @@ export async function createWalkIn(args: {
    * this is where the decision to send is made.
    */
   whatsappOptIn?: boolean;
+  /**
+   * The booking chat has already told the patient their token and link.
+   *
+   * A WhatsApp booking replies in the open chat, which is free. Queuing the
+   * queue_link template as well sent the same news twice, and the template is
+   * the one that costs money. The caller records the chat reply instead.
+   */
+  confirmationSentInChat?: boolean;
   now?: Date;
 }) {
   const now = args.now ?? new Date();
@@ -411,7 +420,9 @@ export async function createWalkIn(args: {
   const tStart = performance.now();
   return withTenant(args.hospitalId, async (tx) => {
     const t0 = performance.now();
-    const optedIn = args.whatsappOptIn ?? true;
+    // A no-phone placeholder never opts in: nothing is ever sent to it.
+    const optedIn = (args.whatsappOptIn ?? true) && !isMockPhone(args.patient.phoneE164);
+    const queueLinkTemplate = !args.confirmationSentInChat;
     const publicToken = generatePublicToken();
     const publicTokenExpiresAt = new Date(now.getTime() + 18 * 60 * 60 * 1000);
 
@@ -534,6 +545,7 @@ export async function createWalkIn(args: {
             jsonb_build_object('tokenNumber', inserted_appt.token_number, 'publicToken', inserted_appt.public_token)
           from inserted_appt, upserted_patient
           where upserted_patient.whatsapp_opt_in_at is not null
+            and ${queueLinkTemplate}
           on conflict do nothing
         )
       select

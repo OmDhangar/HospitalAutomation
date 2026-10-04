@@ -1,16 +1,7 @@
 import { and, asc, eq, gt, sql } from 'drizzle-orm';
 import { getDb, withTenant, type Tx } from '@/lib/db';
 import { markRequestReadOnly } from '@/lib/db/request-context';
-import {
-  auditLogs,
-  branches,
-  hospitals,
-  sessions,
-  staffMemberships,
-  users,
-  wardDevices,
-} from '@/lib/db/schema';
-import { WARD_SESSION_IDLE_MS, shouldSlideWardSession } from '@/lib/domain/ward-pin';
+import { auditLogs, branches, hospitals, sessions, staffMemberships, users } from '@/lib/db/schema';
 import {
   hashPassword,
   MIN_PASSWORD_LENGTH,
@@ -49,12 +40,6 @@ export type Session = {
   returnHospitalId: string | null;
   /** Set by an operator-issued password reset; gates the rest of the app. */
   mustChangePassword: boolean;
-  /**
-   * A PIN session on a shared ward device (0033), or null. Such a session's
-   * role is always 'nurse' — whatever the person's own role — so a PIN can
-   * only record at the bedside; the proxy also keeps it on the ward screens.
-   */
-  wardDeviceId: string | null;
 };
 
 /** Impersonation is for looking at a problem, not for living in. */
@@ -274,8 +259,6 @@ export async function resolveSession(token: string | undefined): Promise<Session
       impersonatedByUserId: sessions.impersonatedByUserId,
       readOnly: sessions.readOnly,
       returnHospitalId: sessions.returnHospitalId,
-      wardDeviceId: sessions.wardDeviceId,
-      expiresAt: sessions.expiresAt,
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
@@ -325,16 +308,7 @@ export async function resolveSession(token: string | undefined): Promise<Session
           .where(
             and(eq(staffMemberships.userId, row.userId), eq(staffMemberships.active, true)),
           );
-        if (!found) return null;
-        if (!row.wardDeviceId) return found;
-        // A PIN session lives only as long as its device is registered, and
-        // can only ever act as a nurse on the ward.
-        const [device] = await tx
-          .select({ id: wardDevices.id, branchId: wardDevices.branchId })
-          .from(wardDevices)
-          .where(and(eq(wardDevices.id, row.wardDeviceId), sql`${wardDevices.revokedAt} is null`));
-        if (!device) return null;
-        return { ...found, role: 'nurse' as StaffRole, branchId: device.branchId };
+        return found ?? null;
       });
 
   // Membership revoked since the session was issued, or platform admin dropped.
@@ -354,16 +328,7 @@ export async function resolveSession(token: string | undefined): Promise<Session
     impersonatedByUserId: row.impersonatedByUserId,
     returnHospitalId: row.returnHospitalId,
     mustChangePassword: row.mustChangePassword,
-    wardDeviceId: row.wardDeviceId,
   };
-
-  // The ward session's idle timeout: each use pushes the end ten minutes out.
-  if (row.wardDeviceId && shouldSlideWardSession(row.expiresAt, new Date())) {
-    await db
-      .update(sessions)
-      .set({ expiresAt: new Date(Date.now() + WARD_SESSION_IDLE_MS) })
-      .where(eq(sessions.tokenHash, tokenH));
-  }
 
   sessionCache.set(tokenH, { session, expiresAt: Date.now() + SESSION_CACHE_TTL });
   return session;

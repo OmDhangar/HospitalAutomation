@@ -2,9 +2,9 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 
 export const metadata: Metadata = {
-  title: 'Privacy Policy · Qurio',
+  title: 'Privacy Policy · QuriioHQ',
   description:
-    'Learn how Qurio handles patient and clinic data for WhatsApp appointment booking and live OPD queue management.',
+    'Learn how QuriioHQ handles patient and clinic data for WhatsApp appointment booking and live OPD queue management.',
 };
 
 export default function PrivacyPolicyPage() {
@@ -19,7 +19,7 @@ export default function PrivacyPolicyPage() {
             </span>
             <div className="flex flex-col">
               <span className="text-lg font-bold tracking-tight text-ink-900 leading-none">
-                Qurio
+                QuriioHQ
               </span>
               <span className="text-[10px] font-medium text-ink-500 tracking-wide uppercase mt-0.5">
                 Hospital Queue Automation
@@ -83,7 +83,7 @@ export default function PrivacyPolicyPage() {
               Privacy Policy
             </h1>
             <p className="mt-4 text-base sm:text-lg text-ink-600 leading-relaxed">
-              Qurio (&ldquo;we,&rdquo; &ldquo;us,&rdquo; &ldquo;our&rdquo;) provides a WhatsApp-based
+              QuriioHQ (&ldquo;we,&rdquo; &ldquo;us,&rdquo; &ldquo;our&rdquo;) provides a WhatsApp-based
               appointment and queue management platform (&ldquo;the Service&rdquo;) used by hospitals
               and clinics to coordinate patient bookings and live OPD queues. This policy details what
               information we collect, how it is processed, and your privacy rights.
@@ -439,7 +439,7 @@ export default function PrivacyPolicyPage() {
                   Appointment and queue data collected through this Service is shared exclusively with the specific hospital, clinic, or healthcare provider the patient has chosen to book with. The healthcare provider is solely responsible for clinical care and in-person consultations.
                 </p>
                 <p>
-                  Qurio acts strictly as a <strong>technology service provider and data processor</strong> on behalf of the hospital for scheduling, live queue estimation, and communication dispatch.
+                  QuriioHQ acts strictly as a <strong>technology service provider and data processor</strong> on behalf of the hospital for scheduling, live queue estimation, and communication dispatch.
                 </p>
               </div>
             </section>
@@ -548,7 +548,7 @@ export default function PrivacyPolicyPage() {
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  Qurio — OPD Queue Management Platform
+                  QuriioHQ — OPD Queue Management Platform
                 </a>
                 <span> or email our Data Protection Officer at </span>
                 <a
@@ -614,7 +614,7 @@ export default function PrivacyPolicyPage() {
                     <span className="text-[10px] font-bold uppercase tracking-wider text-ink-400">
                       Organization
                     </span>
-                    <p className="mt-1 text-sm font-bold text-ink-900">Qurio</p>
+                    <p className="mt-1 text-sm font-bold text-ink-900">QuriioHQ</p>
                     <p className="text-xs text-ink-500">OPD Queue &amp; Patient Flow Automation</p>
                   </div>
 
@@ -664,7 +664,7 @@ export default function PrivacyPolicyPage() {
                 <span className="flex size-6 items-center justify-center rounded-lg bg-brand-500 text-xs font-bold text-white">
                   Q
                 </span>
-                <p className="text-sm font-bold text-white">Qurio</p>
+                <p className="text-sm font-bold text-white">QuriioHQ</p>
               </div>
               <p className="text-xs text-ink-400 mt-1">
                 OPD queue and patient flow management for Indian hospitals and clinics.
@@ -691,7 +691,7 @@ export default function PrivacyPolicyPage() {
           </div>
 
           <div className="mt-8 border-t border-ink-800 pt-6 text-center text-[11px] text-ink-500">
-            © {new Date().getFullYear()} Qurio. All rights reserved. Privacy by design.
+            © {new Date().getFullYear()} QuriioHQ. All rights reserved. Privacy by design.
           </div>
         </div>
       </footer>
