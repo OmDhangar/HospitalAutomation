@@ -188,10 +188,11 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
   });
 
   /**
-   * The confirmation goes out in-session, so the queued template must be closed
-   * out or the worker would send the patient a second copy of the same link.
+   * The confirmation goes out in-session, for free. No paid queue_link
+   * template may be queued as well, or the patient gets the same news twice
+   * and the hospital pays for the second copy.
    */
-  it('does not leave the queue link template pending after confirming', async () => {
+  it('confirms in the chat only, never with the paid queue link template', async () => {
     await inbound(1, { text: 'Hi' });
     await inbound(2, { replyId: 'lang:en' });
     await inbound(3, { replyId: 'patient:self' });
@@ -207,7 +208,8 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
 
     const links = queued.filter((row) => row.milestone === 'queue_link');
     expect(links).toHaveLength(1);
-    expect(links[0].status).toBe('sent');
+    expect(links[0]).toMatchObject({ status: 'sent', templateCode: 'conversation' });
+    expect(queued.some((row) => row.status === 'pending' && row.templateCode === 'queue_link')).toBe(false);
   });
 
   /**

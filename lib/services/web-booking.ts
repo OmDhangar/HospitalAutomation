@@ -187,6 +187,11 @@ export async function bookScheduledSlot(args: {
   phoneE164: string;
   slotDatetimeIso: string;
   locale?: Locale;
+  /**
+   * Booked inside a WhatsApp chat that has already sent the confirmation for
+   * free, so the paid appointment_confirmed template is not queued as well.
+   */
+  confirmationSentInChat?: boolean;
 }) {
   const slotDate = new Date(args.slotDatetimeIso);
   if (isNaN(slotDate.getTime())) {
@@ -380,8 +385,8 @@ export async function bookScheduledSlot(args: {
       }
     }
 
-    // Queue confirmation link for patient
-    await tx
+    // Queue confirmation link for patient, unless the booking chat sent it.
+    if (!args.confirmationSentInChat) await tx
       .insert(notificationOutbox)
       .values({
         hospitalId: args.hospitalId,
