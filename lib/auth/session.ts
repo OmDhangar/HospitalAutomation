@@ -2,6 +2,7 @@ import { cache } from 'react';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { resolveSession, type Session } from '@/lib/services/auth';
+import { getPlanAccess } from '@/lib/services/subscriptions';
 
 const COOKIE_NAME = 'opd_session';
 
@@ -10,10 +11,39 @@ export const getSession = cache(async function getSession(): Promise<Session | n
   return resolveSession(store.get(COOKIE_NAME)?.value);
 });
 
-/** For pages that must not render at all without a signed-in staff member. */
-export async function requireSession(): Promise<Session> {
+type SessionOptions = {
+  /**
+   * For the few screens a hospital still needs once its plan is revoked or
+   * lapsed: the app shell, the plan-inactive page and renewal itself.
+   */
+  allowInactivePlan?: boolean;
+};
+
+/** Once per request, however many components ask. */
+const planAccessFor = cache((hospitalId: string) => getPlanAccess(hospitalId));
+
+/**
+ * Whether this session is stopped by its hospital's plan.
+ *
+ * Platform operators are never stopped: they are the ones who revoke a plan
+ * and need to look into the hospital afterwards.
+ */
+export async function isPlanLocked(session: Session): Promise<boolean> {
+  if (session.isPlatformAdmin || session.impersonatedByUserId !== null) return false;
+  return (await planAccessFor(session.hospitalId)).state === 'locked';
+}
+
+/**
+ * For pages that must not render at all without a signed-in staff member.
+ *
+ * Also where a revoked or lapsed plan takes effect. Every page and every
+ * server action passes through here, so a locked hospital is stopped at the
+ * door rather than by hiding links.
+ */
+export async function requireSession(options: SessionOptions = {}): Promise<Session> {
   const session = await getSession();
   if (!session) redirect('/login');
+  if (!options.allowInactivePlan && (await isPlanLocked(session))) redirect('/plan-inactive');
   return session;
 }
 
@@ -47,8 +77,8 @@ export async function clearSessionCookie() {
  * halfway through a transaction, and so a mutation is rejected before it does
  * any of the work that precedes the write.
  */
-export async function requireWritableSession(): Promise<Session> {
-  const session = await requireSession();
+export async function requireWritableSession(options: SessionOptions = {}): Promise<Session> {
+  const session = await requireSession(options);
   if (session.readOnly) {
     throw new Error(
       'This is a read-only support session. Stop the support session to make changes.',

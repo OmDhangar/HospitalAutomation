@@ -13,6 +13,7 @@ const SELECT_CLASS =
 
 const ERRORS: Record<string, string> = {
   REQUIRED_FIELDS: 'Hospital name, owner name and owner email are all required.',
+  INVALID_TRIAL_DAYS: 'A free trial is 1 to 90 whole days. Leave it blank for a paid plan.',
   CREATION_FAILED: 'Onboarding failed. Check the details and try again.',
   EMAIL_IN_USE:
     'That email already has a login. Each login belongs to one hospital — use a different email for this owner.',
@@ -78,13 +79,16 @@ export default async function OnboardPage({ searchParams }: PageProps<'/admin/on
             </Field>
           </fieldset>
 
-          <fieldset className="grid gap-4 border-t border-ink-200 pt-4 md:grid-cols-2">
+          <fieldset className="grid gap-4 border-t border-ink-200 pt-4 md:grid-cols-3">
             <legend className="sr-only">Billing</legend>
             <Field label="Billing cycle" hint="Annual is ten months for twelve and waives setup">
               <select name="billingCycle" defaultValue="monthly" className={SELECT_CLASS}>
                 <option value="monthly">Monthly</option>
                 <option value="annual">Annual</option>
               </select>
+            </Field>
+            <Field label="Free trial (days)" hint="Blank for a paid plan. 15 or 20 gives a trial at ₹0">
+              <Input name="trialDays" type="number" inputMode="numeric" min={1} max={90} placeholder="15" />
             </Field>
             <Field label="Owner mobile (WhatsApp)" hint="Where the monthly owner summary goes">
               <Input name="ownerPhoneE164" type="tel" placeholder="+919876543210" />

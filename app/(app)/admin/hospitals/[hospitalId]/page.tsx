@@ -11,9 +11,16 @@ import {
 } from '@/components/ui';
 import { requirePlatformAdmin } from '@/lib/auth/platform';
 import { supportLabel } from '@/lib/domain/entitlements';
-import { SUBSCRIPTION_STATUSES } from '@/lib/domain/subscription';
+import {
+  LAPSE_GRACE_DAYS,
+  SUBSCRIPTION_STATUSES,
+  TRIAL_MAX_DAYS,
+  TRIAL_MIN_DAYS,
+  type PlanAccess,
+} from '@/lib/domain/subscription';
 import { getAccountDetail } from '@/lib/services/platform-accounts';
 import { listAssignableTiers } from '@/lib/services/custom-plans';
+import { activeRevokeReason, getPlanAccess } from '@/lib/services/subscriptions';
 import { getBindingView } from '@/lib/services/whatsapp-byo';
 import {
   BackLink,
@@ -32,11 +39,14 @@ import {
   changePlanAction,
   extendTermAction,
   renewTermAction,
+  restorePlanAction,
+  revokePlanAction,
   setHospitalActiveAction,
   setMembershipActiveAction,
   setSubscriptionStatusAction,
   setUserActiveAction,
   startImpersonationAction,
+  startTrialAction,
   updateProfileAction,
 } from './actions';
 import { PasswordResetForm } from './password-reset';
@@ -65,10 +75,12 @@ export default async function AccountDetailPage({
   const { hospitalId } = await params;
   const query = await searchParams;
 
-  const [detail, tiers, binding] = await Promise.all([
+  const [detail, tiers, binding, access, revokeReason] = await Promise.all([
     getAccountDetail(hospitalId),
     listAssignableTiers().catch(() => []),
     getBindingView(hospitalId).catch(() => null),
+    getPlanAccess(hospitalId),
+    activeRevokeReason(hospitalId),
   ]);
 
   if (!detail) notFound();
@@ -138,6 +150,7 @@ export default async function AccountDetailPage({
               </DefinitionRow>
               <DefinitionRow term="Status">
                 <span className="capitalize">{currentTerm.status}</span>
+                <AccessNote access={access} />
               </DefinitionRow>
               <DefinitionRow term="Agreed price">
                 {rupees(currentTerm.pricePaise)}
@@ -243,6 +256,77 @@ export default async function AccountDetailPage({
                 Renew one more term
               </Button>
             </form>
+          </div>
+
+          {/* Free trial of any length */}
+          <form
+            action={startTrialAction}
+            className="grid gap-3 border-t border-ink-200 bg-ink-50/50 p-4 sm:grid-cols-4"
+          >
+            <input type="hidden" name="hospitalId" value={account.hospitalId} />
+            <Field label="Trial on tier" hint="Its limits and features apply">
+              <select
+                name="tierCode"
+                defaultValue={currentTerm?.planTierCode ?? tiers[0]?.code ?? ''}
+                className={SELECT_CLASS}
+              >
+                {tiers.map((tier) => (
+                  <option key={tier.code} value={tier.code}>
+                    {tier.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Days" hint={`${TRIAL_MIN_DAYS}–${TRIAL_MAX_DAYS}, e.g. 15 or 20`}>
+              <Input
+                name="days"
+                type="number"
+                inputMode="numeric"
+                min={TRIAL_MIN_DAYS}
+                max={TRIAL_MAX_DAYS}
+                required
+                placeholder="15"
+                className="py-2.5 text-sm"
+              />
+            </Field>
+            <div className="flex items-end sm:col-span-2">
+              <Button type="submit" variant="secondary" className="w-full">
+                Start free trial
+              </Button>
+            </div>
+            <p className="text-xs text-ink-500 sm:col-span-4">
+              Starts today at ₹0 and replaces the current term. When it ends the hospital gets{' '}
+              {LAPSE_GRACE_DAYS} grace days, then is locked until the owner renews at the tier’s price.
+            </p>
+          </form>
+
+          {/* Revoke / restore */}
+          <div className="border-t border-ink-200 p-4">
+            {revokeReason !== null ? (
+              <form action={restorePlanAction} className="flex flex-wrap items-center justify-between gap-3">
+                <input type="hidden" name="hospitalId" value={account.hospitalId} />
+                <p className="text-sm text-rose-800">
+                  <span className="font-semibold">Plan revoked.</span>{' '}
+                  {revokeReason ? `Reason: ${revokeReason}. ` : ''}Staff are locked out and online booking is off.
+                </p>
+                <Button type="submit" variant="primary">
+                  Restore plan
+                </Button>
+              </form>
+            ) : (
+              <form action={revokePlanAction} className="flex flex-wrap items-end gap-3">
+                <input type="hidden" name="hospitalId" value={account.hospitalId} />
+                <Field label="Revoke plan" hint="Locks staff out now and stops online booking. Restorable.">
+                  <Input name="reason" required placeholder="Reason, e.g. unpaid" className="w-64 py-2.5 text-sm" />
+                </Field>
+                <div className="flex items-center gap-2 pb-0.5">
+                  <ConfirmWord word="REVOKE" name="confirm" />
+                  <Button type="submit" variant="danger" disabled={!currentTerm}>
+                    Revoke plan
+                  </Button>
+                </div>
+              </form>
+            )}
           </div>
         </Card>
 
@@ -544,8 +628,8 @@ export default async function AccountDetailPage({
             )}
             <p className="text-xs leading-relaxed text-ink-500">
               Suspending hides the hospital from the portfolio and from onboarding lists.
-              It does not sign their staff out or stop the queue — for that, set the
-              subscription to <span className="font-medium">suspended</span> as well.
+              It does not sign their staff out or stop the queue — for that, use{' '}
+              <span className="font-medium">Revoke plan</span> in the Subscription card.
             </p>
           </form>
         </Card>
@@ -682,10 +766,17 @@ const DONE_MESSAGES: Record<string, string> = {
     'Login created. Nobody can use it yet: issue a temporary password from the staff list below.',
   waba_bound: 'WhatsApp credentials sealed and stored. Point Meta at the callback URL shown below.',
   custom_plan: 'Bespoke plan created and applied. It is hidden from public pricing.',
+  trial: 'Free trial started. It ends by itself; the owner then renews at the tier’s price.',
+  revoked: 'Plan revoked. Staff are locked out at their next page load and online booking is off.',
+  restored: 'Plan restored. Staff can use QuriioHQ again.',
 };
 
 const ERROR_MESSAGES: Record<string, string> = {
   CONFIRM: 'Type SUSPEND exactly to confirm. Nothing was changed.',
+  CONFIRM_REVOKE: 'Type REVOKE exactly to confirm. Nothing was changed.',
+  INVALID_TRIAL_DAYS: `A trial is ${TRIAL_MIN_DAYS} to ${TRIAL_MAX_DAYS} whole days. Nothing was changed.`,
+  NOTHING_TO_REVOKE: 'This hospital has no current plan to revoke.',
+  NOTHING_TO_RESTORE: 'There is no revoke to undo.',
   REASON_REQUIRED: 'A reason is required — it goes in the hospital’s audit log.',
   INVALID_INPUT: 'Something was missing or malformed. Nothing was changed.',
   UNKNOWN_TIER: 'That plan tier does not exist.',
@@ -716,5 +807,22 @@ function Notices({ query }: { query: Record<string, string | string[] | undefine
       {done ? <Alert tone="success">{done}</Alert> : null}
       {error ? <Alert tone="error">{error}</Alert> : null}
     </div>
+  );
+}
+
+/** What the plan means for the hospital's staff right now. */
+function AccessNote({ access }: { access: PlanAccess }) {
+  if (access.state === 'open') return null;
+  if (access.state === 'grace') {
+    return (
+      <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
+        Lapsed · locks {shortDate(access.locksAt)}
+      </span>
+    );
+  }
+  return (
+    <span className="ml-2 rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-800">
+      Staff locked out ({access.reason})
+    </span>
   );
 }

@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { requirePlatformAdmin } from '@/lib/auth/platform';
 import { setSessionCookie } from '@/lib/auth/session';
-import { SUBSCRIPTION_STATUSES, type SubscriptionStatus } from '@/lib/domain/subscription';
+import { SUBSCRIPTION_STATUSES, parseTrialDays, type SubscriptionStatus } from '@/lib/domain/subscription';
 import { STAFF_ROLES } from '@/lib/domain/permissions';
 import { createStaffUser, StaffAccountError, type StaffRole } from '@/lib/services/auth';
 import { ImpersonationError, startImpersonation } from '@/lib/services/impersonation';
@@ -18,10 +18,14 @@ import {
   updateHospitalProfile,
 } from '@/lib/services/platform-admin';
 import {
+  SubscriptionAdminError,
   changeSubscriptionTier,
   extendExpiry,
   renewSubscription,
+  restoreSubscription,
+  revokeSubscription,
   setSubscriptionStatus,
+  startTrial,
 } from '@/lib/services/subscriptions';
 
 /**
@@ -59,6 +63,10 @@ function back(hospitalId: string, params: Record<string, string>): never {
 function fail(hospitalId: string, error: unknown): never {
   if (error instanceof AccountAdminError) back(hospitalId, { error: error.code });
   if (error instanceof ImpersonationError) back(hospitalId, { error: error.code });
+  if (error instanceof SubscriptionAdminError) back(hospitalId, { error: error.code });
+  if (error instanceof Error && error.message.startsWith('Unknown plan tier')) {
+    back(hospitalId, { error: 'UNKNOWN_TIER' });
+  }
   throw error;
 }
 
@@ -176,6 +184,62 @@ export async function extendTermAction(formData: FormData) {
   }
 
   back(hospitalId, { done: 'extended' });
+}
+
+/**
+ * A free trial of any length on any tier: "15 days of Clinic" is one form.
+ * Opens a new term at once, like a plan change.
+ */
+export async function startTrialAction(formData: FormData) {
+  const session = await requirePlatformAdmin();
+  const hospitalId = hospitalIdFrom(formData);
+  const tierCode = text(formData, 'tierCode');
+  const days = parseTrialDays(text(formData, 'days'));
+
+  if (!tierCode) back(hospitalId, { error: 'INVALID_INPUT' });
+  if (days === null) back(hospitalId, { error: 'INVALID_TRIAL_DAYS' });
+
+  try {
+    await startTrial({ hospitalId, tierCode, days, changedByUserId: session.userId });
+  } catch (error) {
+    fail(hospitalId, error);
+  }
+
+  back(hospitalId, { done: 'trial' });
+}
+
+/**
+ * Takes the plan away now: staff are locked out and online booking stops.
+ * Gated on typing the word, like suspending an account, and on a reason,
+ * which goes in the hospital's audit log.
+ */
+export async function revokePlanAction(formData: FormData) {
+  const session = await requirePlatformAdmin();
+  const hospitalId = hospitalIdFrom(formData);
+
+  if (text(formData, 'confirm').toUpperCase() !== 'REVOKE') back(hospitalId, { error: 'CONFIRM_REVOKE' });
+
+  try {
+    await revokeSubscription({ hospitalId, reason: text(formData, 'reason'), changedByUserId: session.userId });
+  } catch (error) {
+    fail(hospitalId, error);
+  }
+
+  back(hospitalId, { done: 'revoked' });
+}
+
+/** Undoes the last revoke: each term goes back to the status it had. */
+export async function restorePlanAction(formData: FormData) {
+  const session = await requirePlatformAdmin();
+  const hospitalId = hospitalIdFrom(formData);
+
+  try {
+    await restoreSubscription({ hospitalId, changedByUserId: session.userId });
+  } catch (error) {
+    fail(hospitalId, error);
+  }
+
+  back(hospitalId, { done: 'restored' });
 }
 
 export async function renewTermAction(formData: FormData) {

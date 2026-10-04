@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, isPlanLocked } from '@/lib/auth/session';
 import { can, type Permission } from '@/lib/domain/permissions';
 
 /**
@@ -15,6 +15,9 @@ export async function ipdCaller(
   if (!session) return { response: NextResponse.json({ error: 'Sign in again' }, { status: 401 }) };
   if (options.write && (session.readOnly || session.mustChangePassword)) {
     return { response: NextResponse.json({ error: 'This login cannot record entries' }, { status: 403 }) };
+  }
+  if (await isPlanLocked(session)) {
+    return { response: NextResponse.json({ error: 'This hospital’s QuriioHQ plan is not active' }, { status: 403 }) };
   }
   if (!can(session.role, permission)) {
     return { response: NextResponse.json({ error: 'Not allowed' }, { status: 403 }) };

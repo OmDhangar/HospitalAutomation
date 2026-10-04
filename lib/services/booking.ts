@@ -25,6 +25,7 @@ import { LOCALE_NAMES, LOCALES, t, type Locale } from '@/lib/i18n/patient';
 import { getProvider, type InteractiveButton, type ListRow } from '@/lib/notify/provider';
 import { listDoctors } from './hospital';
 import { createWalkIn, getQueueSnapshot } from './queue';
+import { getPlanAccess } from './subscriptions';
 import { getDoctorSlotsForDate } from './scheduling';
 import { bookScheduledSlot, BookingError } from './web-booking';
 
@@ -503,6 +504,11 @@ export async function handleInboundMessage(
     return dropped(inbound, 'number_not_owned_by_signing_hospital', {
       signing_hospital: options.expectedHospitalId,
     });
+  }
+  // A revoked or lapsed plan stops WhatsApp booking, without a reply: the
+  // staff are locked out of the queue it would join.
+  if ((await getPlanAccess(hospitalId)).state === 'locked') {
+    return dropped(inbound, 'plan_inactive', { hospitalId });
   }
 
   const phoneE164 = normalizeIndianPhone(inbound.fromPhone);

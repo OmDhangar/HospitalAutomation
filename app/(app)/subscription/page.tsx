@@ -20,6 +20,7 @@ import {
 } from '@/lib/services/payments';
 import {
   getCurrentSubscription,
+  renewalPricePaise,
   getSubscriptionHistory,
   listActiveTiers,
 } from '@/lib/services/subscriptions';
@@ -106,7 +107,8 @@ export default async function SubscriptionPage({
 
   // Shown before the owner commits, so the amount on the Razorpay page is
   // never a surprise. Computed from the same function that creates the charge.
-  const charge = computeCharge(subscription.pricePaise);
+  // A trial renews at the rate card price, not at its own nil price.
+  const charge = computeCharge(await renewalPricePaise(subscription));
 
   // A link already waiting to be paid. Surfaced rather than silently reused, so
   // an owner who lost the tab can find their way back to it.
@@ -377,6 +379,7 @@ function PaymentNotice({
     'NOT_PERMITTED',
     'GATEWAY_UNAVAILABLE',
     'ALREADY_PAID',
+    'PLAN_REVOKED',
   ];
   const known = KNOWN.find((code) => code === error);
 

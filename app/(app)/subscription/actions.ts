@@ -16,14 +16,25 @@ import {
  * subscription — nothing about what gets charged comes from the form, so there
  * is no field to tamper with. The action's only job is to produce a URL.
  */
-export async function renewPlan() {
-  const session = await requireWritableSession();
+/**
+ * Where to come back to: the subscription page, or the plan-inactive page an
+ * owner renews from once a lapsed plan has locked the rest of the app. A fixed
+ * choice of two, so the form cannot send anyone elsewhere.
+ */
+const returnPage = (formData?: FormData) =>
+  formData?.get('back') === 'plan-inactive' ? '/plan-inactive' : '/subscription';
+
+export async function renewPlan(formData?: FormData) {
+  // Renewing is how a lapsed hospital gets back in, so it stays open when the
+  // plan has locked everything else.
+  const session = await requireWritableSession({ allowInactivePlan: true });
+  const page = returnPage(formData);
 
   const baseUrl = process.env.PUBLIC_BASE_URL;
   if (!baseUrl) {
     // Without this, Razorpay's callback would point at nothing and a paying
     // customer would land on a broken page. Better to refuse up front.
-    redirect('/subscription?error=NOT_CONFIGURED');
+    redirect(`${page}?error=NOT_CONFIGURED`);
   }
 
   let checkout;
@@ -40,7 +51,7 @@ export async function renewPlan() {
     });
   } catch (error) {
     if (error instanceof PaymentError) {
-      redirect(`/subscription?error=${error.code}`);
+      redirect(`${page}?error=${error.code}`);
     }
     throw error;
   }
@@ -60,8 +71,8 @@ export async function renewPlan() {
    * redirect() throws, so it sits outside the try above rather than being
    * caught as a failure.
    */
-  revalidatePath('/subscription');
-  redirect(`/subscription?pay=${checkout.paymentId}`);
+  revalidatePath(page);
+  redirect(`${page}?pay=${checkout.paymentId}`);
 }
 
 /**
@@ -74,9 +85,10 @@ export async function renewPlan() {
  * waiting for someone to notice.
  */
 export async function checkPaymentStatus(formData: FormData) {
-  const session = await requireWritableSession();
+  const session = await requireWritableSession({ allowInactivePlan: true });
+  const page = returnPage(formData);
   const paymentId = String(formData.get('paymentId') ?? '').trim();
-  if (!paymentId) redirect('/subscription');
+  if (!paymentId) redirect(page);
 
   try {
     const result = await reconcilePayment({
@@ -84,15 +96,15 @@ export async function checkPaymentStatus(formData: FormData) {
       paymentId,
     });
 
-    revalidatePath('/subscription');
+    revalidatePath(page);
     redirect(
       result.outcome === 'unknown_reference'
-        ? '/subscription?payment=pending'
-        : '/subscription?payment=confirmed',
+        ? `${page}?payment=pending`
+        : `${page}?payment=confirmed`,
     );
   } catch (error) {
     if (error instanceof PaymentError) {
-      redirect(`/subscription?error=${error.code}`);
+      redirect(`${page}?error=${error.code}`);
     }
     throw error;
   }

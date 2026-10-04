@@ -1,12 +1,18 @@
-import { and, desc, eq, gt, isNull, lt, lte, or } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
 import { withTenant, type Tx } from '@/lib/db';
 import { getAdminDb } from '@/lib/db/admin';
 import { auditLogs, hospitals, planTiers, subscriptions } from '@/lib/db/schema';
 import {
+  LAPSE_GRACE_DAYS,
+  TRIAL_MAX_DAYS,
+  TRIAL_MIN_DAYS,
+  addDays,
+  planAccess,
   setupFeePaise,
   subscriptionEnd,
   subscriptionPricePaise,
   type BillingCycle,
+  type PlanAccess,
   type SubscriptionStatus,
 } from '@/lib/domain/subscription';
 
@@ -234,6 +240,8 @@ export async function startSubscription(args: {
   /** Overrides the rate card, for a negotiated or founding-customer rate. */
   pricePaiseOverride?: number;
   waiveSetupFee?: boolean;
+  /** Overrides the cycle's end date, for a trial of a given number of days. */
+  endsAt?: Date;
 }): Promise<Subscription> {
   const tier = await tierOrThrow(args.tierCode);
   const db = getAdminDb();
@@ -254,7 +262,7 @@ export async function startSubscription(args: {
         tierSetupFeePaise: tier.setupFeePaise,
       });
 
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     // Close the previous term before opening the next: the unique index allows
     // only one non-superseded subscription per hospital, so this ordering is
     // enforced rather than merely intended.
@@ -299,7 +307,7 @@ export async function startSubscription(args: {
         hasAuditLog: tier.hasAuditLog,
         supportTier: tier.supportTier,
         startsAt,
-        endsAt: subscriptionEnd({ startsAt, cycle: args.billingCycle }),
+        endsAt: args.endsAt ?? subscriptionEnd({ startsAt, cycle: args.billingCycle }),
         changeReason: args.changeReason,
         changedByUserId: args.changedByUserId ?? null,
       })
@@ -321,11 +329,14 @@ export async function startSubscription(args: {
         billingCycle: args.billingCycle,
         pricePaise: price,
         setupFeePaise: setupFee,
+        endsAt: created.endsAt.toISOString(),
       },
     });
 
     return created;
   });
+  clearPlanAccessCache(args.hospitalId);
+  return result;
 }
 
 /**
@@ -390,10 +401,26 @@ export async function renewSubscription(args: {
     // round to clicking the button — otherwise every renewal silently gifts
     // the customer the gap.
     startsAt: current.endsAt > now ? current.endsAt : now,
-    changeReason: 'renewal',
+    changeReason: current.status === 'trial' ? 'trial_converted' : 'renewal',
     changedByUserId: args.changedByUserId,
-    pricePaiseOverride: current.pricePaise,
+    pricePaiseOverride: await renewalPricePaise(current),
     waiveSetupFee: true,
+  });
+}
+
+/**
+ * What renewing this term costs.
+ *
+ * A trial is free, so carrying its price forward would renew it at ₹0 for
+ * ever. Renewing a trial is buying the plan, at the tier's rate card price.
+ */
+export async function renewalPricePaise(term: Subscription): Promise<number> {
+  if (term.status !== 'trial') return term.pricePaise;
+  const tier = await tierOrThrow(term.planTierCode);
+  return subscriptionPricePaise({
+    cycle: term.billingCycle,
+    monthlyPricePaise: tier.monthlyPricePaise,
+    annualPricePaise: tier.annualPricePaise,
   });
 }
 
@@ -405,7 +432,7 @@ export async function setSubscriptionStatus(args: {
 }) {
   const db = getAdminDb();
 
-  return db.transaction(async (tx) => {
+  await db.transaction(async (tx) => {
     await tx
       .update(subscriptions)
       .set({
@@ -428,6 +455,7 @@ export async function setSubscriptionStatus(args: {
       metadata: { status: args.status },
     });
   });
+  clearPlanAccessCache(args.hospitalId);
 }
 
 /** Pushes the expiry date out without changing tier, price or cycle. */
@@ -438,10 +466,15 @@ export async function extendExpiry(args: {
 }) {
   const db = getAdminDb();
 
-  return db.transaction(async (tx) => {
+  await db.transaction(async (tx) => {
     await tx
       .update(subscriptions)
-      .set({ endsAt: args.endsAt, status: 'active', updatedAt: new Date() })
+      .set({
+        endsAt: args.endsAt,
+        // Extending a trial lengthens the trial; it does not make it paid.
+        status: sql`case when ${subscriptions.status} = 'trial' then 'trial' else 'active' end::subscription_status`,
+        updatedAt: new Date(),
+      })
       .where(
         and(
           eq(subscriptions.hospitalId, args.hospitalId),
@@ -457,6 +490,7 @@ export async function extendExpiry(args: {
       metadata: { endsAt: args.endsAt.toISOString() },
     });
   });
+  clearPlanAccessCache(args.hospitalId);
 }
 
 /**
@@ -471,11 +505,210 @@ export async function expireLapsedSubscriptions(now: Date = new Date()) {
     .where(
       and(
         isNull(subscriptions.supersededAt),
-        eq(subscriptions.status, 'active'),
+        // Trials end the same way paid terms do.
+        inArray(subscriptions.status, ['active', 'trial']),
         lt(subscriptions.endsAt, now),
       ),
     )
     .returning({ id: subscriptions.id });
 
   return rows.length;
+}
+
+/* ------------------------------------------------------- trial and revoke */
+
+export class SubscriptionAdminError extends Error {
+  constructor(
+    readonly code: 'INVALID_TRIAL_DAYS' | 'NOTHING_TO_REVOKE' | 'NOTHING_TO_RESTORE' | 'REASON_REQUIRED',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'SubscriptionAdminError';
+  }
+}
+
+/**
+ * Puts a hospital on a free trial of any length, on any tier.
+ *
+ * The tier supplies the allowances and features; the trial supplies the dates.
+ * It is an ordinary term with status 'trial' and a price of nil, so it counts
+ * for nothing in revenue, ends by itself through expireLapsedSubscriptions, and
+ * renewing it buys the tier at its rate card price (renewalPricePaise).
+ */
+export async function startTrial(args: {
+  hospitalId: string;
+  tierCode: string;
+  days: number;
+  changedByUserId?: string | null;
+  startsAt?: Date;
+}): Promise<Subscription> {
+  if (!Number.isInteger(args.days) || args.days < TRIAL_MIN_DAYS || args.days > TRIAL_MAX_DAYS) {
+    throw new SubscriptionAdminError(
+      'INVALID_TRIAL_DAYS',
+      `A trial is ${TRIAL_MIN_DAYS} to ${TRIAL_MAX_DAYS} days.`,
+    );
+  }
+  const startsAt = args.startsAt ?? new Date();
+  return startSubscription({
+    hospitalId: args.hospitalId,
+    tierCode: args.tierCode,
+    billingCycle: 'monthly',
+    status: 'trial',
+    startsAt,
+    endsAt: addDays(startsAt, args.days),
+    changeReason: 'trial',
+    changedByUserId: args.changedByUserId,
+    pricePaiseOverride: 0,
+    waiveSetupFee: true,
+  });
+}
+
+/**
+ * The terms a revoke acts on: every one not yet over, plus one that ended
+ * within the grace period, so revoking a lapsed plan stops it at once rather
+ * than when the grace days run out.
+ */
+const liveOrGraceTerms = (hospitalId: string, now: Date) =>
+  and(
+    eq(subscriptions.hospitalId, hospitalId),
+    gt(subscriptions.endsAt, addDays(now, -LAPSE_GRACE_DAYS)),
+    or(isNull(subscriptions.supersededAt), gt(subscriptions.supersededAt, subscriptions.startsAt)),
+  );
+
+type RevokedTerm = { id: string; status: SubscriptionStatus };
+
+/**
+ * Takes a hospital's plan away now. Its staff are locked out at their next
+ * page load and online booking stops.
+ *
+ * Nothing is deleted and no dates move. Each affected term is marked
+ * cancelled, and its previous status is kept in the audit log, which is what
+ * restoreSubscription puts back.
+ */
+export async function revokeSubscription(args: {
+  hospitalId: string;
+  reason: string;
+  changedByUserId?: string | null;
+  now?: Date;
+}): Promise<{ revoked: number }> {
+  const reason = args.reason.trim();
+  if (!reason) throw new SubscriptionAdminError('REASON_REQUIRED', 'Say why the plan is revoked.');
+  const now = args.now ?? new Date();
+
+  const result = await getAdminDb().transaction(async (tx) => {
+    const terms: RevokedTerm[] = await tx
+      .select({ id: subscriptions.id, status: subscriptions.status })
+      .from(subscriptions)
+      .where(and(liveOrGraceTerms(args.hospitalId, now), ne(subscriptions.status, 'cancelled')))
+      .for('update');
+    if (terms.length === 0) {
+      throw new SubscriptionAdminError('NOTHING_TO_REVOKE', 'This hospital has no plan to revoke.');
+    }
+
+    await tx
+      .update(subscriptions)
+      .set({ status: 'cancelled', cancelledAt: now, updatedAt: now })
+      .where(inArray(subscriptions.id, terms.map((term) => term.id)));
+
+    await tx.insert(auditLogs).values({
+      hospitalId: args.hospitalId,
+      actorUserId: args.changedByUserId ?? null,
+      action: 'subscription.revoked',
+      objectType: 'subscription',
+      objectId: terms[0].id,
+      metadata: { reason, terms },
+    });
+
+    return { revoked: terms.length };
+  });
+  clearPlanAccessCache(args.hospitalId);
+  return result;
+}
+
+/** The most recent revoke or restore on this hospital, newest first. */
+const lastRevokeOrRestore = (hospitalId: string) =>
+  and(
+    eq(auditLogs.hospitalId, hospitalId),
+    inArray(auditLogs.action, ['subscription.revoked', 'subscription.restored']),
+  );
+
+/** Undoes the most recent revoke, putting each term back as it was. */
+export async function restoreSubscription(args: {
+  hospitalId: string;
+  changedByUserId?: string | null;
+}): Promise<{ restored: number }> {
+  const result = await getAdminDb().transaction(async (tx) => {
+    const [last] = await tx
+      .select({ id: auditLogs.id, action: auditLogs.action, metadata: auditLogs.metadata })
+      .from(auditLogs)
+      .where(lastRevokeOrRestore(args.hospitalId))
+      .orderBy(desc(auditLogs.createdAt))
+      .limit(1);
+    if (!last || last.action !== 'subscription.revoked') {
+      throw new SubscriptionAdminError('NOTHING_TO_RESTORE', 'There is no revoke to undo.');
+    }
+
+    const terms = (last.metadata as { terms?: RevokedTerm[] } | null)?.terms ?? [];
+    let restored = 0;
+    for (const term of terms) {
+      // Only a term still cancelled: one changed since is left as it is.
+      const rows = await tx
+        .update(subscriptions)
+        .set({ status: term.status, cancelledAt: null, updatedAt: new Date() })
+        .where(and(eq(subscriptions.id, term.id), eq(subscriptions.status, 'cancelled')))
+        .returning({ id: subscriptions.id });
+      restored += rows.length;
+    }
+
+    await tx.insert(auditLogs).values({
+      hospitalId: args.hospitalId,
+      actorUserId: args.changedByUserId ?? null,
+      action: 'subscription.restored',
+      objectType: 'subscription',
+      objectId: terms[0]?.id ?? null,
+      metadata: { revokeAuditId: last.id, restored },
+    });
+    return { restored };
+  });
+  clearPlanAccessCache(args.hospitalId);
+  return result;
+}
+
+/** The reason for a revoke not yet undone, or null if the plan is not revoked. */
+export async function activeRevokeReason(hospitalId: string): Promise<string | null> {
+  const [last] = await getAdminDb()
+    .select({ action: auditLogs.action, metadata: auditLogs.metadata })
+    .from(auditLogs)
+    .where(lastRevokeOrRestore(hospitalId))
+    .orderBy(desc(auditLogs.createdAt))
+    .limit(1);
+  if (last?.action !== 'subscription.revoked') return null;
+  return String((last.metadata as { reason?: string } | null)?.reason ?? '');
+}
+
+/* ------------------------------------------------------------------ access */
+
+// Read on every staff page load, so cached briefly per hospital. A revoke or a
+// new term clears its own entry here; other server instances catch up within
+// the TTL.
+const ACCESS_CACHE_TTL = 30_000;
+const accessCache = new Map<string, { access: PlanAccess; expiresAt: number }>();
+
+export function clearPlanAccessCache(hospitalId?: string) {
+  if (hospitalId) accessCache.delete(hospitalId);
+  else accessCache.clear();
+}
+
+/** Whether this hospital's staff may use the product right now (planAccess). */
+export async function getPlanAccess(hospitalId: string, now: Date = new Date()): Promise<PlanAccess> {
+  const cached = accessCache.get(hospitalId);
+  if (cached && cached.expiresAt > Date.now()) return cached.access;
+
+  const [current, latest] = await Promise.all([
+    getCurrentSubscription(hospitalId, now),
+    getLatestSubscriptionTerm(hospitalId),
+  ]);
+  const access = planAccess({ current, latest, now });
+  accessCache.set(hospitalId, { access, expiresAt: Date.now() + ACCESS_CACHE_TTL });
+  return access;
 }

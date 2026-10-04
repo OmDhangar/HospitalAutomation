@@ -15,7 +15,12 @@ import {
   RazorpayError,
 } from '@/lib/payments/razorpay';
 import type { StaffRole } from './auth';
-import { getCurrentSubscription, renewSubscription } from './subscriptions';
+import {
+  getCurrentSubscription,
+  getLatestSubscriptionTerm,
+  renewalPricePaise,
+  renewSubscription,
+} from './subscriptions';
 
 /**
  * Collecting subscription money, and turning a confirmed payment into paid
@@ -36,7 +41,8 @@ export class PaymentError extends Error {
       | 'NO_SUBSCRIPTION'
       | 'NOT_PERMITTED'
       | 'GATEWAY_UNAVAILABLE'
-      | 'ALREADY_PAID',
+      | 'ALREADY_PAID'
+      | 'PLAN_REVOKED',
     message: string,
   ) {
     super(message);
@@ -52,6 +58,7 @@ const MESSAGES: Record<PaymentError['code'], string> = {
   GATEWAY_UNAVAILABLE:
     'The payment page could not be opened just now. Please try again in a few minutes.',
   ALREADY_PAID: 'This payment has already been completed.',
+  PLAN_REVOKED: 'This plan was stopped by QuriioHQ. Contact your QuriioHQ representative.',
 };
 
 export const paymentErrorMessage = (code: PaymentError['code']): string => MESSAGES[code];
@@ -186,8 +193,19 @@ export async function startRenewalCheckout(args: {
     throw new PaymentError('NOT_CONFIGURED', MESSAGES.NOT_CONFIGURED);
   }
 
-  const subscription = await getCurrentSubscription(args.hospitalId);
+  /**
+   * The term in force, or once it has run out, the last one on the books.
+   * Reading only the current term meant a plan that had already expired —
+   * the one most in need of renewing — answered "no plan to renew".
+   */
+  const subscription =
+    (await getCurrentSubscription(args.hospitalId)) ??
+    (await getLatestSubscriptionTerm(args.hospitalId));
   if (!subscription) throw new PaymentError('NO_SUBSCRIPTION', MESSAGES.NO_SUBSCRIPTION);
+  // A revoked plan is reopened by us, not bought back through the renew button.
+  if (subscription.status === 'cancelled' || subscription.status === 'suspended') {
+    throw new PaymentError('PLAN_REVOKED', MESSAGES.PLAN_REVOKED);
+  }
 
   /**
    * Reuse an open link rather than minting a new one per click.
@@ -227,7 +245,7 @@ export async function startRenewalCheckout(args: {
     };
   }
 
-  const charge = computeCharge(subscription.pricePaise);
+  const charge = computeCharge(await renewalPricePaise(subscription));
 
   const [hospital] = await withTenant(args.hospitalId, (tx) =>
     tx
