@@ -367,18 +367,6 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                       ) : canShift ? (
                         <ShiftToIpdButton appointmentId={serving.appointmentId} />
                       ) : null}
-
-                      {serving.status === 'CALLED' ? (
-                        <div className="col-span-2 sm:col-auto">
-                          <QueueActionButton
-                            doctorId={selectedId!}
-                            appointmentId={serving.appointmentId}
-                            action="start_consultation"
-                            label="Start Consultation"
-                            className="w-full sm:w-auto"
-                          />
-                        </div>
-                      ) : null}
                     </div>
                   ) : null}
                 </div>
@@ -642,17 +630,6 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                           tokenNumber={serving.tokenNumber}
                           size="md"
                         />
-                        {serving.status === 'CALLED' ? (
-                          <div className="col-span-2 sm:col-auto">
-                            <QueueActionButton
-                              doctorId={selectedId!}
-                              appointmentId={serving.appointmentId}
-                              action="start_consultation"
-                              label="Start consultation"
-                              className="w-full sm:w-auto"
-                            />
-                          </div>
-                        ) : null}
                       </div>
                     ) : null}
                   </div>
