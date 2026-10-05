@@ -95,6 +95,16 @@ export function DoctorTabs({
   );
 }
 
+/**
+ * Keeps the walk-in mobile box to exactly what the desk should type: digits
+ * only, at most ten. A pasted "+91 98765 43210" or "098765 43210" keeps the
+ * last ten digits, so the prefix never pushes the number past the limit.
+ */
+function toTenDigits(raw: string): string {
+  const digits = raw.replace(/\D/g, '');
+  return digits.length > 10 ? digits.slice(-10) : digits;
+}
+
 export function AddWalkInForm({
   doctorId,
   branchId,
@@ -213,10 +223,13 @@ export function AddWalkInForm({
         <Input
           type="tel"
           value={phone}
-          onChange={(e) => setPhone(e.target.value)}
+          onChange={(e) => setPhone(toTenDigits(e.target.value))}
           required
           inputMode="numeric"
-          placeholder="98765 43210"
+          maxLength={10}
+          pattern="[0-9]{10}"
+          title="10-digit mobile number"
+          placeholder="9876543210"
           autoComplete="off"
         />
       </Field>
