@@ -185,15 +185,23 @@ export default async function DisplayPage({
                   </div>
                 ) : (
                   <div className="flex flex-col items-center justify-center">
+                    {/* The call number is the serving order, so the board always
+                        counts up; the token is shown beneath for the patient
+                        holding that slip. */}
                     <span className="text-xs sm:text-sm font-bold tracking-widest text-emerald-400 uppercase">
-                      {s.yourToken}
+                      {snapshot.currentCallNumber !== null ? s.callWord : s.yourToken}
                     </span>
                     <p
                       className="numeric font-black leading-none text-white tracking-tight drop-shadow-[0_0_35px_rgba(16,185,129,0.35)] mt-1"
                       style={{ fontSize: 'clamp(4.5rem, 11vw, 8.5rem)' }}
                     >
-                      {snapshot.currentToken}
+                      {snapshot.currentCallNumber ?? snapshot.currentToken}
                     </p>
+                    {snapshot.currentCallNumber !== null ? (
+                      <p className="mt-1 text-lg sm:text-xl font-bold text-slate-300">
+                        {s.tokenWord} <span className="numeric">{snapshot.currentToken}</span>
+                      </p>
+                    ) : null}
                     {snapshot.currentPatientName ? (
                       <div className="mt-3 inline-flex items-center gap-2 rounded-2xl bg-white/10 px-4 py-1.5 text-base sm:text-lg font-bold text-slate-100 ring-1 ring-white/15">
                         <UserIcon className="size-4 text-emerald-300 shrink-0" />
@@ -216,7 +224,9 @@ export default async function DisplayPage({
                     </span>
                   </div>
                   <span className="numeric font-black text-emerald-300 bg-emerald-500/20 px-2.5 py-0.5 rounded-lg text-sm shrink-0">
-                    #{snapshot.nextPatient.tokenNumber}
+                    {snapshot.nextPatient.callNumber !== null
+                      ? `${s.callWord} ${snapshot.nextPatient.callNumber}`
+                      : `#${snapshot.nextPatient.tokenNumber}`}
                   </span>
                 </div>
               ) : null}

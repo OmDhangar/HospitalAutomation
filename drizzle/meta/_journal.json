@@ -246,6 +246,20 @@
       "when": 1789950000000,
       "tag": "0034_queue_arrival_capacity",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1790000000000,
+      "tag": "0035_call_number",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1790050000000,
+      "tag": "0036_drop_arrived_at",
+      "breakpoints": true
     }
   ]
 }

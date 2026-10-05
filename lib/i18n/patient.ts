@@ -20,6 +20,13 @@ export const LOCALE_NAMES: Record<Locale, string> = {
  */
 type Strings = {
   yourToken: string;
+  /** The day's serving sequence, separate from the token. */
+  yourCallNumber: string;
+  callNumberHint: string;
+  /** Prefix for a call number: "Call 3". */
+  callWord: string;
+  /** Prefix for a token: "Token 31". */
+  tokenWord: string;
   nowServing: string;
   peopleAhead: string;
   youAreNext: string;
@@ -50,12 +57,6 @@ type Strings = {
   refresh: string;
   waiting: string;
   leaveHint: string;
-  /** Arrival check-in. The token never changes; only whether Next may call them. */
-  arriveAction: string;
-  arrivePrompt: string;
-  arriveDone: string;
-  arriveDoneHint: string;
-  arriveNotToday: string;
   /** The doctor is past their scheduled start and OPD has not begun. */
   notStarted: string;
   notStartedHint: string;
@@ -82,6 +83,10 @@ type Strings = {
 export const t: Record<Locale, Strings> = {
   mr: {
     yourToken: 'तुमचा टोकन क्रमांक',
+    yourCallNumber: 'तुमचा कॉल क्रमांक',
+    callNumberHint: 'रुग्णांना या क्रमाने बोलावले जाते. तुमचा टोकन क्रमांक बदलत नाही.',
+    callWord: 'कॉल',
+    tokenWord: 'टोकन',
     nowServing: 'सध्या सुरू',
     peopleAhead: 'तुमच्या आधी रुग्ण',
     youAreNext: 'तुमचा नंबर पुढचा आहे',
@@ -110,11 +115,6 @@ export const t: Record<Locale, Strings> = {
     refresh: 'पुन्हा तपासा',
     waiting: 'रांगेत',
     leaveHint: 'तुम्ही बाहेर थांबू शकता. वेळ जवळ आल्यावर आम्ही कळवू.',
-    arriveAction: 'मी रुग्णालयात पोहोचलो',
-    arrivePrompt: 'रुग्णालयात पोहोचल्यावर हे बटण दाबा. तुम्ही पोहोचल्याची नोंद झाल्यानंतरच तुम्हाला बोलावले जाईल. तुमचा टोकन क्रमांक बदलणार नाही.',
-    arriveDone: 'तुमच्या आगमनाची नोंद झाली',
-    arriveDoneHint: 'तुम्ही आता सक्रिय रांगेत आहात. तुमचा टोकन क्रमांक तोच आहे.',
-    arriveNotToday: 'आगमन नोंद फक्त भेटीच्या दिवशीच करता येते.',
     notStarted: 'डॉक्टरांनी अजून OPD सुरू केलेली नाही',
     notStartedHint: 'OPD सुरू होताच अपेक्षित वेळ दाखवली जाईल. तुमचा टोकन आणि रांगेतील जागा कायम आहे.',
     appointmentTime: 'अपॉइंटमेंटची वेळ',
@@ -136,6 +136,10 @@ export const t: Record<Locale, Strings> = {
   },
   hi: {
     yourToken: 'आपका टोकन नंबर',
+    yourCallNumber: 'आपका कॉल नंबर',
+    callNumberHint: 'मरीज़ों को इसी क्रम में बुलाया जाता है। आपका टोकन नंबर नहीं बदलता।',
+    callWord: 'कॉल',
+    tokenWord: 'टोकन',
     nowServing: 'अभी चल रहा है',
     peopleAhead: 'आपसे पहले मरीज़',
     youAreNext: 'आपका नंबर अगला है',
@@ -164,11 +168,6 @@ export const t: Record<Locale, Strings> = {
     refresh: 'दोबारा जाँचें',
     waiting: 'कतार में',
     leaveHint: 'आप बाहर इंतज़ार कर सकते हैं। समय पास आने पर हम बता देंगे।',
-    arriveAction: 'मैं अस्पताल पहुँच गया',
-    arrivePrompt: 'अस्पताल पहुँचने पर यह बटन दबाएँ। पहुँचने की पुष्टि के बाद ही आपको बुलाया जाएगा। आपका टोकन नंबर नहीं बदलेगा।',
-    arriveDone: 'आपके पहुँचने की पुष्टि हो गई',
-    arriveDoneHint: 'अब आप सक्रिय कतार में हैं। आपका टोकन नंबर वही है।',
-    arriveNotToday: 'पहुँचने की पुष्टि केवल अपॉइंटमेंट वाले दिन ही की जा सकती है।',
     notStarted: 'डॉक्टर ने अभी OPD शुरू नहीं की है',
     notStartedHint: 'OPD शुरू होते ही अनुमानित समय दिखाया जाएगा। आपका टोकन और कतार में जगह सुरक्षित है।',
     appointmentTime: 'अपॉइंटमेंट का समय',
@@ -190,6 +189,10 @@ export const t: Record<Locale, Strings> = {
   },
   en: {
     yourToken: 'Your token number',
+    yourCallNumber: 'Your call number',
+    callNumberHint: 'Patients are called in this order. Your token number stays the same.',
+    callWord: 'Call',
+    tokenWord: 'Token',
     nowServing: 'Now serving',
     peopleAhead: 'patients ahead of you',
     youAreNext: 'You are next',
@@ -218,11 +221,6 @@ export const t: Record<Locale, Strings> = {
     refresh: 'Check again',
     waiting: 'In queue',
     leaveHint: 'You can wait outside. We will message you when your turn is close.',
-    arriveAction: "I've Arrived",
-    arrivePrompt: 'Tap this when you reach the hospital. You can be called only after your arrival is confirmed. Your token number stays the same.',
-    arriveDone: 'Arrival confirmed',
-    arriveDoneHint: 'You are now in the active queue. Your token number is unchanged.',
-    arriveNotToday: 'Arrival can only be confirmed on the day of your appointment.',
     notStarted: 'The doctor has not started OPD yet',
     notStartedHint: 'Your expected time will appear once OPD starts. Your token and place in line are kept.',
     appointmentTime: 'Appointment time',

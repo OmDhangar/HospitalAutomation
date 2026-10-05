@@ -9,6 +9,7 @@ import {
   orderQueue,
   patientsAhead,
   priorityRank,
+  projectedCallNumber,
 } from '../queue';
 import type { AppointmentStatus, QueueContext, QueueEntry } from '../types';
 
@@ -16,7 +17,8 @@ const at = (minutes: number) => new Date(Date.UTC(2026, 9, 5, 8, minutes));
 
 type Opts = {
   status?: AppointmentStatus;
-  arrived?: boolean;
+  /** Not there when called: the desk put them on hold. */
+  away?: boolean;
   priority?: number;
   prioritySeq?: number;
   called?: boolean;
@@ -29,11 +31,10 @@ type Opts = {
 const e = (token: number, opts: Opts = {}): QueueEntry => ({
   appointmentId: `t${token}`,
   tokenNumber: token,
-  status: opts.status ?? 'WAITING',
+  status: opts.status ?? (opts.away ? 'HELD' : 'WAITING'),
   priority: opts.priority ?? 0,
   prioritySeq: opts.prioritySeq ?? null,
   enqueuedAt: at(opts.enqueued ?? token % 60),
-  arrivedAt: opts.arrived === false ? null : at(0),
   calledAt: opts.called ? at(1) : null,
   queueAfterToken: opts.after ?? null,
   rejoinSeq: opts.rejoinSeq ?? null,
@@ -62,21 +63,20 @@ function simulateCalls(start: QueueEntry[]): string[] {
   return called;
 }
 
-describe('arrival eligibility', () => {
-  it('only arrived WAITING patients are eligible', () => {
+describe('one waiting queue', () => {
+  it('only WAITING patients are callable; held, skipped and finished ones are not', () => {
     expect(isEligible(e(1))).toBe(true);
-    expect(isEligible(e(1, { arrived: false }))).toBe(false);
     expect(isEligible(e(1, { status: 'HELD' }))).toBe(false);
     expect(isEligible(e(1, { status: 'SKIPPED' }))).toBe(false);
     expect(isEligible(e(1, { status: 'NO_SHOW' }))).toBe(false);
   });
 
-  it('Next passes over absent earlier tokens: 57, then 59, then 60', () => {
+  it('Next passes over patients on hold: 57, then 59, then 60', () => {
     const queue = [
-      e(55, { arrived: false }),
-      e(56, { arrived: false }),
+      e(55, { away: true }),
+      e(56, { away: true }),
       e(57),
-      e(58, { arrived: false }),
+      e(58, { away: true }),
       e(59),
       e(60),
     ];
@@ -84,7 +84,7 @@ describe('arrival eligibility', () => {
   });
 
   it('serves a later token early without changing any token', () => {
-    const queue = [e(55, { arrived: false }), e(56, { arrived: false }), e(57, { arrived: false }), e(60)];
+    const queue = [e(55, { away: true }), e(56, { away: true }), e(57, { away: true }), e(60)];
     const before = queue.map((x) => x.tokenNumber);
     expect(callNext(queue)).toEqual([
       { appointmentId: 't60', action: 'call', from: 'WAITING', to: 'CALLED' },
@@ -92,17 +92,10 @@ describe('arrival eligibility', () => {
     expect(queue.map((x) => x.tokenNumber)).toEqual(before);
   });
 
-  it('calls nobody when no one present is waiting, but still completes the consultation', () => {
-    const queue = [e(1, { status: 'IN_CONSULTATION' }), e(2, { arrived: false })];
+  it('with everyone on hold, Next only completes the consultation', () => {
+    const queue = [e(1, { status: 'IN_CONSULTATION' }), e(2, { away: true })];
     expect(callNext(queue).map((t) => t.action)).toEqual(['complete']);
     expect(nextEligible(queue)).toBeNull();
-  });
-
-  it('keeps absent patients in order without marking them arrived', () => {
-    const queue = [e(2, { arrived: false }), e(1)];
-    expect(ids(orderQueue(queue))).toEqual(['t1', 't2']);
-    callNext(queue);
-    expect(queue[0].arrivedAt).toBeNull();
   });
 });
 
@@ -125,8 +118,8 @@ describe('priority is FIFO by assignment', () => {
     expect(simulateCalls(queue)).toEqual(['t40', 't50', 't60']);
   });
 
-  it('a priority patient who has not arrived is not called', () => {
-    const queue = [e(40, { priority: 10, prioritySeq: 1, arrived: false }), e(60)];
+  it('a priority patient on hold is not called', () => {
+    const queue = [e(40, { priority: 10, prioritySeq: 1, away: true }), e(60)];
     expect(nextEligible(queue)?.appointmentId).toBe('t60');
   });
 
@@ -162,7 +155,7 @@ describe('late return placement', () => {
   it('with fewer than N eligible the returner goes last; with none, next', () => {
     const one = [...serving40, e(10, { status: 'SKIPPED', called: true }), e(41)];
     expect(lateReturnAnchor(one, 't10', ctx(2))).toBe(41);
-    const none = [...serving40, e(10, { status: 'SKIPPED', called: true }), e(41, { arrived: false })];
+    const none = [...serving40, e(10, { status: 'SKIPPED', called: true }), e(41, { away: true })];
     expect(lateReturnAnchor(none, 't10', ctx(2))).toBeNull();
   });
 
@@ -198,10 +191,10 @@ describe('late return placement', () => {
     expect(simulateCalls(queue)).toEqual(['t70', 't41', 't10']);
   });
 
-  it('token 55 checking in while 60 is served is late, not next', () => {
+  it('token 55 resumed while 60 is served is late, not next', () => {
     const queue = [
       e(60, { status: 'IN_CONSULTATION', called: true }),
-      e(55, { arrived: false }),
+      e(55, { away: true }),
       e(61),
       e(62),
       e(63),
@@ -210,8 +203,8 @@ describe('late return placement', () => {
     expect(lateReturnAnchor(queue, 't55', ctx(2))).toBe(62);
   });
 
-  it('an early check-in (token above the frontier) keeps its token position', () => {
-    const queue = [e(40, { status: 'IN_CONSULTATION', called: true }), e(41), e(45, { arrived: false }), e(46)];
+  it('a return before their turn (token above the frontier) keeps its token position', () => {
+    const queue = [e(40, { status: 'IN_CONSULTATION', called: true }), e(41), e(45, { away: true }), e(46)];
     expect(isLateReturn(queue, queue[2])).toBe(false);
     expect(patientsAhead(queue, 't45')).toBe(2);
   });
@@ -247,40 +240,40 @@ describe('ETA ahead-count uses the exact order Next uses', () => {
     expectAheadMatchesCalls(queue);
   });
 
-  it('with patients who have not arrived', () => {
+  it('with patients on hold', () => {
     const queue = [
-      e(55, { arrived: false }),
-      e(56, { arrived: false }),
+      e(55, { away: true }),
+      e(56, { away: true }),
       e(57),
-      e(58, { arrived: false }),
+      e(58, { away: true }),
       e(59),
       e(60),
     ];
     expect(patientsAhead(queue, 't57')).toBe(0);
     expect(patientsAhead(queue, 't60')).toBe(2);
-    // Projection for absent 58: counts arrived 57, not absent 55/56.
+    // Projection for held 58: counts waiting 57, not held 55/56.
     expect(patientsAhead(queue, 't58')).toBe(1);
     expectAheadMatchesCalls(queue);
   });
 
-  it('projection for an absent late patient applies the late-return placement', () => {
-    const queue = [e(60, { status: 'IN_CONSULTATION', called: true }), e(55, { arrived: false }), e(61), e(62), e(63)];
-    // If 55 checked in now it would go behind 62: serving + 61 + 62.
+  it('projection for a held patient whose turn passed applies the late-return placement', () => {
+    const queue = [e(60, { status: 'IN_CONSULTATION', called: true }), e(55, { away: true }), e(61), e(62), e(63)];
+    // If 55 were resumed now it would go behind 62: serving + 61 + 62.
     expect(patientsAhead(queue, 't55', ctx(2))).toBe(3);
   });
 
-  it('with priority, late return and absent patients combined', () => {
+  it('with priority, late return and held patients combined', () => {
     const queue = [
       e(20, { status: 'COMPLETED', called: true }),
       e(21, { status: 'IN_CONSULTATION', called: true }),
-      e(22, { arrived: false }),
+      e(22, { away: true }),
       e(23),
       e(24),
       e(25),
       e(5, { after: 24, rejoinSeq: 1, called: true }),
       e(30, { priority: 10, prioritySeq: 2 }),
       e(35, { priority: 10, prioritySeq: 1 }),
-      e(36, { priority: 10, prioritySeq: 3, arrived: false }),
+      e(36, { priority: 10, prioritySeq: 3, away: true }),
     ];
     expect(simulateCalls(queue)).toEqual(['t35', 't30', 't23', 't24', 't5', 't25']);
     expect(patientsAhead(queue, 't5')).toBe(5);
@@ -305,7 +298,7 @@ describe('ETA ahead-count uses the exact order Next uses', () => {
         queue.push(
           e(token, {
             status,
-            arrived: rand() < 0.7,
+            away: rand() < 0.3,
             priority: prio ? 10 : 0,
             prioritySeq: prio ? (seq += 1) + Math.floor(rand() * 3) * 10 : undefined,
             after: !prio && rand() < 0.15 ? Math.floor(rand() * size) + 1 : undefined,
@@ -316,6 +309,83 @@ describe('ETA ahead-count uses the exact order Next uses', () => {
       }
       if (rand() < 0.5) queue.push(e(size + 1, { status: 'IN_CONSULTATION', called: true }));
       expectAheadMatchesCalls(queue);
+    }
+  });
+});
+
+describe('call numbers', () => {
+  /** Plays Next, issuing call numbers the way the service does. */
+  function playWithCallNumbers(start: QueueEntry[], lastCall: number) {
+    let entries = start.map((x) => ({ ...x }));
+    let last = lastCall;
+    const issued = new Map<string, number>();
+    for (let i = 0; i < entries.length + 2; i += 1) {
+      const transitions = callNext(entries);
+      if (transitions.length === 0) break;
+      entries = entries.map((x) => {
+        const t = transitions.find((tr) => tr.appointmentId === x.appointmentId);
+        if (!t) return x;
+        if (t.action === 'call') {
+          last += 1;
+          issued.set(x.appointmentId, last);
+          return { ...x, status: t.to, calledAt: at(59), callNumber: last };
+        }
+        return { ...x, status: t.to };
+      });
+    }
+    return issued;
+  }
+
+  it('serving token 31 is call 3; waiting 29 and 30 become calls 4 and 5', () => {
+    const queue = [
+      e(31, { status: 'CALLED', called: true }),
+      e(29),
+      e(30),
+    ].map((x) => (x.appointmentId === 't31' ? { ...x, callNumber: 3 } : x));
+    expect(projectedCallNumber(queue, 't31', 3)).toBe(3);
+    expect(projectedCallNumber(queue, 't29', 3)).toBe(4);
+    expect(projectedCallNumber(queue, 't30', 3)).toBe(5);
+  });
+
+  it('call numbers rise in serving order, whatever the tokens', () => {
+    const queue = [e(40, { priority: 10, prioritySeq: 1 }), e(12), e(5, { away: true }), e(9)];
+    const issued = playWithCallNumbers(queue, 0);
+    expect([...issued.entries()]).toEqual([
+      ['t40', 1],
+      ['t9', 2],
+      ['t12', 3],
+    ]);
+  });
+
+  it('the projected number is exactly the number Next will give, for random queues', () => {
+    let seed = 11;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    };
+    for (let run = 0; run < 200; run += 1) {
+      const size = 3 + Math.floor(rand() * 12);
+      const queue: QueueEntry[] = [];
+      let seq = 0;
+      for (let token = 1; token <= size; token += 1) {
+        const prio = rand() < 0.2;
+        queue.push(
+          e(token, {
+            status: rand() < 0.1 ? 'HELD' : 'WAITING',
+            away: rand() < 0.25,
+            priority: prio ? 10 : 0,
+            prioritySeq: prio ? (seq += 1) : undefined,
+            after: !prio && rand() < 0.15 ? Math.floor(rand() * size) + 1 : undefined,
+            rejoinSeq: Math.floor(rand() * 5),
+          }),
+        );
+      }
+      const last = Math.floor(rand() * 20);
+      if (rand() < 0.5) queue.push({ ...e(size + 1, { status: 'IN_CONSULTATION', called: true }), callNumber: last });
+      const issued = playWithCallNumbers(queue, last);
+      for (const x of queue.filter(isEligible)) {
+        expect(projectedCallNumber(queue, x.appointmentId, last), x.appointmentId).toBe(issued.get(x.appointmentId));
+      }
     }
   });
 });

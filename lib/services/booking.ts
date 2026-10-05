@@ -207,6 +207,21 @@ const ON_BREAK_NOTE: Record<Locale, string> = {
   en: 'The doctor is on a break right now. The queue will move again when they are back.',
 };
 
+/**
+ * "Call 3": who is being served, as the serving sequence rather than a token,
+ * so a patient reading "currently serving" never sees a token higher than
+ * theirs and thinks they were skipped. Falls back to the token, then a dash.
+ */
+const servingLabel = (
+  snapshot: { currentCallNumber: number | null; currentToken: number | null } | null,
+  locale: Locale,
+): string =>
+  snapshot?.currentCallNumber != null
+    ? `${t[locale].callWord} ${snapshot.currentCallNumber}`
+    : snapshot?.currentToken != null
+      ? String(snapshot.currentToken)
+      : '-';
+
 const withBreakNote = (body: string, locale: Locale, onBreak: boolean): string =>
   onBreak ? `${ON_BREAK_NOTE[locale]}\n\n${body}` : body;
 
@@ -224,7 +239,7 @@ const QUEUE_CONFIRMATION: Record<
 
 रांगेतील स्थिती पाहा: ${url}
 
-रुग्णालयात पोहोचल्यावर वरील लिंकवर "मी पोहोचलो" दाबा — त्यानंतरच तुम्हाला बोलावले जाईल. तुमचा नंबर जवळ आल्यावर आम्ही कळवू.`,
+तुम्ही बाहेर थांबू शकता — तुमचा नंबर जवळ आल्यावर आम्ही कळवू.`,
   hi: (token, doctor, patient, serving, wait, url) =>
     `आप ${formatDoctorName(doctor, 'hi')} की कतार में शामिल हो गए हैं।
 
@@ -235,7 +250,7 @@ const QUEUE_CONFIRMATION: Record<
 
 कतार स्थिति देखें: ${url}
 
-अस्पताल पहुँचने पर ऊपर दिए लिंक पर "मैं पहुँच गया" दबाएँ — उसके बाद ही आपको बुलाया जाएगा। आपकी बारी पास आने पर हम सूचित करेंगे।`,
+आप बाहर इंतज़ार कर सकते हैं — आपकी बारी पास आने पर हम सूचित करेंगे।`,
   en: (token, doctor, patient, serving, wait, url) =>
     `You're in the queue for ${formatDoctorName(doctor, 'en')}.
 
@@ -246,7 +261,7 @@ Estimated wait: ~${wait} min
 
 Track position: ${url}
 
-When you reach the hospital, tap "I've Arrived" on the link above — you can be called only after that. We'll message you when your token is close.`,
+You don't need to wait inside — we'll message you when your token is close.`,
 };
 
 /** Said instead of a token when the day's quota refuses an online queue booking. */
@@ -869,7 +884,7 @@ export async function handleInboundMessage(
         timezone: 'Asia/Kolkata',
       });
 
-      const currentServing = snapshot?.currentToken ?? 1;
+      const currentServing = servingLabel(snapshot, locale);
       const patientsAhead = snapshot?.waitingCount ?? 0;
       const consultMin = snapshot?.medianConsultMinutes ?? doctor.defaultConsultMinutes;
       const waitMinutes = Math.max(5, patientsAhead * consultMin);
@@ -949,7 +964,7 @@ export async function handleInboundMessage(
       // and the page never disagree.
       const view = await getPublicQueueView(created.publicToken);
 
-      const currentServing = snapshot?.currentToken ?? '-';
+      const currentServing = servingLabel(snapshot, locale);
       const consultMin = snapshot?.medianConsultMinutes ?? doctor.defaultConsultMinutes;
       const waitMinutes = Math.max(
         5,

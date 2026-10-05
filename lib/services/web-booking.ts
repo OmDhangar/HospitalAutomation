@@ -364,8 +364,6 @@ export async function bookScheduledSlot(args: {
         status: 'WAITING',
         source: 'whatsapp',
         quotaPool: allocated.pool,
-        // Booked from home: callable only once they check in on arrival.
-        arrivedAt: null,
         publicToken,
         publicTokenExpiresAt,
         scheduledSlotAt: slotDate,

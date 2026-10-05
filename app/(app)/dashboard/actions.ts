@@ -25,7 +25,6 @@ import {
   advanceQueue,
   applyQueueAction,
   createWalkIn,
-  markArrived,
   pauseAppointment,
   resumeAppointment,
   setDoctorPaused,
@@ -242,7 +241,7 @@ export async function togglePaidDynamic(args: {
 
 export async function advanceQueueDynamic(args: {
   doctorId: string;
-}): Promise<{ ok: boolean; error?: string; noArrivedPatient?: boolean; called?: boolean }> {
+}): Promise<{ ok: boolean; error?: string; called?: boolean }> {
   try {
     const session = await authorize();
     const result = await advanceQueue({
@@ -254,11 +253,7 @@ export async function advanceQueueDynamic(args: {
 
     notifyQueueMovement(session.hospitalId);
     revalidatePath('/dashboard');
-    return {
-      ok: true,
-      noArrivedPatient: result.noArrivedPatient,
-      called: result.transitions.some((t) => t.action === 'call'),
-    };
+    return { ok: true, called: result.transitions.some((t) => t.action === 'call') };
   } catch (err: unknown) {
     return { ok: false, error: err instanceof Error ? err.message : 'Failed to advance queue' };
   }
@@ -484,30 +479,6 @@ export async function startSessionDynamic(args: {
     return { ok: true, delayMinutes: result.delayMinutes };
   } catch (err: unknown) {
     return { ok: false, error: err instanceof Error ? err.message : 'Failed to start OPD' };
-  }
-}
-
-/** For a patient who reached the desk without using their link. A secondary action. */
-export async function markArrivedDynamic(args: {
-  doctorId: string;
-  appointmentId: string;
-}): Promise<{ ok: boolean; error?: string; late?: boolean }> {
-  try {
-    const session = await authorize();
-    const result = await markArrived({
-      hospitalId: session.hospitalId,
-      appointmentId: args.appointmentId,
-      actorUserId: session.userId,
-    });
-    if (result.outcome === 'not_today') return { ok: false, error: 'This appointment is not for today.' };
-    if (result.outcome !== 'arrived' && result.outcome !== 'already_arrived') {
-      return { ok: false, error: 'This patient is no longer in the queue.' };
-    }
-    notifyQueueMovement(session.hospitalId);
-    revalidatePath('/dashboard');
-    return { ok: true, late: result.outcome === 'arrived' && result.late };
-  } catch (err: unknown) {
-    return { ok: false, error: err instanceof Error ? err.message : 'Failed to mark arrived' };
   }
 }
 

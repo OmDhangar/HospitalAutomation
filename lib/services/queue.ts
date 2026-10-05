@@ -28,12 +28,12 @@ import {
   isActive,
   isEligible,
   isLateReturn,
-  isTerminal,
   lateFrontier,
   lateReturnAnchor,
   orderQueue,
   patientsAhead,
   priorityRank,
+  projectedCallNumber,
 } from '@/lib/domain/queue';
 import { isMockPhone } from '@/lib/domain/phone';
 import { formatTimeIn, serviceDateIn } from '@/lib/domain/time';
@@ -83,9 +83,7 @@ export type QueueRow = {
   scheduledSlotAt?: Date | null;
   pausedAt?: Date | null;
   resumeAt?: Date | null;
-  /** Confirmed physically present. A WAITING row without this is booked but not here. */
-  arrivedAt?: Date | null;
-  /** "Priority #n" among waiting priority patients. */
+    /** "Priority #n" among waiting priority patients. */
   priorityRank?: number | null;
   /** Placed after this token on returning late. */
   queueAfterToken?: number | null;
@@ -93,6 +91,11 @@ export type QueueRow = {
   /** Internal estimate for staff; from the same ordering Next uses. */
   patientsAhead?: number | null;
   etaAt?: Date | null;
+  /**
+   * Serving sequence: the number they were called with, or for a waiting
+   * patient the number Next will give them. Null for held/skipped patients.
+   */
+  callNumber?: number | null;
 };
 
 export type QueueSnapshot = {
@@ -104,8 +107,10 @@ export type QueueSnapshot = {
   /** When the doctor's current break began, or null when not on a break. */
   breakStartedAt: Date | null;
   currentToken: number | null;
+  /** Call number of whoever is with the doctor: what the room and the TV announce. */
+  currentCallNumber: number | null;
   currentPatientName?: string | null;
-  nextPatient?: { tokenNumber: number; patientName: string } | null;
+  nextPatient?: { tokenNumber: number; patientName: string; callNumber: number | null } | null;
   waitingCount: number;
   completedCount: number;
   rows: QueueRow[];
@@ -123,9 +128,7 @@ export type QueueSnapshot = {
   /** Set only by Start OPD. */
   sessionStartedAt: Date | null;
   etaState: EtaState;
-  /** Arrived patients Next could call right now. */
-  eligibleCount: number;
-};
+  };
 
 /* ------------------------------------------------------------- internals */
 
@@ -136,11 +139,11 @@ const toQueueEntry = (row: {
   priority: number;
   enqueuedAt: Date | null;
   createdAt: Date;
-  arrivedAt: Date | null;
   prioritySeq: number | null;
   calledAt: Date | null;
   queueAfterToken: number | null;
   rejoinSeq: number | null;
+  callNumber: number | null;
 }): QueueEntry => ({
   appointmentId: row.id,
   tokenNumber: row.tokenNumber,
@@ -149,11 +152,11 @@ const toQueueEntry = (row: {
   // Falling back to createdAt keeps ordering total even for rows that were
   // never explicitly enqueued.
   enqueuedAt: row.enqueuedAt ?? row.createdAt,
-  arrivedAt: row.arrivedAt,
   prioritySeq: row.prioritySeq,
   calledAt: row.calledAt,
   queueAfterToken: row.queueAfterToken,
   rejoinSeq: row.rejoinSeq,
+  callNumber: row.callNumber,
 });
 
 /**
@@ -190,6 +193,16 @@ async function nextQueueSeq(tx: Tx, doctorId: string, serviceDate: string): Prom
     .where(and(eq(doctorDayStates.doctorId, doctorId), eq(doctorDayStates.serviceDate, serviceDate)))
     .returning({ seq: doctorDayStates.lastQueueSeq });
   return row.seq;
+}
+
+/** Next call number for the doctor-day. Under the lock, so two Nexts never share one. */
+async function nextCallNumber(tx: Tx, doctorId: string, serviceDate: string): Promise<number> {
+  const [row] = await tx
+    .update(doctorDayStates)
+    .set({ lastCallNumber: sql`${doctorDayStates.lastCallNumber} + 1` })
+    .where(and(eq(doctorDayStates.doctorId, doctorId), eq(doctorDayStates.serviceDate, serviceDate)))
+    .returning({ n: doctorDayStates.lastCallNumber });
+  return row.n;
 }
 
 /**
@@ -257,10 +270,10 @@ async function loadDayAppointments(
       /** Needed so a nudge goes out in the language the patient chose. */
       locale: patients.locale,
       scheduledSlotAt: appointments.scheduledSlotAt,
-      arrivedAt: appointments.arrivedAt,
       prioritySeq: appointments.prioritySeq,
       queueAfterToken: appointments.queueAfterToken,
       rejoinSeq: appointments.rejoinSeq,
+      callNumber: appointments.callNumber,
       quotaPool: appointments.quotaPool,
     })
     .from(appointments)
@@ -355,6 +368,8 @@ async function writeTransition(
     metadata?: Record<string, unknown>;
     now: Date;
     calledAt?: Date | null;
+    /** Issued by the caller from the doctor-day counter, for a `call`. */
+    callNumber?: number | null;
   },
 ) {
   const patch: Partial<typeof appointments.$inferInsert> = {
@@ -373,6 +388,7 @@ async function writeTransition(
       break;
     case 'call':
       patch.calledAt = args.now;
+      if (args.callNumber != null) patch.callNumber = args.callNumber;
       break;
     case 'start_consultation':
       patch.consultStartedAt = args.now;
@@ -528,12 +544,6 @@ export async function createWalkIn(args: {
   const serviceDate = serviceDateIn(args.timezone, now);
   const tStart = performance.now();
   const source = args.source ?? 'walk_in';
-  /**
-   * A desk walk-in is standing in front of the receptionist: present by
-   * definition. A WhatsApp booking is made from wherever the patient is, so it
-   * waits for "I've Arrived" before Next will call it.
-   */
-  const presentNow = source !== 'whatsapp';
   const channel: CapacityChannel = args.extraToken
     ? 'extra'
     : source === 'whatsapp'
@@ -562,7 +572,6 @@ export async function createWalkIn(args: {
     const whatsappOptInAtIso = optedIn ? nowIso : null;
 
     const [row] = await tx.execute<{
-      appt_arrived_at: Date | null;
       appt_quota_pool: 'reserved' | 'shared' | 'extra' | null;
       appt_id: string;
       appt_hospital_id: string;
@@ -625,7 +634,7 @@ export async function createWalkIn(args: {
           insert into appointments (
             hospital_id, branch_id, doctor_id, patient_id, service_date,
             token_number, status, source, public_token, public_token_expires_at, enqueued_at,
-            arrived_at, quota_pool
+            quota_pool
           )
           select
             ${args.hospitalId}::uuid,
@@ -639,7 +648,6 @@ export async function createWalkIn(args: {
             ${publicToken},
             ${publicTokenExpiresAtIso}::timestamptz,
             ${nowIso}::timestamptz,
-            ${presentNow ? sql`${nowIso}::timestamptz` : sql`NULL`},
             ${allocated.pool}
           from upserted_patient
           returning *
@@ -690,7 +698,6 @@ export async function createWalkIn(args: {
           on conflict do nothing
         )
       select
-        inserted_appt.arrived_at as appt_arrived_at,
         inserted_appt.quota_pool as appt_quota_pool,
         inserted_appt.id as appt_id,
         inserted_appt.hospital_id as appt_hospital_id,
@@ -755,10 +762,10 @@ export async function createWalkIn(args: {
       completedAt: row.appt_completed_at ? new Date(row.appt_completed_at) : null,
       pausedAt: null,
       resumeAt: null,
-      arrivedAt: row.appt_arrived_at ? new Date(row.appt_arrived_at) : null,
       prioritySeq: null,
       queueAfterToken: null,
       rejoinSeq: null,
+      callNumber: null,
       quotaPool: row.appt_quota_pool,
       createdAt: new Date(row.appt_created_at),
       updatedAt: new Date(row.appt_updated_at),
@@ -789,18 +796,13 @@ export async function createWalkIn(args: {
 
 export type AdvanceResult = {
   transitions: ReturnType<typeof callNext>;
-  /**
-   * Someone is waiting but nobody waiting has arrived, so nobody was called.
-   * Nobody is marked arrived to make Next "work": pressing Next is not proof
-   * that a patient is in the building.
-   */
-  noArrivedPatient: boolean;
 };
 
 /**
- * One-click Next: complete whoever is with the doctor, call the next eligible
- * patient — priority first (first-come first-served), then the earliest token
- * that is present. Never starts the session: that is Start OPD's job alone.
+ * One-click Next: complete whoever is with the doctor, call the next waiting
+ * patient — priority first (first-come first-served), then the queue order —
+ * and give them the day's next call number. A patient who is not there is
+ * put on hold by the desk. Never starts the session: that is Start OPD's job.
  */
 export async function advanceQueue(args: {
   hospitalId: string;
@@ -825,17 +827,11 @@ export async function advanceQueue(args: {
     const rows = await loadDayAppointments(tx, { doctorId: args.doctorId, serviceDate });
     const entries = rows.map(toQueueEntry);
     const transitions = callNext(entries);
-    const called = transitions.find((t) => t.action === 'call');
-    // For the audit trail: earlier tokens that were waiting but not here.
-    const passedOver = called
-      ? orderQueue(entries)
-          .filter((e) => e.status === 'WAITING' && !isEligible(e))
-          .filter((e) => e.tokenNumber < (entries.find((x) => x.appointmentId === called.appointmentId)?.tokenNumber ?? 0))
-          .map((e) => e.tokenNumber)
-      : [];
 
     for (const transition of transitions) {
       const row = rows.find((r) => r.id === transition.appointmentId)!;
+      // The day's serving sequence: the next number, whatever the token.
+      const callNumber = transition.action === 'call' ? await nextCallNumber(tx, args.doctorId, serviceDate) : null;
       await writeTransition(tx, {
         hospitalId: args.hospitalId,
         doctorId: args.doctorId,
@@ -845,10 +841,8 @@ export async function advanceQueue(args: {
         to: transition.to,
         actorUserId: args.actorUserId,
         calledAt: row.calledAt,
-        metadata:
-          transition.action === 'call' && passedOver.length > 0
-            ? { reason: 'earlier_tokens_not_arrived', passed_over_tokens: passedOver }
-            : undefined,
+        callNumber,
+        metadata: transition.action === 'call' ? { call_number: callNumber } : undefined,
         now,
       });
     }
@@ -887,10 +881,7 @@ export async function advanceQueue(args: {
       });
     }
 
-    return {
-      transitions,
-      noArrivedPatient: !called && entries.some((e) => e.status === 'WAITING'),
-    } satisfies AdvanceResult;
+    return { transitions } satisfies AdvanceResult;
   });
 }
 
@@ -933,8 +924,8 @@ export async function applyQueueAction(args: {
 
     const to = applyAction(fresh.status, args.action);
 
-    // Coming back into the line: staff recall or resume means the patient is
-    // here again, and if their turn passed they go behind the next N present.
+    // Coming back into the line: if their turn passed while they were away,
+    // they go behind the next N waiting patients.
     const returning = args.action === 'recall' || args.action === 'resume';
     const placement = returning
       ? await placeReturningPatient(tx, {
@@ -946,7 +937,7 @@ export async function applyQueueAction(args: {
     if (returning) {
       await tx
         .update(appointments)
-        .set({ arrivedAt: sql`coalesce(${appointments.arrivedAt}, ${now.toISOString()}::timestamptz)`, pausedAt: null, resumeAt: null })
+        .set({ pausedAt: null, resumeAt: null })
         .where(eq(appointments.id, args.appointmentId));
     }
 
@@ -1525,8 +1516,6 @@ export async function resumeAppointment(args: {
         pausedAt: null,
         resumeAt: null,
         enqueuedAt: now,
-        // Resuming a held patient means they are back.
-        arrivedAt: sql`coalesce(${appointments.arrivedAt}, ${now.toISOString()}::timestamptz)`,
         updatedAt: now,
       })
       .where(eq(appointments.id, args.appointmentId));
@@ -1636,9 +1625,15 @@ export async function getQueueSnapshotInTx(
     (e) => e.status === 'CALLED' || e.status === 'IN_CONSULTATION',
   );
   const servingRow = serving ? byId.get(serving.appointmentId) : null;
-  // "Next" on the dashboard is who Next will actually call: present patients only.
   const nextWaiting = ordered.find(isEligible);
   const nextWaitingRow = nextWaiting ? byId.get(nextWaiting.appointmentId) : null;
+  const lastCallNumber = day?.lastCallNumber ?? 0;
+  // Waiting and serving patients have a place in the call sequence; held and
+  // skipped patients get one again when they are resumed.
+  const callNumberFor = (entry: QueueEntry) =>
+    isEligible(entry) || entry.status === 'CALLED' || entry.status === 'IN_CONSULTATION'
+      ? projectedCallNumber(entries, entry.appointmentId, lastCallNumber, settings.ctx)
+      : null;
 
   const etaFor = (appointmentId: string) => {
     const ahead = patientsAhead(entries, appointmentId, settings.ctx);
@@ -1665,12 +1660,16 @@ export async function getQueueSnapshotInTx(
     pausedReason: day?.pausedReason ?? null,
     breakStartedAt: day?.paused ? (day.pausedAt ?? null) : null,
     currentToken: serving?.tokenNumber ?? null,
+    currentCallNumber: serving?.callNumber ?? null,
     currentPatientName: servingRow ? servingRow.patientName : null,
     nextPatient: nextWaitingRow
-      ? { tokenNumber: nextWaitingRow.tokenNumber, patientName: nextWaitingRow.patientName }
+      ? {
+          tokenNumber: nextWaitingRow.tokenNumber,
+          patientName: nextWaitingRow.patientName,
+          callNumber: nextWaiting ? callNumberFor(nextWaiting) : null,
+        }
       : null,
     waitingCount: ordered.filter((e) => e.status === 'WAITING').length,
-    eligibleCount: ordered.filter(isEligible).length,
     completedCount: rows.filter((r) => r.status === 'COMPLETED').length,
     medianConsultMinutes: durations.length > 0 ? durations[Math.floor(durations.length / 2)] : null,
     delayMinutes: startDelayMinutes({ scheduledStartAt, sessionStartedAt, now }),
@@ -1691,6 +1690,7 @@ export async function getQueueSnapshotInTx(
         priorityRank: priorityRank(entries, entry.appointmentId),
         patientsAhead: ahead,
         etaAt,
+        callNumber: callNumberFor(entry),
       };
     }),
     parked: rows
@@ -1718,7 +1718,6 @@ const toQueueRow = (row: Awaited<ReturnType<typeof loadDayAppointments>>[number]
   scheduledSlotAt: row.scheduledSlotAt,
   pausedAt: row.pausedAt ?? null,
   resumeAt: row.resumeAt ?? null,
-  arrivedAt: row.arrivedAt,
   queueAfterToken: row.queueAfterToken,
   quotaPool: row.quotaPool,
 });
@@ -1753,6 +1752,13 @@ export type PublicQueueView = {
   cancellable: boolean;
   patientFirstName: string;
   currentToken: number | null;
+  /** Call number now with the doctor: the serving order, not a token. */
+  currentCallNumber: number | null;
+  /**
+   * This patient's call number: the one they were called with, or the one Next
+   * will give them. Null while held or skipped. Tokens never change; this can.
+   */
+  callNumber: number | null;
   /**
    * Patients who will be seen first, counted on the order Next uses. For a
    * patient not here yet: the place they would take on arriving now.
@@ -1768,18 +1774,11 @@ export type PublicQueueView = {
   eta: EtaEstimate | null;
   /** `not_started`: the doctor is past their start time and OPD has not begun. */
   etaState: EtaState | null;
-  /** Confirmed present. */
-  arrived: boolean;
-  /** Whether the "I've Arrived" button applies: today, not yet arrived, still in the queue. */
-  canCheckIn: boolean;
   timezone: string;
   locale: 'mr' | 'hi' | 'en';
   lastUpdatedAt: Date;
   expired: boolean;
 };
-
-/** Statuses from which "I've Arrived" brings the patient into the callable line. */
-const CHECK_IN_STATUSES: ReadonlySet<AppointmentStatus> = new Set(['WAITING', 'HELD', 'SKIPPED']);
 
 /**
  * Everything the patient PWA is allowed to know, and nothing else.
@@ -1809,7 +1808,6 @@ export async function getPublicQueueView(
         expiresAt: appointments.publicTokenExpiresAt,
         pausedAt: appointments.pausedAt,
         resumeAt: appointments.resumeAt,
-        arrivedAt: appointments.arrivedAt,
         patientName: patients.name,
         patientLocale: patients.locale,
         doctorName: doctors.name,
@@ -1851,7 +1849,6 @@ export async function getPublicQueueView(
     });
 
     const expired = appointment.expiresAt.getTime() < now.getTime();
-    const isToday = appointment.serviceDate === serviceDateIn(settings.timezone, now);
     const showEta =
       ahead !== null && !expired && !(day?.paused ?? false) && appointment.status !== 'HELD';
     const resolvedEta: EtaResult | null = showEta
@@ -1874,6 +1871,11 @@ export async function getPublicQueueView(
       // First name only: a forwarded link should not expose a full identity.
       patientFirstName: appointment.patientName.split(' ')[0] ?? '',
       currentToken: serving?.tokenNumber ?? null,
+      currentCallNumber: serving?.callNumber ?? null,
+      callNumber:
+        appointment.status === 'HELD' || appointment.status === 'SKIPPED'
+          ? null
+          : projectedCallNumber(entries, appointment.id, day?.lastCallNumber ?? 0, settings.ctx),
       patientsAhead: ahead,
       paused: day?.paused ?? false,
       breakStartedAt: day?.paused ? (day.pausedAt ?? null) : null,
@@ -1886,166 +1888,8 @@ export async function getPublicQueueView(
       expired,
       eta: resolvedEta && resolvedEta.state !== 'not_started' ? resolvedEta : null,
       etaState: resolvedEta?.state ?? null,
-      arrived: appointment.arrivedAt !== null,
-      canCheckIn:
-        !expired &&
-        isToday &&
-        CHECK_IN_STATUSES.has(appointment.status) &&
-        (appointment.arrivedAt === null || appointment.status !== 'WAITING'),
     };
   });
-}
-
-export type ArrivalResult =
-  | { outcome: 'arrived'; tokenNumber: number; late: boolean }
-  | { outcome: 'already_arrived'; tokenNumber: number }
-  | { outcome: 'not_today' }
-  | { outcome: 'not_in_queue' }
-  | { outcome: 'expired' }
-  | { outcome: 'not_found' };
-
-/**
- * Confirms a patient is physically present — the only way a remote booking
- * becomes callable. Shared by the patient's "I've Arrived" and the desk's
- * "Mark arrived".
- *
- * Under the doctor-day lock, so it cannot interleave with Next. Idempotent: a
- * second tap reports `already_arrived` and writes nothing. A HELD patient
- * (stepped out, rang to say they are on their way) is resumed; a SKIPPED one
- * is recalled. Either way, if their turn already passed they go behind the
- * next N present patients rather than straight to the front. The token never
- * changes.
- */
-async function arriveInTx(
-  tx: Tx,
-  args: {
-    hospitalId: string;
-    appointmentId: string;
-    actorUserId: string | null;
-    source: 'patient_link' | 'staff';
-    now: Date;
-  },
-): Promise<ArrivalResult> {
-  const [current] = await tx
-    .select({
-      doctorId: appointments.doctorId,
-      serviceDate: appointments.serviceDate,
-      expiresAt: appointments.publicTokenExpiresAt,
-      tokenNumber: appointments.tokenNumber,
-    })
-    .from(appointments)
-    .where(eq(appointments.id, args.appointmentId));
-  if (!current) return { outcome: 'not_found' };
-
-  const settings = await loadQueueSettings(tx, current.doctorId);
-  // Arriving for next Tuesday's appointment today means nothing.
-  if (current.serviceDate !== serviceDateIn(settings.timezone, args.now)) return { outcome: 'not_today' };
-  if (args.source === 'patient_link' && current.expiresAt.getTime() < args.now.getTime()) {
-    return { outcome: 'expired' };
-  }
-
-  await lockDoctorDay(tx, {
-    hospitalId: args.hospitalId,
-    doctorId: current.doctorId,
-    serviceDate: current.serviceDate,
-  });
-
-  // Re-read under the lock: Next or the desk may have moved them meanwhile.
-  const [fresh] = await tx
-    .select({ status: appointments.status, arrivedAt: appointments.arrivedAt })
-    .from(appointments)
-    .where(eq(appointments.id, args.appointmentId));
-
-  const withDoctor = fresh.status === 'CALLED' || fresh.status === 'IN_CONSULTATION';
-  if (isTerminal(fresh.status) || (!CHECK_IN_STATUSES.has(fresh.status) && !withDoctor)) {
-    return { outcome: 'not_in_queue' };
-  }
-  if (withDoctor) {
-    // Already with the doctor: just record that they are here.
-    if (!fresh.arrivedAt) {
-      await tx.update(appointments).set({ arrivedAt: args.now }).where(eq(appointments.id, args.appointmentId));
-    }
-    return { outcome: 'already_arrived', tokenNumber: current.tokenNumber };
-  }
-  if (fresh.status === 'WAITING' && fresh.arrivedAt) {
-    return { outcome: 'already_arrived', tokenNumber: current.tokenNumber };
-  }
-
-  const placement = await placeReturningPatient(tx, {
-    doctorId: current.doctorId,
-    serviceDate: current.serviceDate,
-    appointmentId: args.appointmentId,
-  });
-
-  const action: QueueAction =
-    fresh.status === 'HELD' ? 'resume' : fresh.status === 'SKIPPED' ? 'recall' : 'arrive';
-  await tx
-    .update(appointments)
-    .set({
-      status: 'WAITING',
-      arrivedAt: sql`coalesce(${appointments.arrivedAt}, ${args.now.toISOString()}::timestamptz)`,
-      pausedAt: null,
-      resumeAt: null,
-      updatedAt: args.now,
-    })
-    .where(eq(appointments.id, args.appointmentId));
-
-  await tx.insert(queueEvents).values({
-    hospitalId: args.hospitalId,
-    appointmentId: args.appointmentId,
-    doctorId: current.doctorId,
-    action,
-    fromStatus: fresh.status,
-    toStatus: 'WAITING',
-    actorUserId: args.actorUserId,
-    metadata: { reason: 'arrived', arrival_source: args.source, ...placementMetadata(placement) },
-  });
-
-  return { outcome: 'arrived', tokenNumber: current.tokenNumber, late: placement.late };
-}
-
-/** The patient's "I've Arrived" on their queue link. The public token is the credential. */
-export async function arriveByPublicToken(args: {
-  publicToken: string;
-  now?: Date;
-}): Promise<ArrivalResult> {
-  const now = args.now ?? new Date();
-  const [resolved] = await getDb().execute<{ hospital_id: string | null }>(
-    sql`select public.resolve_public_token(${args.publicToken}) as hospital_id`,
-  );
-  const hospitalId = resolved?.hospital_id;
-  if (!hospitalId) return { outcome: 'not_found' };
-
-  return withTenant(hospitalId, async (tx) => {
-    const [row] = await tx
-      .select({ id: appointments.id })
-      .from(appointments)
-      .where(eq(appointments.publicToken, args.publicToken));
-    if (!row) return { outcome: 'not_found' as const };
-    return arriveInTx(tx, { hospitalId, appointmentId: row.id, actorUserId: null, source: 'patient_link', now });
-  });
-}
-
-/**
- * Staff marking a patient arrived, for the patient who does not use the link.
- * A secondary action by design: the main desk flow is just Next.
- */
-export async function markArrived(args: {
-  hospitalId: string;
-  appointmentId: string;
-  actorUserId?: string | null;
-  now?: Date;
-}): Promise<ArrivalResult> {
-  const now = args.now ?? new Date();
-  return withTenant(args.hospitalId, (tx) =>
-    arriveInTx(tx, {
-      hospitalId: args.hospitalId,
-      appointmentId: args.appointmentId,
-      actorUserId: args.actorUserId ?? null,
-      source: 'staff',
-      now,
-    }),
-  );
 }
 
 /** Every doctor's queue for one branch, for the dashboard and the TV display. */
@@ -2272,8 +2116,6 @@ export async function resumeByPublicToken(args: {
         pausedAt: null,
         resumeAt: null,
         enqueuedAt: now,
-        // Tapping "I'm back" means they are here.
-        arrivedAt: sql`coalesce(${appointments.arrivedAt}, ${now.toISOString()}::timestamptz)`,
         updatedAt: now,
       })
       .where(eq(appointments.id, appointment.id));

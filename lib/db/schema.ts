@@ -604,16 +604,16 @@ export const appointments = pgTable(
     calledAt: timestamp('called_at', { withTimezone: true }),
     consultStartedAt: timestamp('consult_started_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
-    /**
-     * When the patient was confirmed physically present (0034). Null for a
-     * remote booking that has not checked in; Next passes over them.
-     */
-    arrivedAt: timestamp('arrived_at', { withTimezone: true }),
     /** FIFO order in which priority was given, per doctor-day. */
     prioritySeq: integer('priority_seq'),
     /** Late-return marker: served right after this token's place in line. */
     queueAfterToken: integer('queue_after_token'),
     rejoinSeq: integer('rejoin_seq'),
+    /**
+     * The day's serving sequence: 1, 2, 3… in the order patients are called
+     * (0035). What patients see as the queue; the token stays their identity.
+     */
+    callNumber: integer('call_number'),
     /** Capacity pool that issued the token; null when no quota applied. */
     quotaPool: text('quota_pool').$type<'reserved' | 'shared' | 'extra'>(),
     /** When the doctor paused this appointment. Null unless status is HELD. */
@@ -699,6 +699,8 @@ export const doctorDayStates = pgTable(
     scheduledStartAt: timestamp('scheduled_start_at', { withTimezone: true }),
     sessionStartedAt: timestamp('session_started_at', { withTimezone: true }),
     lastTokenNumber: integer('last_token_number').notNull().default(0),
+    /** Last call number issued today (0035). */
+    lastCallNumber: integer('last_call_number').notNull().default(0),
     /** Counter for priority_seq and rejoin_seq (0034). */
     lastQueueSeq: integer('last_queue_seq').notNull().default(0),
     /**

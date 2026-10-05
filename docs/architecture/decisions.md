@@ -239,13 +239,14 @@ the ward grid already shows who is in which bed.
 
 **Decision:**
 - **Fixed tokens.** A token number is a permanent booking identity, and nothing renumbers it.
-- **Arrival.** It is a separate field (`appointments.arrived_at`).
-  - Desk walk-ins are arrived on creation.
-  - WhatsApp and web bookings become callable only after the patient taps "I've Arrived", or staff mark them arrived.
-- **Next.** It calls the first arrived patient in one order (`orderQueue` in `lib/domain/queue.ts`):
+- **One queue.** Every booking is WAITING; there is no separate arrival state (an `arrived_at` check-in was
+  tried and removed in 0036 because it split the desk's line in two).
+- **Next.** It calls the next WAITING patient in one order (`orderQueue` in `lib/domain/queue.ts`):
   1. Priority patients, first-come first-served by when priority was given (`priority_seq`).
   2. Everyone else by token.
-- **Late returns.** A patient whose turn has passed (token below the highest normal token already called) is placed behind the next N arrived patients (`queue_after_token`, `hospitals.late_rejoin_after_patients`). This covers a skipped or held patient who returns, and a late check-in.
+- **Absence.** A patient who is not there when called is put on hold (Pause/Hold) and leaves the line. Resume
+  (desk), "I'm back" (patient) or the timed auto-resume brings them back.
+- **Late returns.** A patient whose turn has passed (token below the highest normal token already called) is placed behind the next N waiting patients (`queue_after_token`, `hospitals.late_rejoin_after_patients`). This covers a skipped or held patient who returns.
 - **ETA.** It counts patients ahead on the same order, so the estimate and Next never disagree.
 - **Doctor start.** `session_started_at` is written only by Start OPD.
   - Before it, estimates count from the scheduled start.
@@ -261,6 +262,22 @@ the ward grid already shows who is in which bed.
 **Why:**
 - **Changing token numbers:** renumbering breaks patient trust, the unique index and every message already sent.
 - **Ordering by booking time:** that let a remote booking from 7am hold the line against people standing in the corridor.
-- **Calling absent patients:** Next called whoever was first, present or not.
+- **Absent patients:** handled by the existing hold/resume, not a second queue.
 - **Priority:** it was ordered by enqueue time, so a later-prioritised patient could jump an earlier one.
 - **Delay:** a recorded delay would have been added on top of a now-based wait for the rest of the day.
+
+### ADR-020 · The serving order is shown as a call number, not a token
+*Oct 2026 · Queue*
+
+**Decision:**
+- **Call number.** Each doctor-day issues a call number (1, 2, 3…) at the moment Next calls a patient
+  (`appointments.call_number`, `doctor_day_states.last_call_number`).
+- **Waiting patients.** They see the call number Next will give them. It comes from `projectedCallNumber` in
+  `lib/domain/queue.ts`, which uses the same order as Next and the ETA.
+- **Where it shows.** The dashboard, patient page, waiting-room TV and WhatsApp "currently serving" lead with
+  the call number, with the token beside it.
+- **Tokens.** They stay the permanent booking identity and are never renumbered.
+
+**Why:** a token served first for a legitimate reason looked like it had jumped lower tokens. Examples are an
+arrived later token, a priority patient and an emergency; for instance, "Now serving 31" with 29 and 30 waiting.
+Call numbers only ever count up, so the order patients see is the order they are seen in.

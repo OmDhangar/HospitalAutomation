@@ -156,15 +156,14 @@ const DEFAULT_CONTEXT: QueueContext = { lateRejoinAfter: DEFAULT_LATE_REJOIN_AFT
 const isPriority = (entry: QueueEntry): boolean => entry.priority > 0;
 
 /**
- * Whether Next may call this patient right now.
+ * Whether Next may call this patient right now: anyone WAITING.
  *
- * Waiting is not enough: a WhatsApp or web booking is WAITING from the moment
- * it is made, wherever the patient happens to be. Only someone confirmed
- * present — a desk walk-in, an "I've Arrived" tap, or staff marking them — is
- * callable. Held, skipped and terminal patients are never eligible.
+ * There is one queue. A patient who is not there when called is put on hold
+ * (HELD) by the desk, which takes them out of the line; Resume brings them
+ * back under the late-return rule. Held, skipped and terminal patients are
+ * never eligible.
  */
-export const isEligible = (entry: QueueEntry): boolean =>
-  entry.status === 'WAITING' && entry.arrivedAt !== null;
+export const isEligible = (entry: QueueEntry): boolean => entry.status === 'WAITING';
 
 const isServing = (entry: QueueEntry): boolean =>
   entry.status === 'CALLED' || entry.status === 'IN_CONSULTATION';
@@ -215,12 +214,7 @@ function compare(a: QueueEntry, b: QueueEntry): number {
   );
 }
 
-/**
- * Active entries in the order they will be seen, arrived or not.
- *
- * Patients who have not arrived keep their place in this order; Next simply
- * passes over them (see `isEligible`) without changing anything about them.
- */
+/** Active entries (with the doctor, then waiting) in the order they will be seen. */
 export function orderQueue(entries: QueueEntry[]): QueueEntry[] {
   return entries.filter((entry) => isActive(entry.status)).sort(compare);
 }
@@ -276,14 +270,13 @@ export const nextEligible = (entries: QueueEntry[]): QueueEntry | null =>
 /**
  * How many patients will be seen before this one — the ETA's "ahead".
  *
- * Counted on the exact order Next uses: serving patients plus eligible
- * patients sorted before them. Absent patients are not counted; they are
- * passed over by Next, so they are not workload ahead.
+ * Counted on the exact order Next uses: serving patients plus waiting
+ * patients sorted before them. Held and skipped patients are not counted;
+ * they are out of the line, so they are not workload ahead.
  *
- * For a patient who is not currently callable (not arrived, held, skipped)
- * this is a projection: the place they would take if they checked in now,
- * including the late-return placement a check-in would give them. Returns
- * null for a patient who is finished with (terminal) or not found.
+ * For a held or skipped patient this is a projection: the place they would
+ * take if resumed now, including the late-return placement a resume would
+ * give them. Returns null for a patient who is finished with or not found.
  */
 export function patientsAhead(
   entries: QueueEntry[],
@@ -296,15 +289,14 @@ export function patientsAhead(
   let projected = entries;
   if (!isServing(self) && !isEligible(self)) {
     const late = isLateReturn(entries, self);
-    const asPresent: QueueEntry = {
+    const asReturned: QueueEntry = {
       ...self,
       status: 'WAITING',
-      arrivedAt: self.arrivedAt ?? new Date(0),
       ...(late
         ? { queueAfterToken: lateReturnAnchor(entries, self.appointmentId, ctx), rejoinSeq: NO_SEQ }
         : {}),
     };
-    projected = entries.map((entry) => (entry === self ? asPresent : entry));
+    projected = entries.map((entry) => (entry === self ? asReturned : entry));
   }
 
   let ahead = 0;
@@ -313,6 +305,30 @@ export function patientsAhead(
     if (isServing(entry) || isEligible(entry)) ahead += 1;
   }
   return null;
+}
+
+/**
+ * The call number a patient has, or will get if things stay as they are.
+ *
+ * Called patients keep the number they were called with. Waiting patients get
+ * the next numbers after the last one issued, in exactly the order Next will
+ * call them — derived from `patientsAhead`, so the call number, Next and the
+ * ETA can never disagree. Priority or a late return ahead can move a
+ * projected number by one; the token never moves. Null when finished with.
+ */
+export function projectedCallNumber(
+  entries: QueueEntry[],
+  appointmentId: string,
+  lastCallNumber: number,
+  ctx: QueueContext = DEFAULT_CONTEXT,
+): number | null {
+  const self = entries.find((entry) => entry.appointmentId === appointmentId);
+  if (!self || isTerminal(self.status)) return null;
+  if (isServing(self)) return self.callNumber ?? null;
+  const ahead = patientsAhead(entries, appointmentId, ctx);
+  if (ahead === null) return null;
+  const serving = entries.filter((entry) => isActive(entry.status) && isServing(entry)).length;
+  return lastCallNumber + (ahead - serving) + 1;
 }
 
 /** 1-based place among waiting priority patients ("Priority #2"), or null. */
@@ -329,11 +345,9 @@ export const currentlyServing = (entries: QueueEntry[]): QueueEntry | null =>
 
 /**
  * One-click "Next" for reception: finish whoever is with the doctor and call
- * the next eligible patient. Returns the transitions to persist, so the caller
- * can write them and their queue events in a single database transaction.
- *
- * Nobody is marked arrived here. If no one present is waiting, the result has
- * no `call` transition and the caller says so.
+ * the next waiting patient (priority first, then the queue order). Returns the
+ * transitions to persist, so the caller can write them and their queue events
+ * in a single database transaction.
  */
 export function callNext(entries: QueueEntry[]): QueueTransition[] {
   const transitions: QueueTransition[] = [];

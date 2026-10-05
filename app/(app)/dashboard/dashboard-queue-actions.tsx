@@ -20,7 +20,6 @@ import type { QueueAction } from '@/lib/domain/types';
 import {
   addWalkInDynamic,
   advanceQueueDynamic,
-  markArrivedDynamic,
   pauseAppointmentDynamic,
   queueActionDynamic,
   releaseReservedDynamic,
@@ -367,11 +366,7 @@ export function CallNextButton({
       if (gate && !(await gate.run())) return;
       playChime();
       const res = await advanceQueueDynamic({ doctorId });
-      if (res.ok && res.noArrivedPatient) {
-        // Nobody present is waiting. Booked patients who have not arrived are
-        // never called, and pressing Next does not count as them arriving.
-        toast.info('No arrived patients are currently available.', 'Patients appear here once they check in.');
-      } else if (res.ok) {
+      if (res.ok) {
         toast.success('Queue Advanced', res.called ? 'Next patient called successfully.' : 'Consultation completed.');
       } else {
         toast.error('Failed to call next patient', res.error);
@@ -646,39 +641,6 @@ export function SessionControl({
     >
       <StethoscopeIcon className="size-3.5" />
       Start OPD
-    </Button>
-  );
-}
-
-/**
- * For the patient who reached the desk without tapping "I've Arrived". Shown
- * only on rows in the "not arrived yet" section; the normal desk flow is Next.
- */
-export function MarkArrivedButton({ doctorId, appointmentId }: { doctorId: string; appointmentId: string }) {
-  const toast = useToast();
-  const [isPending, startTransition] = useTransition();
-  return (
-    <Button
-      type="button"
-      size="sm"
-      isLoading={isPending}
-      onClick={() =>
-        startTransition(async () => {
-          const res = await markArrivedDynamic({ doctorId, appointmentId });
-          if (res.ok) {
-            toast.success(
-              'Marked arrived',
-              res.late ? 'Their turn had passed, so they join after the next patients present.' : undefined,
-            );
-          } else {
-            toast.error('Could not mark arrived', res.error);
-          }
-        })
-      }
-      className="inline-flex items-center gap-1 border border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100"
-    >
-      <CheckIcon className="size-3 text-emerald-700" />
-      {isPending ? 'Marking…' : 'Mark arrived'}
     </Button>
   );
 }

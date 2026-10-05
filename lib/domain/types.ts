@@ -48,12 +48,6 @@ export type QueueEntry = {
   /** Any value above 0 means "priority". Priority patients are seen FIFO by `prioritySeq`. */
   priority: number;
   enqueuedAt: Date;
-  /**
-   * When the patient was confirmed physically present: set on creation for a
-   * desk walk-in, by the patient's "I've Arrived", or by staff. Null means
-   * booked remotely and not yet here, so Next will not call them.
-   */
-  arrivedAt: Date | null;
   /** Order in which priority was assigned, per doctor-day. Null for legacy rows. */
   prioritySeq?: number | null;
   /** When the patient last left the waiting line by being called. Drives the late-return frontier. */
@@ -62,6 +56,13 @@ export type QueueEntry = {
   queueAfterToken?: number | null;
   /** FIFO among late returners placed behind the same token. */
   rejoinSeq?: number | null;
+  /**
+   * The serving sequence for the day: 1 for the first patient called, 2 for
+   * the next, whatever their tokens. Set when the patient is called. Shown to
+   * patients so that serving order reads as order, and a token served early
+   * never looks like it jumped the line.
+   */
+  callNumber?: number | null;
 };
 
 /**
