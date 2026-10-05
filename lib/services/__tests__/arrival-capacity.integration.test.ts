@@ -292,6 +292,40 @@ describe.skipIf(!enabled)('arrival, priority and capacity', () => {
       expect(next.tokenNumber).toBe(4);
     });
 
+    it('scheduled start passing does not release the reserve; walk-ins keep 1..W until Start OPD', async () => {
+      await scheduleStartingAt('00:01'); // long past, as in a late or forgotten Start OPD
+      await saveDoctorCapacity({
+        hospitalId,
+        doctorId,
+        config: { dailyQuota: 70, walkInReserved: 20, onlineOpensMinutesBefore: 120, walkInReleaseMinutes: 0 },
+      });
+      const first = await book('walk_in');
+      expect(first.tokenNumber).toBe(1);
+      expect(first.appointment.quotaPool).toBe('reserved');
+      expect((await getDayCapacity({ hospitalId, doctorId, timezone: TZ }))!.released).toBe(false);
+
+      await startSession({ hospitalId, doctorId, timezone: TZ });
+      expect((await getDayCapacity({ hospitalId, doctorId, timezone: TZ }))!.released).toBe(true);
+      expect((await book('walk_in')).tokenNumber).toBe(21);
+    });
+
+    it('Start OPD releases unused reserved walk-in places to online, without handing out reserved numbers', async () => {
+      await configure(3, 2);
+      await book('walk_in'); // 1 (reserved)
+      await book('whatsapp'); // 3 (shared)
+      await expect(book('whatsapp')).rejects.toMatchObject({ code: 'FULLY_BOOKED' });
+
+      await startSession({ hospitalId, doctorId, timezone: TZ });
+      const next = await book('whatsapp');
+      expect(next.tokenNumber).toBe(4);
+      expect(next.appointment.quotaPool).toBe('shared');
+
+      const [audit] = await withTenant(hospitalId, (tx) =>
+        tx.select({ metadata: auditLogs.metadata }).from(auditLogs).where(eq(auditLogs.action, 'opd.session.started')),
+      );
+      expect(audit.metadata).toMatchObject({ reserved_unused_released: 1 });
+    });
+
     it('extra tokens only once the quota is reached, continuing the sequence and audited', async () => {
       await configure(2, 1);
       await book('walk_in'); // 1

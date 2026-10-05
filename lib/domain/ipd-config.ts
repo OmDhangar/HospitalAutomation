@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { tidy, type ParseResult } from './medicine';
 import { parsePercentToBasisPoints, parseRupeesToPaise } from './patient-billing';
+import { formatRupees } from './billing';
 
 /**
  * Ward, bed and charge-item set-up rules. Pure: no database.
@@ -326,4 +327,33 @@ export function parsePriceEdits(
     edits.push({ id, sellingPricePaise: paise });
   }
   return { ok: true, value: edits };
+}
+
+/**
+ * "Syringe 5 ml ₹12, Cannula ₹45 and 3 more" — what a bulk price save just
+ * did, for the confirmation shown beside its button. `labels` maps id to the
+ * name the form showed; edits without a label are counted, not named.
+ */
+export function describeSavedPrices(
+  edits: PriceEdit[],
+  labels: ReadonlyMap<string, string>,
+  limit = 5,
+): string {
+  if (edits.length === 0) return '';
+  const named = edits
+    .filter((edit) => labels.has(edit.id))
+    .slice(0, limit)
+    .map((edit) => `${labels.get(edit.id)} ${formatRupees(edit.sellingPricePaise)}`);
+  const rest = edits.length - named.length;
+  const list = named.join(', ') + (rest > 0 ? `${named.length ? ' and ' : ''}${rest} more` : '');
+  return `Saved ${edits.length} price${edits.length === 1 ? '' : 's'}: ${list}`;
+}
+
+/** Reads the `label:<id>` hidden inputs a bulk price form sends with each box. */
+export function priceLabelsFrom(entries: Iterable<[string, string]>): Map<string, string> {
+  const labels = new Map<string, string>();
+  for (const [key, value] of entries) {
+    if (key.startsWith('label:')) labels.set(key.slice('label:'.length), value.slice(0, 60));
+  }
+  return labels;
 }

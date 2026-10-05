@@ -6,7 +6,9 @@ import { requireWritableSession } from '@/lib/auth/session';
 import {
   isChargeItemKind,
   parseChargeItemCsv,
+  describeSavedPrices,
   parsePriceEdits,
+  priceLabelsFrom,
 } from '@/lib/domain/ipd-config';
 import { parsePercentToBasisPoints, parseRupeesToPaise } from '@/lib/domain/patient-billing';
 import { can, type Permission } from '@/lib/domain/permissions';
@@ -101,7 +103,8 @@ export async function updateWardAction(form: FormData) {
       actorUserId: session.userId,
     }),
   );
-  back(WARDS_PAGE, { saved: 'Ward saved' });
+  // `id` lets the page mark this ward's form saved, beside its button.
+  back(WARDS_PAGE, { saved: 'Ward saved', id: text(form, 'wardId') });
 }
 
 export async function toggleWardAction(form: FormData) {
@@ -137,6 +140,7 @@ export async function addBedsAction(form: FormData) {
         ? `Added ${added} beds. ${skipped} already existed.`
         : `Added ${added} bed${added === 1 ? '' : 's'}`,
     ...(bedIds.length > 0 ? { undo: formatUndoToken('beds', bedIds.join(',')) } : {}),
+    id: `beds:${text(form, 'wardId')}`,
   });
 }
 
@@ -215,6 +219,9 @@ export async function updateChargeItemAction(form: FormData) {
           ? `Saved, and ${billed} entr${billed === 1 ? 'y' : 'ies'} waiting for this price ${billed === 1 ? 'is' : 'are'} now billed.`
           : 'Saved. Bills already issued keep their old price.',
       undo: formatUndoToken('prices', batch),
+      id: text(form, 'chargeItemId'),
+      // A row has a price form and a details form; mark the one used.
+      form: text(form, '_form') || 'price',
     },
     form,
   );
@@ -301,6 +308,12 @@ export async function setChargeItemPricesAction(form: FormData) {
           ? 'No prices changed.'
           : `${changed} price${changed === 1 ? '' : 's'} saved${billed > 0 ? `, and ${billed} waiting entries billed` : ''}.`,
       ...(changed > 0 ? { undo: formatUndoToken('prices', batch) } : {}),
+      // Shown in the sticky bar by the Save button: priced items leave this
+      // list, so without it they look like they simply vanished.
+      savedList: describeSavedPrices(
+        (edits as { ok: true; value: { id: string; sellingPricePaise: number }[] }).value,
+        priceLabelsFrom([...form.entries()].map(([key, value]) => [key, String(value)] as [string, string])),
+      ),
     },
     form,
   );

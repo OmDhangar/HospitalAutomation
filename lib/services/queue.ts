@@ -39,7 +39,7 @@ import { isMockPhone } from '@/lib/domain/phone';
 import { formatTimeIn, serviceDateIn } from '@/lib/domain/time';
 import type { AppointmentStatus, QueueAction, QueueContext, QueueEntry } from '@/lib/domain/types';
 import { generatePublicToken } from '@/lib/security/tokens';
-import { allocateTokenInTx } from './capacity';
+import { allocateTokenInTx, getDayCapacityInTx } from './capacity';
 import { lockDoctorDay } from './doctor-day';
 import { resolveScheduledStartInTx } from './scheduling';
 
@@ -1178,6 +1178,15 @@ export async function startSession(args: {
       };
     }
 
+    // Unused reserved walk-in places join the shared pool from this moment
+    // (derived from session_started_at); recorded here so the audit says so.
+    const capacityBefore = await getDayCapacityInTx(tx, {
+      doctorId: args.doctorId,
+      serviceDate,
+      timezone: args.timezone,
+      now,
+    });
+
     await tx
       .update(doctorDayStates)
       .set({ sessionStartedAt: now, updatedAt: now })
@@ -1196,6 +1205,7 @@ export async function startSession(args: {
         scheduled_start_at: scheduledStartAt?.toISOString() ?? null,
         started_at: now.toISOString(),
         delay_minutes: delayMinutes,
+        reserved_unused_released: capacityBefore?.reservedUnused ?? 0,
       },
     });
 

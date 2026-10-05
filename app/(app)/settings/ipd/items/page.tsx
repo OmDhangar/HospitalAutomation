@@ -1,3 +1,4 @@
+import { SaveButton, SaveForm, SavedSummary } from '@/components/save-form';
 import { SavedNotice } from '@/components/saved-notice';
 import Link from 'next/link';
 import { Alert, Button, Card, CardHeader, EmptyState, Field, Input, cn } from '@/components/ui';
@@ -193,7 +194,13 @@ export default async function IpdItemsPage({ searchParams }: PageProps<'/setting
         </div>
 
         {pricing ? (
-          <SetPricesForm rows={rows.slice(0, PRICE_PAGE_SIZE)} q={q} kind={kind} more={rows.length > PRICE_PAGE_SIZE} />
+          <SetPricesForm
+            rows={rows.slice(0, PRICE_PAGE_SIZE)}
+            q={q}
+            kind={kind}
+            more={rows.length > PRICE_PAGE_SIZE}
+            savedList={typeof params.savedList === 'string' ? params.savedList : null}
+          />
         ) : rows.length === 0 ? (
           <EmptyState
             title={q ? 'No items match' : filter === 'unpriced' ? 'Every item has a price' : 'Nothing here'}
@@ -202,7 +209,14 @@ export default async function IpdItemsPage({ searchParams }: PageProps<'/setting
         ) : (
           <ul className="divide-y divide-ink-200">
             {rows.map((row) => (
-              <ItemRow key={row.id} row={row} q={q} filter={filter} kind={kind} />
+              <ItemRow
+                key={row.id}
+                row={row}
+                q={q}
+                filter={filter}
+                kind={kind}
+                savedForm={params.id === row.id && typeof params.form === 'string' ? params.form : null}
+              />
             ))}
           </ul>
         )}
@@ -294,17 +308,25 @@ function SetPricesForm({
   q,
   kind,
   more,
+  savedList,
 }: {
   rows: ChargeItemRow[];
   q: string;
   kind: ChargeItemKind | null;
   more: boolean;
+  /** What the last Save priced: those items have left this list. */
+  savedList: string | null;
 }) {
   if (rows.length === 0) {
-    return <EmptyState title="Every item has a price" hint="New items added at the bedside will appear here." />;
+    return (
+      <div className="space-y-2 p-4 sm:p-5">
+        <SavedSummary text={savedList} />
+        <EmptyState title="Every item has a price" hint="New items added at the bedside will appear here." />
+      </div>
+    );
   }
   return (
-    <form action={setChargeItemPricesAction}>
+    <SaveForm action={setChargeItemPricesAction}>
       <input type="hidden" name="_mode" value="prices" />
       <input type="hidden" name="_q" value={q} />
       <input type="hidden" name="_kind" value={kind ?? ''} />
@@ -312,7 +334,9 @@ function SetPricesForm({
         {rows.map((row) => (
           <li key={row.id} className="flex items-center justify-between gap-3 px-4 py-2.5 sm:px-5">
             <label htmlFor={`price-${row.id}`} className="min-w-0">
-              <span className="block truncate font-medium text-ink-900">{row.name}</span>
+              <span id={`label-${row.id}`} className="block truncate font-medium text-ink-900">{row.name}</span>
+              {/* Lets the confirmation name what was priced. */}
+              <input type="hidden" name={`label:${row.id}`} value={row.name} />
               <span className="text-xs text-ink-500">
                 {row.isTest ? 'Test' : CHARGE_ITEM_KIND_LABELS[row.kind]} · per {row.unit}
               </span>
@@ -322,6 +346,7 @@ function SetPricesForm({
               <Input
                 id={`price-${row.id}`}
                 name={`price:${row.id}`}
+                aria-describedby={`label-${row.id}`}
                 inputMode="decimal"
                 placeholder="0.00"
                 className="numeric h-12 w-28 text-right"
@@ -331,14 +356,21 @@ function SetPricesForm({
         ))}
       </ul>
       <div className="sticky bottom-0 flex flex-col gap-2 border-t border-ink-200 bg-white px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between sm:px-5">
-        <p className="text-xs text-ink-500">
-          Blank boxes are skipped.{more ? ` Showing the first ${PRICE_PAGE_SIZE}; save to see the rest.` : ''}
-        </p>
-        <Button type="submit" variant="primary" size="lg" className="w-full sm:w-auto">
-          Save prices
-        </Button>
+        <div className="space-y-1">
+          <SavedSummary text={savedList} />
+          <p className="text-xs text-ink-500">
+            Blank boxes are skipped.{more ? ` Showing the first ${PRICE_PAGE_SIZE}; save to see the rest.` : ''}
+          </p>
+        </div>
+        <SaveButton
+          label="Save prices"
+          countNoun="price"
+          size="lg"
+          variant="primary"
+          className="w-full sm:w-auto"
+        />
       </div>
-    </form>
+    </SaveForm>
   );
 }
 
@@ -347,11 +379,14 @@ function ItemRow({
   q,
   filter,
   kind,
+  savedForm,
 }: {
   row: ChargeItemRow;
   q: string;
   filter: ChargeItemFilter;
   kind: ChargeItemKind | null;
+  /** Which of this row's forms just saved ('price' or 'details'), if any. */
+  savedForm: string | null;
 }) {
   const price = row.sellingPricePaise === null ? '' : (row.sellingPricePaise / 100).toFixed(2);
   const tax = row.taxRateBp ? String(row.taxRateBp / 100) : '';
@@ -384,8 +419,13 @@ function ItemRow({
 
         <div className="flex flex-wrap items-center gap-2">
           {row.active ? (
-            <form action={updateChargeItemAction} className="flex items-center gap-2">
+            <SaveForm
+              action={updateChargeItemAction}
+              justSaved={savedForm === 'price'}
+              className="flex items-center gap-2"
+            >
               {keep}
+              <input type="hidden" name="_form" value="price" />
               <input type="hidden" name="name" value={row.name} />
               <input type="hidden" name="kind" value={row.kind} />
               <input type="hidden" name="unit" value={row.unit} />
@@ -400,10 +440,8 @@ function ItemRow({
                 placeholder="Price"
                 className="w-24 py-1.5"
               />
-              <Button type="submit" size="sm" variant="secondary">
-                Save
-              </Button>
-            </form>
+              <SaveButton label="Save" />
+            </SaveForm>
           ) : null}
           <form action={toggleChargeItemAction}>
             {keep}
@@ -416,10 +454,15 @@ function ItemRow({
       </div>
 
       {row.active ? (
-        <details className="text-sm">
+        <details className="text-sm" open={savedForm === 'details'}>
           <summary className="cursor-pointer text-xs text-ink-500 hover:text-ink-800">Edit details</summary>
-          <form action={updateChargeItemAction} className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-5">
+          <SaveForm
+            action={updateChargeItemAction}
+            justSaved={savedForm === 'details'}
+            className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-5"
+          >
             {keep}
+            <input type="hidden" name="_form" value="details" />
             <div className="col-span-2">
               <Field label="Name">
                 <Input name="name" required defaultValue={row.name} />
@@ -446,9 +489,9 @@ function ItemRow({
               Lab or imaging test
             </label>
             <div className="col-span-2">
-              <Button type="submit">Save details</Button>
+              <SaveButton label="Save details" size="md" />
             </div>
-          </form>
+          </SaveForm>
         </details>
       ) : null}
     </li>

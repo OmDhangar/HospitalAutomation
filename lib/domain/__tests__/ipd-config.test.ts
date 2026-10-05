@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  describeSavedPrices,
+  priceLabelsFrom,
   CHARGE_ITEM_KINDS,
   MAX_BEDS_PER_RANGE,
   compareBedLabels,
@@ -211,5 +213,32 @@ describe('STARTER_CHARGE_ITEMS', () => {
       expect(STARTER_CHARGE_ITEMS.some((item) => item.kind === kind)).toBe(true);
     }
     expect(STARTER_CHARGE_ITEMS.filter((item) => item.isTest).length).toBeGreaterThanOrEqual(10);
+  });
+});
+
+describe('describeSavedPrices', () => {
+  const id = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
+  it('names what was priced, beside the button that priced it', () => {
+    const labels = new Map([[id(1), 'Syringe 5 ml'], [id(2), 'Cannula']]);
+    expect(
+      describeSavedPrices(
+        [
+          { id: id(1), sellingPricePaise: 1200 },
+          { id: id(2), sellingPricePaise: 4500 },
+        ],
+        labels,
+      ),
+    ).toBe('Saved 2 prices: Syringe 5 ml ₹12.00, Cannula ₹45.00');
+  });
+
+  it('caps the list and counts the rest', () => {
+    const edits = [1, 2, 3].map((n) => ({ id: id(n), sellingPricePaise: n * 100 }));
+    const labels = new Map(edits.map((e, i) => [e.id, `Item ${i + 1}`]));
+    expect(describeSavedPrices(edits, labels, 2)).toBe('Saved 3 prices: Item 1 ₹1.00, Item 2 ₹2.00 and 1 more');
+    expect(describeSavedPrices([], labels)).toBe('');
+  });
+
+  it('reads labels from the form', () => {
+    expect(priceLabelsFrom([['label:a', 'Gauze'], ['price:a', '5']]).get('a')).toBe('Gauze');
   });
 });

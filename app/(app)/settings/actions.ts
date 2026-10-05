@@ -93,16 +93,18 @@ export async function setConsultationFeeAction(formData: FormData) {
   const pricePaise = parseRupeesToPaise(String(formData.get('fee') ?? ''));
   if (pricePaise === null) redirect('/settings?error=fee');
 
+  const doctorId = String(formData.get('doctorId') ?? '');
   await setDoctorConsultationFee({
     hospitalId: session.hospitalId,
-    doctorId: String(formData.get('doctorId') ?? ''),
+    doctorId,
     pricePaise,
     actorUserId: session.userId,
   });
 
   revalidatePath('/settings');
   revalidatePath('/dashboard');
-  redirect('/settings?saved=fee');
+  // The id tells the page which doctor's form to mark saved.
+  redirect(`/settings?saved=fee&id=${encodeURIComponent(doctorId)}`);
 }
 
 /**
@@ -112,19 +114,21 @@ export async function setConsultationFeeAction(formData: FormData) {
 export async function linkDoctorAccountAction(formData: FormData) {
   const session = await authorize();
   const userId = String(formData.get('userId') ?? '') || null;
+  const doctorId = String(formData.get('doctorId') ?? '');
   try {
     await setDoctorUser({
       hospitalId: session.hospitalId,
-      doctorId: String(formData.get('doctorId') ?? ''),
+      doctorId,
       userId,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Could not link that login';
     redirect(`/settings?error=link&message=${encodeURIComponent(message)}`);
   }
+  clearDoctorCache();
   revalidatePath('/settings');
   revalidatePath('/dashboard');
-  redirect('/settings?saved=link');
+  redirect(`/settings?saved=link&id=${encodeURIComponent(doctorId)}`);
 }
 
 export async function toggleDoctorAction(formData: FormData) {
@@ -242,7 +246,7 @@ export async function setDoctorCapacityAction(formData: FormData) {
   revalidatePath('/dashboard');
   redirect(
     result.abovePlan
-      ? `/settings?saved=capacity_above_plan&plan=${result.planDailyCapacity ?? ''}`
-      : '/settings?saved=capacity',
+      ? `/settings?saved=capacity_above_plan&plan=${result.planDailyCapacity ?? ''}&id=${encodeURIComponent(doctorId)}`
+      : `/settings?saved=capacity&id=${encodeURIComponent(doctorId)}`,
   );
 }

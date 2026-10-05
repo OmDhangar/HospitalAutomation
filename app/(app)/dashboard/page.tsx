@@ -399,7 +399,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
               <Card>
                 <CardHeader
                   title="Waiting Queue"
-                  hint={`${waiting.length} patient${waiting.length === 1 ? '' : 's'} in line`}
+                  hint={waitingHint(waiting)}
                 />
                 {waiting.length === 0 ? (
                   <EmptyState
@@ -407,19 +407,13 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                     hint="New arrivals registered at reception will appear here instantly."
                   />
                 ) : (
-                  <ul className="divide-y divide-ink-200">
-                    {waiting.map((row, index) => (
-                      <WaitingRow
-                        key={row.appointmentId}
-                        row={row}
-                        position={index + 1}
-                        doctorId={selectedId!}
-                        now={now}
-                        timezone={session.timezone}
-                        payment={payment}
-                      />
-                    ))}
-                  </ul>
+                  <WaitingSections
+                    rows={waiting}
+                    doctorId={selectedId!}
+                    now={now}
+                    timezone={session.timezone}
+                    payment={payment}
+                  />
                 )}
               </Card>
             </div>
@@ -667,23 +661,17 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                 </Card>
 
                 <Card>
-                  <CardHeader title="Waiting" hint={`${waiting.length} in line`} />
+                  <CardHeader title="Waiting" hint={waitingHint(waiting)} />
                   {waiting.length === 0 ? (
                     <EmptyState title="Nobody is waiting" hint="Add a walk-in to start the queue." />
                   ) : (
-                    <ul className="divide-y divide-ink-200">
-                      {waiting.map((row, index) => (
-                        <WaitingRow
-                          key={row.appointmentId}
-                          row={row}
-                          position={index + 1}
-                          doctorId={selectedId!}
-                          now={now}
-                          timezone={session.timezone}
-                          payment={payment}
-                        />
-                      ))}
-                    </ul>
+                    <WaitingSections
+                      rows={waiting}
+                      doctorId={selectedId!}
+                      now={now}
+                      timezone={session.timezone}
+                      payment={payment}
+                    />
                   )}
                 </Card>
               </>
@@ -889,7 +877,11 @@ function WaitingRow({
             <RowPaidToggle row={row} payment={payment} />
           </div>
           <p className="text-xs text-ink-500 mt-0.5 flex flex-wrap items-center gap-1">
-            <span>#{position} in line · waiting {waitedFor(row.enqueuedAt, now)}</span>
+            <span>
+              {row.arrivedAt
+                ? `#${position} in line · waiting ${waitedFor(row.enqueuedAt, now)}`
+                : `Booked ${waitedFor(row.enqueuedAt, now)} ago · not here yet`}
+            </span>
             {row.etaAt && row.arrivedAt ? (
               <span>· expected ~{formatTimeIn(timezone, row.etaAt)}</span>
             ) : null}
@@ -905,18 +897,16 @@ function WaitingRow({
             {row.quotaPool === 'extra' ? (
               <span className="font-semibold text-amber-700">· extra token</span>
             ) : null}
-            {!row.arrivedAt ? (
-              /* Booked remotely and not here: Next passes over them until they arrive. */
-              <span className="inline-flex items-center gap-0.5 rounded bg-ink-100 px-1.5 py-0.5 font-semibold text-ink-600">
-                Not arrived
-                <MarkArrivedButton doctorId={doctorId} appointmentId={row.appointmentId} />
-              </span>
-            ) : null}
+
           </p>
         </div>
       </div>
 
       <div className="flex items-center gap-1.5 self-end sm:self-auto shrink-0 pt-1 sm:pt-0">
+        {!row.arrivedAt ? (
+          /* Booked remotely: Next passes over them until they are marked here. */
+          <MarkArrivedButton doctorId={doctorId} appointmentId={row.appointmentId} />
+        ) : null}
         {row.priority === 0 ? (
           <PriorityButton doctorId={doctorId} appointmentId={row.appointmentId} />
         ) : null}
@@ -1102,7 +1092,7 @@ function CapacityStrip({
           <span>
             Reserved walk-in{' '}
             <span className="numeric">{capacity.reservedActive}/{capacity.walkInReserved}</span>
-            {capacity.released ? ' (released)' : ''}
+            {capacity.released ? ' (unused released to online)' : ''}
           </span>
         ) : null}
         <span>
@@ -1129,5 +1119,86 @@ function CapacityStrip({
         <ReleaseReservedButton doctorId={doctorId} count={capacity.reservedUnused} />
       ) : null}
     </div>
+  );
+}
+
+/** "3 arrived · 2 not here yet", or the plain count when everyone is here. */
+function waitingHint(rows: QueueRow[]): string {
+  const arrived = rows.filter((row) => row.arrivedAt).length;
+  const away = rows.length - arrived;
+  if (away === 0) return `${rows.length} patient${rows.length === 1 ? '' : 's'} in line`;
+  return `${arrived} arrived · ${away} not here yet`;
+}
+
+/**
+ * The waiting line, split by whether the patient is physically here.
+ *
+ * Arrived: walk-ins added at the desk, and bookings that checked in. These are
+ * the people Next calls, in the order shown. Not here yet: WhatsApp and web
+ * bookings that have not checked in; Next passes over them, keeping their
+ * token. When one reaches the desk, "Mark arrived" moves them up — before or
+ * after Start OPD.
+ */
+function WaitingSections({
+  rows,
+  doctorId,
+  now,
+  timezone,
+  payment,
+}: {
+  rows: QueueRow[];
+  doctorId: string;
+  now: Date;
+  timezone: string;
+  payment: PaymentPillContext;
+}) {
+  const arrived = rows.filter((row) => row.arrivedAt);
+  const away = rows.filter((row) => !row.arrivedAt);
+  const section = (title: string, hint: string) => (
+    <li className="bg-ink-50 px-4 py-2 sm:px-5">
+      <p className="text-xs font-bold uppercase tracking-wide text-ink-700">{title}</p>
+      <p className="text-xs text-ink-500">{hint}</p>
+    </li>
+  );
+
+  return (
+    <ul className="divide-y divide-ink-200">
+      {section(
+        `Arrived at the hospital (${arrived.length})`,
+        arrived.length > 0
+          ? 'Next calls from this list, in this order.'
+          : 'Nobody here yet. Add walk-ins, or mark a booking arrived when they reach the desk.',
+      )}
+      {arrived.map((row, index) => (
+        <WaitingRow
+          key={row.appointmentId}
+          row={row}
+          position={index + 1}
+          doctorId={doctorId}
+          now={now}
+          timezone={timezone}
+          payment={payment}
+        />
+      ))}
+      {away.length > 0 ? (
+        <>
+          {section(
+            `Booked, not arrived yet (${away.length})`,
+            'Online and WhatsApp bookings. They keep their token; tap Mark arrived when they reach the desk.',
+          )}
+          {away.map((row) => (
+            <WaitingRow
+              key={row.appointmentId}
+              row={row}
+              position={0}
+              doctorId={doctorId}
+              now={now}
+              timezone={timezone}
+              payment={payment}
+            />
+          ))}
+        </>
+      ) : null}
+    </ul>
   );
 }
