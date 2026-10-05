@@ -1,9 +1,10 @@
 import { and, eq, lt, lte, sql } from 'drizzle-orm';
 import { getAdminDb } from '@/lib/db/admin';
-import { appointments, queueEvents, rateLimitEvents } from '@/lib/db/schema';
+import { appointments, hospitals, queueEvents, rateLimitEvents } from '@/lib/db/schema';
 import type { AppointmentStatus } from '@/lib/domain/types';
 import { postBedDayCharges } from './bed-days';
 import { expireStalePaymentLinks } from './payments';
+import { resumeAppointment } from './queue';
 import { expireLapsedSubscriptions } from './subscriptions';
 
 /**
@@ -118,41 +119,37 @@ export async function markStaleAppointmentsNoShow(
 export async function resumePausedAppointments(now: Date = new Date()): Promise<number> {
   const db = getAdminDb();
 
-  const rows = await db
-    .update(appointments)
-    .set({
-      status: 'WAITING',
-      pausedAt: null,
-      resumeAt: null,
-      enqueuedAt: now,
-      updatedAt: now,
-    })
-    .where(
-      and(
-        eq(appointments.status, 'HELD'),
-        lte(appointments.resumeAt, now),
-      ),
-    )
-    .returning({
+  const due = await db
+    .select({
       id: appointments.id,
       hospitalId: appointments.hospitalId,
       doctorId: appointments.doctorId,
-    });
+      timezone: hospitals.timezone,
+    })
+    .from(appointments)
+    .innerJoin(hospitals, eq(hospitals.id, appointments.hospitalId))
+    .where(and(eq(appointments.status, 'HELD'), lte(appointments.resumeAt, now)));
 
-  for (const row of rows) {
-    await db.insert(queueEvents).values({
+  /**
+   * One at a time through the same resume the desk uses, so a timed return
+   * gets the same treatment as a manual one: the doctor-day lock, and the
+   * late-return placement if their turn passed while they were away.
+   */
+  let resumed = 0;
+  for (const row of due) {
+    const result = await resumeAppointment({
       hospitalId: row.hospitalId,
       appointmentId: row.id,
       doctorId: row.doctorId,
-      action: 'resume',
-      fromStatus: 'HELD',
-      toStatus: 'WAITING',
+      timezone: row.timezone,
       actorUserId: null,
-      metadata: { reason: 'scheduled_auto_resume', swept_at: now.toISOString() },
+      reason: 'scheduled_auto_resume',
+      now,
     });
+    if (result.outcome === 'resumed') resumed += 1;
   }
 
-  return rows.length;
+  return resumed;
 }
 
 export type SweepResult = {

@@ -194,6 +194,8 @@ export const hospitals = pgTable('hospitals', {
    * P&L — so this one message a month is the cheapest churn insurance there is.
    */
   ownerPhoneE164: text('owner_phone_e164'),
+  /** How many present patients a late returner is placed behind (0034). */
+  lateRejoinAfterPatients: smallint('late_rejoin_after_patients').notNull().default(2),
   active: boolean('active').notNull().default(true),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
@@ -425,6 +427,17 @@ export const doctors = pgTable(
     specialty: text('specialty'),
     /** Seeds the ETA before enough real consultations have been observed. */
     defaultConsultMinutes: smallint('default_consult_minutes').notNull().default(10),
+    /**
+     * Daily token quota (0034). Null: no quota, tokens issue exactly as before.
+     * A workload target set by the hospital, not a plan limit.
+     */
+    dailyTokenQuota: integer('daily_token_quota'),
+    /** Tokens 1..N kept for patients who physically reach the hospital early. */
+    walkInReserved: integer('walk_in_reserved').notNull().default(0),
+    /** Same-day online queue booking opens this long before the scheduled start. */
+    onlineOpensMinutesBefore: integer('online_opens_minutes_before').notNull().default(120),
+    /** Unused reserved capacity goes to the shared pool this long after the start; null = manual only. */
+    walkInReleaseMinutes: integer('walk_in_release_minutes'),
     active: boolean('active').notNull().default(true),
     createdAt: createdAt(),
   },
@@ -591,6 +604,18 @@ export const appointments = pgTable(
     calledAt: timestamp('called_at', { withTimezone: true }),
     consultStartedAt: timestamp('consult_started_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
+    /**
+     * When the patient was confirmed physically present (0034). Null for a
+     * remote booking that has not checked in; Next passes over them.
+     */
+    arrivedAt: timestamp('arrived_at', { withTimezone: true }),
+    /** FIFO order in which priority was given, per doctor-day. */
+    prioritySeq: integer('priority_seq'),
+    /** Late-return marker: served right after this token's place in line. */
+    queueAfterToken: integer('queue_after_token'),
+    rejoinSeq: integer('rejoin_seq'),
+    /** Capacity pool that issued the token; null when no quota applied. */
+    quotaPool: text('quota_pool').$type<'reserved' | 'shared' | 'extra'>(),
     /** When the doctor paused this appointment. Null unless status is HELD. */
     pausedAt: timestamp('paused_at', { withTimezone: true }),
     /** Earliest time the scheduled resume job should fire. Null unless status is HELD. */
@@ -611,6 +636,9 @@ export const appointments = pgTable(
     index('appointments_queue_idx').on(t.doctorId, t.serviceDate, t.status),
     index('appointments_hospital_date_idx').on(t.hospitalId, t.serviceDate),
     index('appointments_patient_status_idx').on(t.patientId, t.status),
+    uniqueIndex('appointments_priority_seq_key')
+      .on(t.doctorId, t.serviceDate, t.prioritySeq)
+      .where(sql`priority_seq is not null`),
   ],
 );
 
@@ -671,6 +699,19 @@ export const doctorDayStates = pgTable(
     scheduledStartAt: timestamp('scheduled_start_at', { withTimezone: true }),
     sessionStartedAt: timestamp('session_started_at', { withTimezone: true }),
     lastTokenNumber: integer('last_token_number').notNull().default(0),
+    /** Counter for priority_seq and rejoin_seq (0034). */
+    lastQueueSeq: integer('last_queue_seq').notNull().default(0),
+    /**
+     * Quota snapshot, copied from the doctor when the day's first token is
+     * issued. Null token_quota means the day runs without a quota.
+     */
+    tokenQuota: integer('token_quota'),
+    walkInReserved: integer('walk_in_reserved'),
+    walkInReleaseMinutes: integer('walk_in_release_minutes'),
+    onlineOpensMinutesBefore: integer('online_opens_minutes_before'),
+    lastReservedToken: integer('last_reserved_token').notNull().default(0),
+    /** Owner released unused reserved walk-in capacity to the shared pool. */
+    reservedReleasedAt: timestamp('reserved_released_at', { withTimezone: true }),
     updatedAt: updatedAt(),
   },
   (t) => [uniqueIndex('doctor_day_states_key').on(t.doctorId, t.serviceDate)],

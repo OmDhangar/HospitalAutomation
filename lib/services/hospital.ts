@@ -21,6 +21,11 @@ export type DoctorListItem = {
   defaultConsultMinutes: number;
   mode: DoctorScheduleMode;
   active: boolean;
+  /** Daily token quota; null when the doctor runs without one. */
+  dailyTokenQuota: number | null;
+  walkInReserved: number;
+  onlineOpensMinutesBefore: number;
+  walkInReleaseMinutes: number | null;
 };
 
 // In-memory cache for doctor lists per hospital (60s TTL)
@@ -59,6 +64,10 @@ export async function listDoctorsInTx(
     default_consult_minutes: number;
     active: boolean;
     mode: DoctorScheduleMode;
+    daily_token_quota: number | null;
+    walk_in_reserved: number;
+    online_opens_minutes_before: number;
+    walk_in_release_minutes: number | null;
   }>(sql`
     select 
       d.id,
@@ -69,6 +78,10 @@ export async function listDoctorsInTx(
       d.user_id,
       d.default_consult_minutes,
       d.active,
+      d.daily_token_quota,
+      d.walk_in_reserved,
+      d.online_opens_minutes_before,
+      d.walk_in_release_minutes,
       coalesce(
         dds.mode,
         ds.mode,
@@ -101,6 +114,10 @@ export async function listDoctorsInTx(
     defaultConsultMinutes: r.default_consult_minutes,
     active: r.active,
     mode: r.mode ?? 'queue',
+    dailyTokenQuota: r.daily_token_quota,
+    walkInReserved: r.walk_in_reserved ?? 0,
+    onlineOpensMinutesBefore: r.online_opens_minutes_before ?? 120,
+    walkInReleaseMinutes: r.walk_in_release_minutes,
   }));
 }
 

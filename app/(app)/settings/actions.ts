@@ -13,7 +13,14 @@ import {
 import { parseRupeesToPaise } from '@/lib/domain/patient-billing';
 import { can, isStaffRole } from '@/lib/domain/permissions';
 import { checkCanAdd } from '@/lib/services/entitlements';
-import { createBranch, createDoctor, setDoctorActive, setDoctorUser } from '@/lib/services/hospital';
+import { saveDoctorCapacity } from '@/lib/services/capacity';
+import {
+  clearDoctorCache,
+  createBranch,
+  createDoctor,
+  setDoctorActive,
+  setDoctorUser,
+} from '@/lib/services/hospital';
 import { setDoctorConsultationFee } from '@/lib/services/patient-billing';
 
 async function authorize() {
@@ -186,4 +193,56 @@ export async function toggleStaffAction(formData: FormData) {
 
   revalidatePath('/settings');
   redirect('/settings');
+}
+
+/** A blank field means "not set"; anything else must be a whole number. */
+const optionalInt = (value: FormDataEntryValue | null): number | null | 'invalid' => {
+  const text = String(value ?? '').trim();
+  if (text === '') return null;
+  const n = Number(text);
+  return Number.isInteger(n) ? n : 'invalid';
+};
+
+/**
+ * A doctor's daily token quota and walk-in reservation. Takes effect from the
+ * next day that has not issued a token; today's queue keeps its numbers.
+ * A quota above the plan is allowed while hospitals are on trial — it is
+ * flagged, not refused.
+ */
+export async function setDoctorCapacityAction(formData: FormData) {
+  const session = await authorize();
+  const doctorId = String(formData.get('doctorId') ?? '');
+
+  const quota = optionalInt(formData.get('dailyQuota'));
+  const reserved = optionalInt(formData.get('walkInReserved'));
+  const opens = optionalInt(formData.get('onlineOpensMinutesBefore'));
+  const release = optionalInt(formData.get('walkInReleaseMinutes'));
+  if ([quota, reserved, opens, release].includes('invalid')) {
+    redirect(`/settings?error=capacity&message=${encodeURIComponent('Use whole numbers only.')}`);
+  }
+
+  const result = await saveDoctorCapacity({
+    hospitalId: session.hospitalId,
+    doctorId,
+    actorUserId: session.userId,
+    config: {
+      dailyQuota: quota as number | null,
+      walkInReserved: (reserved as number | null) ?? 0,
+      onlineOpensMinutesBefore: (opens as number | null) ?? 120,
+      walkInReleaseMinutes: release as number | null,
+    },
+  });
+
+  if (!result.ok) {
+    redirect(`/settings?error=capacity&message=${encodeURIComponent(result.errors.join(' '))}`);
+  }
+
+  clearDoctorCache();
+  revalidatePath('/settings');
+  revalidatePath('/dashboard');
+  redirect(
+    result.abovePlan
+      ? `/settings?saved=capacity_above_plan&plan=${result.planDailyCapacity ?? ''}`
+      : '/settings?saved=capacity',
+  );
 }

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { cancelByPublicToken, resumeByPublicToken } from '@/lib/services/queue';
+import { arriveByPublicToken, cancelByPublicToken, resumeByPublicToken } from '@/lib/services/queue';
 import { consumeToken } from '@/lib/security/rate-limit';
 
 /**
@@ -80,6 +80,40 @@ export async function resumeAppointment(formData: FormData) {
         ? 'done'
         : result.outcome === 'not_paused'
           ? 'not_paused'
+          : 'error'
+    }${suffix}`,
+  );
+}
+
+/**
+ * "I've Arrived": the patient confirming they are at the hospital, which is
+ * what makes a remote booking callable. Same credential and throttle as
+ * cancel and resume. Idempotent — a second tap changes nothing.
+ */
+export async function arriveAppointment(formData: FormData) {
+  const token = String(formData.get('token') ?? '').trim();
+  const lang = String(formData.get('lang') ?? '').trim();
+  const suffix = lang ? `&lang=${encodeURIComponent(lang)}` : '';
+
+  if (!token) redirect('/');
+
+  const limit = consumeToken({
+    key: `q:arrive:${token}`,
+    capacity: 5,
+    windowMs: 60_000,
+  });
+  if (!limit.allowed) redirect(`/q/${token}?arrive=busy${suffix}`);
+
+  const result = await arriveByPublicToken({ publicToken: token });
+
+  revalidatePath(`/q/${token}`);
+
+  redirect(
+    `/q/${token}?arrive=${
+      result.outcome === 'arrived' || result.outcome === 'already_arrived'
+        ? 'done'
+        : result.outcome === 'not_today'
+          ? 'not_today'
           : 'error'
     }${suffix}`,
   );

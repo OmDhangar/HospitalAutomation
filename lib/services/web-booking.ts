@@ -4,7 +4,6 @@ import { getAdminDb } from '@/lib/db/admin';
 import {
   appointments,
   branches,
-  doctorDayStates,
   doctors,
   hospitals,
   notificationOutbox,
@@ -16,6 +15,8 @@ import { formatDoctorName } from '@/lib/domain/booking';
 import { formatTimeIn, serviceDateIn } from '@/lib/domain/time';
 import type { Locale } from '@/lib/i18n/patient';
 import { getProvider } from '@/lib/notify/provider';
+import { allocateTokenInTx, CapacityError } from './capacity';
+import { lockDoctorDay } from './doctor-day';
 import { getDoctorSlotsForDate } from './scheduling';
 import { getPlanAccess } from './subscriptions';
 
@@ -49,7 +50,12 @@ export type DoctorBookingDetails = {
 /** A booking refused for a reason the patient can be told. */
 export class BookingError extends Error {
   constructor(
-    readonly code: 'INVALID_SLOT' | 'SLOT_UNAVAILABLE' | 'TOO_FAR_AHEAD' | 'NOT_TAKING_BOOKINGS',
+    readonly code:
+      | 'INVALID_SLOT'
+      | 'SLOT_UNAVAILABLE'
+      | 'TOO_FAR_AHEAD'
+      | 'NOT_TAKING_BOOKINGS'
+      | 'FULLY_BOOKED',
     message: string,
   ) {
     super(message);
@@ -300,21 +306,7 @@ export async function bookScheduledSlot(args: {
      * which left the first bookings of a day unserialised — two of them could
      * share a token number, or a slot.
      */
-    await tx
-      .insert(doctorDayStates)
-      .values({ hospitalId: args.hospitalId, doctorId: doctor.id, serviceDate })
-      .onConflictDoNothing();
-
-    const [day] = await tx
-      .select()
-      .from(doctorDayStates)
-      .where(
-        and(
-          eq(doctorDayStates.doctorId, doctor.id),
-          eq(doctorDayStates.serviceDate, serviceDate),
-        ),
-      )
-      .for('update');
+    await lockDoctorDay(tx, { hospitalId: args.hospitalId, doctorId: doctor.id, serviceDate });
 
     // Re-checked under the lock: two people can pick the same free slot in
     // the same second, and the check above ran before either was booked.
@@ -336,11 +328,26 @@ export async function bookScheduledSlot(args: {
       );
     }
 
-    const tokenNumber = day.lastTokenNumber + 1;
-    await tx
-      .update(doctorDayStates)
-      .set({ lastTokenNumber: tokenNumber, updatedAt: now })
-      .where(eq(doctorDayStates.id, day.id));
+    /**
+     * The day's quota applies to slot bookings too: they come out of the
+     * shared pool. They are not held to the same-day opening window — a slot
+     * booked days ahead already says when the patient will come.
+     */
+    let allocated;
+    try {
+      allocated = await allocateTokenInTx(tx, {
+        hospitalId: args.hospitalId,
+        doctorId: doctor.id,
+        serviceDate,
+        timezone,
+        channel: 'online_slot',
+        now,
+      });
+    } catch (err) {
+      if (err instanceof CapacityError) throw new BookingError('FULLY_BOOKED', err.message);
+      throw err;
+    }
+    const tokenNumber = allocated.tokenNumber;
 
     const publicToken = generatePublicToken();
     const publicTokenExpiresAt = new Date(slotDate.getTime() + 24 * 60 * 60 * 1000);
@@ -356,6 +363,9 @@ export async function bookScheduledSlot(args: {
         tokenNumber,
         status: 'WAITING',
         source: 'whatsapp',
+        quotaPool: allocated.pool,
+        // Booked from home: callable only once they check in on arrival.
+        arrivedAt: null,
         publicToken,
         publicTokenExpiresAt,
         scheduledSlotAt: slotDate,

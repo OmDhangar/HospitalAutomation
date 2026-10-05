@@ -30,6 +30,7 @@ import {
   addStaffAction,
   linkDoctorAccountAction,
   setConsultationFeeAction,
+  setDoctorCapacityAction,
   toggleDoctorAction,
   toggleStaffAction,
 } from './actions';
@@ -124,6 +125,23 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
       ) : null}
       {params.saved === 'link' ? (
         <Alert tone="success">Doctor login updated.</Alert>
+      ) : null}
+      {params.error === 'capacity' ? (
+        <Alert tone="error">
+          {typeof params.message === 'string' ? params.message : 'Could not save the token quota.'}
+        </Alert>
+      ) : null}
+      {params.saved === 'capacity' ? (
+        <Alert tone="success">
+          Token quota saved. It applies from the next day that has not issued a token; today keeps its numbers.
+        </Alert>
+      ) : null}
+      {params.saved === 'capacity_above_plan' ? (
+        <Alert tone="warn">
+          Token quota saved. It is above your plan&apos;s{' '}
+          {typeof params.plan === 'string' && params.plan ? `${params.plan} ` : ''}patients per day, which is
+          allowed during your trial.
+        </Alert>
       ) : null}
       {params.saved === 'fee' ? (
         <Alert tone="success">Consultation fee saved. Bills already issued keep their old amount.</Alert>
@@ -358,6 +376,69 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                     <Button type="submit" size="sm" variant="secondary">
                       Save fee
                     </Button>
+                  </form>
+
+                  {/*
+                    Daily token quota. Tokens 1..reserved are kept for patients who
+                    reach the hospital early; the rest are shared by online
+                    bookings and further walk-ins. Blank quota = no limit.
+                  */}
+                  <form action={setDoctorCapacityAction} className="space-y-2">
+                    <input type="hidden" name="doctorId" value={doctor.id} />
+                    <div className="flex flex-wrap items-end gap-2">
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-medium text-ink-600">Daily token quota</span>
+                        <Input
+                          name="dailyQuota"
+                          type="number"
+                          min={1}
+                          defaultValue={doctor.dailyTokenQuota ?? ''}
+                          placeholder="No limit"
+                          className="w-28 py-1.5"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-medium text-ink-600">Reserved for walk-ins</span>
+                        <Input
+                          name="walkInReserved"
+                          type="number"
+                          min={0}
+                          defaultValue={doctor.walkInReserved}
+                          className="w-28 py-1.5"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-medium text-ink-600">Online opens (min before start)</span>
+                        <Input
+                          name="onlineOpensMinutesBefore"
+                          type="number"
+                          min={0}
+                          max={720}
+                          defaultValue={doctor.onlineOpensMinutesBefore}
+                          className="w-28 py-1.5"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-medium text-ink-600">Release unused walk-ins (min after start)</span>
+                        <Input
+                          name="walkInReleaseMinutes"
+                          type="number"
+                          min={0}
+                          max={720}
+                          defaultValue={doctor.walkInReleaseMinutes ?? ''}
+                          placeholder="Manual"
+                          className="w-28 py-1.5"
+                        />
+                      </label>
+                      <Button type="submit" size="sm" variant="secondary">
+                        Save quota
+                      </Button>
+                    </div>
+                    <p className="text-xs text-ink-500">
+                      Tokens 1–{doctor.walkInReserved || 'N'} are kept for walk-ins who arrive early; online
+                      bookings and further walk-ins share the rest. Once the quota is full, only the owner can
+                      issue an extra token.
+                    </p>
                   </form>
 
                   {/*

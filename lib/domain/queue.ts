@@ -1,6 +1,7 @@
 import type {
   AppointmentStatus,
   QueueAction,
+  QueueContext,
   QueueEntry,
   QueueTransition,
 } from './types';
@@ -142,42 +143,197 @@ export function applyAction(
   return to;
 }
 
-/** Active entries in the order they will actually be seen. */
-export function orderQueue(entries: QueueEntry[]): QueueEntry[] {
-  return entries
-    .filter((entry) => isActive(entry.status))
-    .sort(
-      (a, b) =>
-        STATUS_WEIGHT[a.status]! - STATUS_WEIGHT[b.status]! ||
-        b.priority - a.priority ||
-        a.enqueuedAt.getTime() - b.enqueuedAt.getTime() ||
-        a.tokenNumber - b.tokenNumber,
+/* ------------------------------------------------------------ ordering */
+
+/**
+ * Default for `QueueContext.lateRejoinAfter`, matching the hospitals column
+ * default. A late returner is seen after the next two patients who are here.
+ */
+export const DEFAULT_LATE_REJOIN_AFTER = 2;
+
+const DEFAULT_CONTEXT: QueueContext = { lateRejoinAfter: DEFAULT_LATE_REJOIN_AFTER };
+
+const isPriority = (entry: QueueEntry): boolean => entry.priority > 0;
+
+/**
+ * Whether Next may call this patient right now.
+ *
+ * Waiting is not enough: a WhatsApp or web booking is WAITING from the moment
+ * it is made, wherever the patient happens to be. Only someone confirmed
+ * present — a desk walk-in, an "I've Arrived" tap, or staff marking them — is
+ * callable. Held, skipped and terminal patients are never eligible.
+ */
+export const isEligible = (entry: QueueEntry): boolean =>
+  entry.status === 'WAITING' && entry.arrivedAt !== null;
+
+const isServing = (entry: QueueEntry): boolean =>
+  entry.status === 'CALLED' || entry.status === 'IN_CONSULTATION';
+
+/**
+ * Where a normal (non-priority) patient sits in line.
+ *
+ * Their own token, unless they came back after their turn had passed: then
+ * just behind the token recorded in `queueAfterToken`. The half step puts them
+ * after that token and before the next whole one, without rewriting any row.
+ */
+const normalKey = (entry: QueueEntry): number =>
+  entry.queueAfterToken != null ? entry.queueAfterToken + 0.5 : entry.tokenNumber;
+
+const NO_SEQ = Number.MAX_SAFE_INTEGER;
+
+/**
+ * The single comparator for the serving order. Next and the ETA both use it.
+ *
+ * 1. Whoever is with the doctor (in consultation, then called).
+ * 2. Priority patients, first-come first-served by when priority was given.
+ *    A newly prioritised patient never overtakes an earlier one. Legacy rows
+ *    without a sequence fall back to enqueue time, after the sequenced ones.
+ * 3. Everyone else by token — the token is a stable place in line, so an early
+ *    arrival with a later token waits for earlier tokens who are present, but
+ *    not for those who are not (that part is eligibility, not order).
+ */
+function compare(a: QueueEntry, b: QueueEntry): number {
+  const weight = STATUS_WEIGHT[a.status]! - STATUS_WEIGHT[b.status]!;
+  if (weight !== 0) return weight;
+
+  const aPriority = isPriority(a);
+  const bPriority = isPriority(b);
+  if (aPriority !== bPriority) return aPriority ? -1 : 1;
+
+  if (aPriority) {
+    return (
+      (a.prioritySeq ?? NO_SEQ) - (b.prioritySeq ?? NO_SEQ) ||
+      a.enqueuedAt.getTime() - b.enqueuedAt.getTime() ||
+      a.tokenNumber - b.tokenNumber
     );
+  }
+
+  return (
+    normalKey(a) - normalKey(b) ||
+    (a.rejoinSeq ?? 0) - (b.rejoinSeq ?? 0) ||
+    a.tokenNumber - b.tokenNumber
+  );
 }
 
 /**
- * How many patients are genuinely ahead of this one right now.
- * Returns null when the appointment is not in the active queue.
+ * Active entries in the order they will be seen, arrived or not.
+ *
+ * Patients who have not arrived keep their place in this order; Next simply
+ * passes over them (see `isEligible`) without changing anything about them.
+ */
+export function orderQueue(entries: QueueEntry[]): QueueEntry[] {
+  return entries.filter((entry) => isActive(entry.status)).sort(compare);
+}
+
+/**
+ * The late-return frontier: the highest token among normal patients who have
+ * been called today. A patient below it has had their turn pass them by.
+ *
+ * Priority patients are excluded — calling a priority token 90 early does not
+ * mean tokens 41 to 89 have been passed.
+ */
+export function lateFrontier(entries: QueueEntry[]): number {
+  return entries.reduce(
+    (max, entry) =>
+      entry.calledAt && !isPriority(entry) ? Math.max(max, entry.tokenNumber) : max,
+    0,
+  );
+}
+
+/** Whether this patient, on becoming eligible again, came back after their turn passed. */
+export const isLateReturn = (entries: QueueEntry[], entry: QueueEntry): boolean =>
+  entry.tokenNumber < lateFrontier(entries);
+
+/**
+ * Where a late returner goes: behind the next N eligible normal patients.
+ *
+ * Returns the `queueAfterToken` marker to store, or null for "their own token
+ * position" — used when N is 0, or when nobody is eligible (they are next
+ * either way). With fewer than N eligible they go behind the last of them.
+ *
+ * The marker is the anchor's own sort key, so placing behind someone who is
+ * themselves a late returner still lands after them (the larger `rejoinSeq`
+ * breaks the tie).
+ */
+export function lateReturnAnchor(
+  entries: QueueEntry[],
+  selfId: string,
+  ctx: QueueContext = DEFAULT_CONTEXT,
+): number | null {
+  if (ctx.lateRejoinAfter <= 0) return null;
+  const line = orderQueue(entries).filter(
+    (entry) => entry.appointmentId !== selfId && isEligible(entry) && !isPriority(entry),
+  );
+  if (line.length === 0) return null;
+  const anchor = line[Math.min(ctx.lateRejoinAfter, line.length) - 1];
+  return anchor.queueAfterToken ?? anchor.tokenNumber;
+}
+
+/** The patient Next would call now, or null if nobody present is waiting. */
+export const nextEligible = (entries: QueueEntry[]): QueueEntry | null =>
+  orderQueue(entries).find(isEligible) ?? null;
+
+/**
+ * How many patients will be seen before this one — the ETA's "ahead".
+ *
+ * Counted on the exact order Next uses: serving patients plus eligible
+ * patients sorted before them. Absent patients are not counted; they are
+ * passed over by Next, so they are not workload ahead.
+ *
+ * For a patient who is not currently callable (not arrived, held, skipped)
+ * this is a projection: the place they would take if they checked in now,
+ * including the late-return placement a check-in would give them. Returns
+ * null for a patient who is finished with (terminal) or not found.
  */
 export function patientsAhead(
   entries: QueueEntry[],
   appointmentId: string,
+  ctx: QueueContext = DEFAULT_CONTEXT,
 ): number | null {
-  const index = orderQueue(entries).findIndex(
-    (entry) => entry.appointmentId === appointmentId,
+  const self = entries.find((entry) => entry.appointmentId === appointmentId);
+  if (!self || isTerminal(self.status)) return null;
+
+  let projected = entries;
+  if (!isServing(self) && !isEligible(self)) {
+    const late = isLateReturn(entries, self);
+    const asPresent: QueueEntry = {
+      ...self,
+      status: 'WAITING',
+      arrivedAt: self.arrivedAt ?? new Date(0),
+      ...(late
+        ? { queueAfterToken: lateReturnAnchor(entries, self.appointmentId, ctx), rejoinSeq: NO_SEQ }
+        : {}),
+    };
+    projected = entries.map((entry) => (entry === self ? asPresent : entry));
+  }
+
+  let ahead = 0;
+  for (const entry of orderQueue(projected)) {
+    if (entry.appointmentId === appointmentId) return ahead;
+    if (isServing(entry) || isEligible(entry)) ahead += 1;
+  }
+  return null;
+}
+
+/** 1-based place among waiting priority patients ("Priority #2"), or null. */
+export function priorityRank(entries: QueueEntry[], appointmentId: string): number | null {
+  const line = orderQueue(entries).filter(
+    (entry) => entry.status === 'WAITING' && isPriority(entry),
   );
-  return index === -1 ? null : index;
+  const index = line.findIndex((entry) => entry.appointmentId === appointmentId);
+  return index === -1 ? null : index + 1;
 }
 
 export const currentlyServing = (entries: QueueEntry[]): QueueEntry | null =>
-  orderQueue(entries).find(
-    (entry) => entry.status === 'CALLED' || entry.status === 'IN_CONSULTATION',
-  ) ?? null;
+  orderQueue(entries).find(isServing) ?? null;
 
 /**
  * One-click "Next" for reception: finish whoever is with the doctor and call
- * the next waiting patient. Returns the transitions to persist, so the caller
+ * the next eligible patient. Returns the transitions to persist, so the caller
  * can write them and their queue events in a single database transaction.
+ *
+ * Nobody is marked arrived here. If no one present is waiting, the result has
+ * no `call` transition and the caller says so.
  */
 export function callNext(entries: QueueEntry[]): QueueTransition[] {
   const transitions: QueueTransition[] = [];
@@ -192,7 +348,7 @@ export function callNext(entries: QueueEntry[]): QueueTransition[] {
     });
   }
 
-  const next = orderQueue(entries).find((entry) => entry.status === 'WAITING');
+  const next = nextEligible(entries);
   if (next) {
     transitions.push({
       appointmentId: next.appointmentId,

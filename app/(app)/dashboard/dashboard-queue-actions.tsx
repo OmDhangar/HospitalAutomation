@@ -20,10 +20,13 @@ import type { QueueAction } from '@/lib/domain/types';
 import {
   addWalkInDynamic,
   advanceQueueDynamic,
+  markArrivedDynamic,
   pauseAppointmentDynamic,
   queueActionDynamic,
+  releaseReservedDynamic,
   resumeAppointmentDynamic,
   setPriorityDynamic,
+  startSessionDynamic,
   togglePauseDynamic,
 } from './actions';
 
@@ -98,6 +101,8 @@ export function AddWalkInForm({
   doctorName,
   canCollect,
   feeKnown,
+  quotaReached = false,
+  canIssueExtra = false,
 }: {
   doctorId: string;
   branchId: string;
@@ -106,6 +111,10 @@ export function AddWalkInForm({
   canCollect: boolean;
   /** Without a consultation fee there is nothing to charge, so Paid is disabled. */
   feeKnown: boolean;
+  /** Today's token quota is full; only an EXTRA token can be issued. */
+  quotaReached?: boolean;
+  /** The owner may issue an EXTRA token once the quota is full. */
+  canIssueExtra?: boolean;
 }) {
   const toast = useToast();
   const nameRef = React.useRef<HTMLInputElement>(null);
@@ -117,6 +126,10 @@ export function AddWalkInForm({
   const [paid, setPaid] = useState(false);
   const [whatsappOptIn, setWhatsappOptIn] = useState(true);
   const [isPending, startTransition] = useTransition();
+  // Set when the server says the quota is full, as well as from the page.
+  const [full, setFull] = useState(quotaReached);
+  const [extra, setExtra] = useState(false);
+  const offerExtra = (full || quotaReached) && canIssueExtra;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -141,6 +154,7 @@ export function AddWalkInForm({
         address,
         whatsappOptIn,
         paid: canCollect && feeKnown && paid,
+        extraToken: offerExtra && extra,
       });
 
       if (res.ok) {
@@ -154,9 +168,11 @@ export function AddWalkInForm({
         setPhone('');
         setAddress('');
         setPaid(false);
+        setExtra(false);
         // Ready for the next person in line without reaching for the mouse.
         nameRef.current?.focus();
       } else {
+        if (res.quotaReached) setFull(true);
         toast.error('Could not add patient', res.error);
       }
     });
@@ -277,6 +293,31 @@ export function AddWalkInForm({
         </span>
       </label>
 
+      {full || quotaReached ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <p className="font-semibold">Today&apos;s token quota for {doctorName} is full.</p>
+          {offerExtra ? (
+            <label className="mt-2 flex items-start gap-2.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={extra}
+                onChange={(e) => setExtra(e.target.checked)}
+                className="mt-0.5 size-4 rounded border-amber-300 text-amber-600 focus:ring-amber-600"
+              />
+              <span>
+                Issue an extra token
+                <span className="mt-0.5 block text-xs text-amber-800">
+                  For an emergency or a patient who must be seen today. It continues the token
+                  sequence; no existing token changes. Recorded in the audit log.
+                </span>
+              </span>
+            </label>
+          ) : (
+            <p className="mt-1 text-xs">Only the owner can issue an extra token.</p>
+          )}
+        </div>
+      ) : null}
+
       <Button
         type="submit"
         variant="primary"
@@ -285,7 +326,7 @@ export function AddWalkInForm({
         isLoading={isPending}
       >
         <UserPlusIcon className="size-4 mr-1.5" />
-        {isPending ? 'Adding Walk-in...' : 'Add to queue'}
+        {isPending ? 'Adding Walk-in...' : offerExtra && extra ? 'Issue extra token' : 'Add to queue'}
       </Button>
     </form>
   );
@@ -313,8 +354,12 @@ export function CallNextButton({
       if (gate && !(await gate.run())) return;
       playChime();
       const res = await advanceQueueDynamic({ doctorId });
-      if (res.ok) {
-        toast.success('Queue Advanced', 'Next patient called successfully.');
+      if (res.ok && res.noArrivedPatient) {
+        // Nobody present is waiting. Booked patients who have not arrived are
+        // never called, and pressing Next does not count as them arriving.
+        toast.info('No arrived patients are currently available.', 'Patients appear here once they check in.');
+      } else if (res.ok) {
+        toast.success('Queue Advanced', res.called ? 'Next patient called successfully.' : 'Consultation completed.');
       } else {
         toast.error('Failed to call next patient', res.error);
       }
@@ -538,6 +583,109 @@ export function TogglePauseButton({
     >
       <PauseIcon className="size-3.5 text-amber-600" />
       {paused ? 'End break' : 'Start break'}
+    </Button>
+  );
+}
+
+/**
+ * Start OPD until the doctor's session has begun, then the Break toggle.
+ *
+ * Start OPD is the only thing that records the session start: calling a
+ * patient early, or ending a break, never does.
+ */
+export function SessionControl({
+  doctorId,
+  started,
+  paused,
+}: {
+  doctorId: string;
+  started: boolean;
+  paused: boolean;
+}) {
+  const toast = useToast();
+  const [isPending, startTransition] = useTransition();
+
+  if (started) return <TogglePauseButton doctorId={doctorId} paused={paused} />;
+
+  const handleStart = () => {
+    startTransition(async () => {
+      const res = await startSessionDynamic({ doctorId });
+      if (res.ok) {
+        toast.success(
+          'OPD started',
+          res.delayMinutes ? `Started ${res.delayMinutes} min after the scheduled time.` : 'Patient estimates now follow the live queue.',
+        );
+      } else {
+        toast.error('Could not start OPD', res.error);
+      }
+    });
+  };
+
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="primary"
+      title="The doctor has begun seeing patients"
+      onClick={handleStart}
+      isLoading={isPending}
+      className="inline-flex items-center gap-1.5"
+    >
+      <StethoscopeIcon className="size-3.5" />
+      Start OPD
+    </Button>
+  );
+}
+
+/**
+ * For the patient who reached the desk without tapping "I've Arrived". Small
+ * and inline on purpose: the normal desk flow is just Next.
+ */
+export function MarkArrivedButton({ doctorId, appointmentId }: { doctorId: string; appointmentId: string }) {
+  const toast = useToast();
+  const [isPending, startTransition] = useTransition();
+  return (
+    <button
+      type="button"
+      disabled={isPending}
+      onClick={() =>
+        startTransition(async () => {
+          const res = await markArrivedDynamic({ doctorId, appointmentId });
+          if (res.ok) {
+            toast.success(
+              'Marked arrived',
+              res.late ? 'Their turn had passed, so they join after the next patients present.' : undefined,
+            );
+          } else {
+            toast.error('Could not mark arrived', res.error);
+          }
+        })
+      }
+      className="ml-1 font-semibold text-brand-700 underline underline-offset-2 hover:text-brand-900 disabled:opacity-50"
+    >
+      {isPending ? 'Marking…' : 'Mark arrived'}
+    </button>
+  );
+}
+
+/** Owner: hand unused reserved walk-in capacity to online bookings for today. */
+export function ReleaseReservedButton({ doctorId, count }: { doctorId: string; count: number }) {
+  const toast = useToast();
+  const [isPending, startTransition] = useTransition();
+  return (
+    <Button
+      type="button"
+      size="sm"
+      isLoading={isPending}
+      onClick={() =>
+        startTransition(async () => {
+          const res = await releaseReservedDynamic({ doctorId });
+          if (res.ok) toast.success('Released', `${count} unused walk-in place${count === 1 ? '' : 's'} opened to online booking.`);
+          else toast.error('Could not release', res.error);
+        })
+      }
+    >
+      Release {count} to online
     </Button>
   );
 }

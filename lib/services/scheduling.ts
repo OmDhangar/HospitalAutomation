@@ -1,13 +1,15 @@
 import { and, asc, eq, gte, lte, sql } from 'drizzle-orm';
-import { withTenant } from '@/lib/db';
+import { withTenant, type Tx } from '@/lib/db';
 import {
   appointments,
   doctorIntervalBlocks,
   doctors,
+  doctorScheduleExceptions,
   doctorSchedules,
   doctorSlotOverrides,
   hospitals,
 } from '@/lib/db/schema';
+import { zonedTimeToUtc } from '@/lib/domain/time';
 
 export type GeneratedSlot = {
   timeStr: string; // e.g. "10:00 AM"
@@ -529,4 +531,64 @@ export async function getDoctorSlotsForDate(args: {
       totalAvailable,
     };
   });
+}
+
+/**
+ * The doctor's scheduled start for one service date — the single answer to
+ * "when was OPD meant to begin?", used by the ETA and the online booking
+ * window.
+ *
+ * In order of authority: an explicit start on the doctor-day row, a one-off
+ * exception for that date, the weekly schedule for that weekday, then any
+ * weekly row (the settings screen writes the same hours to all seven). Null
+ * when the doctor has no schedule at all, or is closed that day — callers then
+ * behave as they did before start times existed.
+ */
+export async function resolveScheduledStartInTx(
+  tx: Tx,
+  args: {
+    doctorId: string;
+    serviceDate: string;
+    timezone: string;
+    dayOverride?: Date | null;
+  },
+): Promise<Date | null> {
+  if (args.dayOverride) return args.dayOverride;
+
+  const [exception] = await tx
+    .select({ closed: doctorScheduleExceptions.closed, startTime: doctorScheduleExceptions.startTime })
+    .from(doctorScheduleExceptions)
+    .where(
+      and(
+        eq(doctorScheduleExceptions.doctorId, args.doctorId),
+        eq(doctorScheduleExceptions.serviceDate, args.serviceDate),
+      ),
+    )
+    .limit(1);
+  if (exception?.closed) return null;
+  if (exception?.startTime) return zonedTimeToUtc(args.serviceDate, exception.startTime, args.timezone);
+
+  const weekday = new Date(`${args.serviceDate}T12:00:00Z`).getUTCDay();
+  const rows = await tx
+    .select({
+      weekday: doctorSchedules.weekday,
+      startTime: doctorSchedules.startTime,
+      effectiveFrom: doctorSchedules.effectiveFrom,
+      effectiveTo: doctorSchedules.effectiveTo,
+    })
+    .from(doctorSchedules)
+    .where(eq(doctorSchedules.doctorId, args.doctorId))
+    .orderBy(asc(doctorSchedules.createdAt));
+  if (rows.length === 0) return null;
+
+  const inEffect = rows.filter(
+    (row) =>
+      row.effectiveFrom <= args.serviceDate &&
+      (row.effectiveTo === null || row.effectiveTo >= args.serviceDate),
+  );
+  const chosen =
+    inEffect.find((row) => row.weekday === weekday) ??
+    rows.find((row) => row.weekday === weekday) ??
+    rows[0];
+  return zonedTimeToUtc(args.serviceDate, chosen.startTime, args.timezone);
 }

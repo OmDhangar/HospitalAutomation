@@ -20,11 +20,12 @@ import {
   type ConversationState,
 } from '@/lib/domain/booking';
 import { normalizeIndianPhone } from '@/lib/domain/phone';
-import { serviceDateIn } from '@/lib/domain/time';
+import { formatTimeIn, serviceDateIn } from '@/lib/domain/time';
 import { LOCALE_NAMES, LOCALES, t, type Locale } from '@/lib/i18n/patient';
 import { getProvider, type InteractiveButton, type ListRow } from '@/lib/notify/provider';
 import { listDoctors } from './hospital';
-import { createWalkIn, getQueueSnapshot } from './queue';
+import { CapacityError } from './capacity';
+import { createWalkIn, getPublicQueueView, getQueueSnapshot } from './queue';
 import { getPlanAccess } from './subscriptions';
 import { getDoctorSlotsForDate } from './scheduling';
 import { bookScheduledSlot, BookingError } from './web-booking';
@@ -223,7 +224,7 @@ const QUEUE_CONFIRMATION: Record<
 
 रांगेतील स्थिती पाहा: ${url}
 
-तुम्ही बाहेर थांबू शकता — तुमचा नंबर जवळ आल्यावर आम्ही कळवू.`,
+रुग्णालयात पोहोचल्यावर वरील लिंकवर "मी पोहोचलो" दाबा — त्यानंतरच तुम्हाला बोलावले जाईल. तुमचा नंबर जवळ आल्यावर आम्ही कळवू.`,
   hi: (token, doctor, patient, serving, wait, url) =>
     `आप ${formatDoctorName(doctor, 'hi')} की कतार में शामिल हो गए हैं।
 
@@ -234,7 +235,7 @@ const QUEUE_CONFIRMATION: Record<
 
 कतार स्थिति देखें: ${url}
 
-आप बाहर इंतज़ार कर सकते हैं — आपकी बारी पास आने पर हम सूचित करेंगे।`,
+अस्पताल पहुँचने पर ऊपर दिए लिंक पर "मैं पहुँच गया" दबाएँ — उसके बाद ही आपको बुलाया जाएगा। आपकी बारी पास आने पर हम सूचित करेंगे।`,
   en: (token, doctor, patient, serving, wait, url) =>
     `You're in the queue for ${formatDoctorName(doctor, 'en')}.
 
@@ -245,7 +246,23 @@ Estimated wait: ~${wait} min
 
 Track position: ${url}
 
-You don't need to wait inside — we'll message you when your token is close.`,
+When you reach the hospital, tap "I've Arrived" on the link above — you can be called only after that. We'll message you when your token is close.`,
+};
+
+/** Said instead of a token when the day's quota refuses an online queue booking. */
+const QUEUE_UNAVAILABLE: Record<Locale, (doctor: string, opensAt: string | null) => string> = {
+  mr: (doctor, opensAt) =>
+    opensAt
+      ? `${formatDoctorName(doctor, 'mr')} यांच्या आजच्या रांगेसाठी ऑनलाइन नोंदणी ${opensAt} वाजता सुरू होईल. कृपया तेव्हा पुन्हा संदेश पाठवा.`
+      : `${formatDoctorName(doctor, 'mr')} यांची आजची ऑनलाइन नोंदणी पूर्ण भरली आहे. कृपया रुग्णालयात संपर्क करा.`,
+  hi: (doctor, opensAt) =>
+    opensAt
+      ? `${formatDoctorName(doctor, 'hi')} की आज की कतार के लिए ऑनलाइन बुकिंग ${opensAt} बजे शुरू होगी। कृपया तब दोबारा संदेश भेजें।`
+      : `${formatDoctorName(doctor, 'hi')} की आज की ऑनलाइन बुकिंग पूरी भर चुकी है। कृपया अस्पताल से संपर्क करें।`,
+  en: (doctor, opensAt) =>
+    opensAt
+      ? `Online booking for ${formatDoctorName(doctor, 'en')}'s queue today opens at ${opensAt}. Please message us again then.`
+      : `${formatDoctorName(doctor, 'en')}'s queue is fully booked online for today. Please contact the hospital.`,
 };
 
 const SLOT_CONFIRMATION: Record<
@@ -882,32 +899,62 @@ export async function handleInboundMessage(
         FALLBACK_PATIENT_NAME;
       const pAge = step.patientAge ?? transition.context.patientAge;
 
-      const created = await createWalkIn({
-        hospitalId,
-        branchId: doctor.branchId,
-        doctorId: doctor.id,
-        timezone: 'Asia/Kolkata',
-        patient: {
-          phoneE164,
-          name: pName,
-          age: pAge,
-          locale,
-        },
-        source: 'whatsapp',
-        whatsappOptIn: true,
-        confirmationSentInChat: true,
-      });
+      let created: Awaited<ReturnType<typeof createWalkIn>>;
+      try {
+        created = await createWalkIn({
+          hospitalId,
+          branchId: doctor.branchId,
+          doctorId: doctor.id,
+          timezone: 'Asia/Kolkata',
+          patient: {
+            phoneE164,
+            name: pName,
+            age: pAge,
+            locale,
+          },
+          source: 'whatsapp',
+          whatsappOptIn: true,
+          confirmationSentInChat: true,
+        });
+      } catch (error) {
+        if (!(error instanceof CapacityError)) throw error;
+        // Not open yet, or full: say so in the chat (free), and issue nothing.
+        const opensAt = error.opensAt ? formatTimeIn('Asia/Kolkata', error.opensAt) : null;
+        const sent = await provider.sendText({
+          phoneNumberId: inbound.phoneNumberId,
+          toPhoneE164: phoneE164,
+          body: QUEUE_UNAVAILABLE[locale](doctor.name, opensAt),
+        });
+        await withTenant(hospitalId, (tx) =>
+          tx.insert(notificationOutbox).values({
+            hospitalId,
+            milestone: 'conversation:queue_unavailable',
+            templateCode: 'conversation',
+            locale,
+            payload: { doctorId: doctor.id, reason: error.code },
+            status: 'sent',
+            providerMessageId: sent.providerMessageId,
+            sentAt: new Date(),
+          }),
+        );
+        break;
+      }
 
       const snapshot = await getQueueSnapshot({
         hospitalId,
         doctorId: doctor.id,
         timezone: 'Asia/Kolkata',
       });
+      // The same "ahead" and estimate the patient's link shows, so the chat
+      // and the page never disagree.
+      const view = await getPublicQueueView(created.publicToken);
 
-      const currentServing = snapshot?.currentToken ?? 1;
-      const patientsAhead = Math.max(0, (snapshot?.waitingCount ?? 1) - 1);
+      const currentServing = snapshot?.currentToken ?? '-';
       const consultMin = snapshot?.medianConsultMinutes ?? doctor.defaultConsultMinutes;
-      const waitMinutes = Math.max(5, patientsAhead * consultMin);
+      const waitMinutes = Math.max(
+        5,
+        view?.eta?.waitMinutes ?? (view?.patientsAhead ?? 0) * consultMin,
+      );
 
       const baseUrl = process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000';
       const patientDisplay = pAge ? `${pName} (${pAge} yrs)` : pName;

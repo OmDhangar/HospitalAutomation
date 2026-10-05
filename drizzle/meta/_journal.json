@@ -239,6 +239,13 @@
       "when": 1789900000000,
       "tag": "0033_discharge_billing",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1789950000000,
+      "tag": "0034_queue_arrival_capacity",
+      "breakpoints": true
     }
   ]
 }

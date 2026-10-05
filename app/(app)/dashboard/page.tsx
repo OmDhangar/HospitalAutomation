@@ -35,6 +35,8 @@ import {
 import type { PaymentStatus } from '@/lib/domain/patient-billing';
 import { formatIndianPhone, isMockPhone } from '@/lib/domain/phone';
 import { formatTimeIn, minutesBetween } from '@/lib/domain/time';
+import type { DayCapacitySummary } from '@/lib/domain/capacity';
+import { getDayCapacity } from '@/lib/services/capacity';
 import { loadDashboardData } from '@/lib/services/dashboard-loader';
 import type { QueueRow } from '@/lib/services/queue';
 import {
@@ -52,8 +54,10 @@ import {
   PriorityButton,
   QueueActionButton,
   ReceptionDashboardLayout,
+  MarkArrivedButton,
+  ReleaseReservedButton,
   ResumePatientButton,
-  TogglePauseButton,
+  SessionControl,
   ViewModeToggle,
 } from './dashboard-queue-actions';
 
@@ -140,6 +144,18 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
   const waiting = snapshot?.rows.filter((row) => row.status === 'WAITING') ?? [];
   const scheduledToday = snapshot?.rows.filter((row) => Boolean(row.scheduledSlotAt)) ?? [];
   const seenToday = snapshot?.completed ?? [];
+
+  // The day's quota for this doctor; null when no quota is configured.
+  const capacity = await getDayCapacity({
+    hospitalId: session.hospitalId,
+    doctorId: currentDoctor.id,
+    timezone: session.timezone,
+    now,
+  });
+  const canManageCapacity = can(session.role, 'capacity.manage') && !session.readOnly;
+  const sessionStarted = Boolean(snapshot?.sessionStartedAt);
+  const notStartedButSeeing =
+    !sessionStarted && (Boolean(serving) || (snapshot?.completedCount ?? 0) > 0);
 
   // Shift to IPD (T1.4): the doctor's one click, and the badge that replaces it.
   const canShift = can(session.role, 'ipd.shift') && !session.readOnly;
@@ -231,8 +247,9 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                   Admitted <span className="numeric">({admittedCount})</span>
                 </Link>
               ) : null}
-              <TogglePauseButton
+              <SessionControl
                 doctorId={selectedId!}
+                started={sessionStarted}
                 paused={snapshot?.paused ?? false}
               />
               {canSwitchView ? (
@@ -255,6 +272,8 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
               the break is not counted in the current patient&apos;s consultation time.
             </Alert>
           ) : null}
+
+          <SessionNotice snapshot={snapshot} notStartedButSeeing={notStartedButSeeing} timezone={session.timezone} />
 
           {/* Main Grid: Left = Consultation & Waiting Queue, Right = Attention & Stats */}
           <div className="grid items-start gap-5 lg:grid-cols-3">
@@ -507,6 +526,17 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
             </Alert>
           ) : null}
 
+          <SessionNotice snapshot={snapshot} notStartedButSeeing={notStartedButSeeing} timezone={session.timezone} />
+
+          {capacity ? (
+            <CapacityStrip
+              capacity={capacity}
+              doctorId={selectedId ?? ''}
+              timezone={session.timezone}
+              canManage={canManageCapacity}
+            />
+          ) : null}
+
           {scheduledToday.length > 0 ? (
             <div className="rounded-xl border border-brand-200 bg-brand-50/70 p-3.5 text-xs text-brand-950 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
@@ -539,8 +569,9 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                     title="Now serving"
                     hint={snapshot?.doctorName}
                     action={
-                      <TogglePauseButton
+                      <SessionControl
                         doctorId={selectedId ?? ''}
+                        started={sessionStarted}
                         paused={snapshot?.paused ?? false}
                       />
                     }
@@ -661,11 +692,14 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
               <Card>
                 <CardHeader title="Add walk-in" hint="Issues a token and sends the queue link" />
                 <AddWalkInForm
+                  key={`${selectedId}-${capacity?.quotaReached ? 'full' : 'open'}`}
                   doctorId={selectedId ?? ''}
                   branchId={branchId}
                   doctorName={currentDoctor.name}
                   canCollect={canCollect}
                   feeKnown={consultationFeePaise !== null}
+                  quotaReached={capacity?.quotaReached ?? false}
+                  canIssueExtra={canManageCapacity}
                 />
               </Card>
             }
@@ -854,11 +888,28 @@ function WaitingRow({
             ) : null}
             <RowPaidToggle row={row} payment={payment} />
           </div>
-          <p className="text-xs text-ink-500 mt-0.5 flex items-center gap-1">
+          <p className="text-xs text-ink-500 mt-0.5 flex flex-wrap items-center gap-1">
             <span>#{position} in line · waiting {waitedFor(row.enqueuedAt, now)}</span>
+            {row.etaAt && row.arrivedAt ? (
+              <span>· expected ~{formatTimeIn(timezone, row.etaAt)}</span>
+            ) : null}
             {row.priority > 0 ? (
               <span className="inline-flex items-center gap-0.5 text-amber-700 font-semibold ml-1">
-                · <ZapIcon className="size-3 text-amber-600 inline" /> priority
+                · <ZapIcon className="size-3 text-amber-600 inline" /> Priority
+                {row.priorityRank ? ` #${row.priorityRank}` : ''}
+              </span>
+            ) : null}
+            {row.queueAfterToken != null && row.priority === 0 ? (
+              <span className="text-ink-600">· returned late, after token {row.queueAfterToken}</span>
+            ) : null}
+            {row.quotaPool === 'extra' ? (
+              <span className="font-semibold text-amber-700">· extra token</span>
+            ) : null}
+            {!row.arrivedAt ? (
+              /* Booked remotely and not here: Next passes over them until they arrive. */
+              <span className="inline-flex items-center gap-0.5 rounded bg-ink-100 px-1.5 py-0.5 font-semibold text-ink-600">
+                Not arrived
+                <MarkArrivedButton doctorId={doctorId} appointmentId={row.appointmentId} />
               </span>
             ) : null}
           </p>
@@ -987,5 +1038,96 @@ function DoctorSeenTodayCard({ rows, ipd }: { rows: QueueRow[]; ipd: IpdRowConte
         ))}
       </ul>
     </Card>
+  );
+}
+
+/**
+ * Start OPD reminders. The ETA patients see depends on it, so the desk is
+ * told when the day looks started but is not.
+ */
+function SessionNotice({
+  snapshot,
+  notStartedButSeeing,
+  timezone,
+}: {
+  snapshot: { sessionStartedAt: Date | null; scheduledStartAt: Date | null; etaState: string; delayMinutes: number } | null;
+  notStartedButSeeing: boolean;
+  timezone: string;
+}) {
+  if (!snapshot || snapshot.sessionStartedAt) return null;
+  if (notStartedButSeeing) {
+    return (
+      <Alert tone="info">
+        Patients are being seen but OPD has not been started. Tap <strong>Start OPD</strong> so
+        patients&apos; expected times follow the live queue.
+      </Alert>
+    );
+  }
+  if (snapshot.etaState === 'not_started' && snapshot.scheduledStartAt) {
+    return (
+      <Alert tone="warn">
+        OPD was scheduled to start at {formatTimeIn(timezone, snapshot.scheduledStartAt)} (
+        {snapshot.delayMinutes} min ago). Patients see &quot;Doctor has not started OPD yet&quot; until
+        you tap <strong>Start OPD</strong>.
+      </Alert>
+    );
+  }
+  return null;
+}
+
+/**
+ * Today's token quota at a glance: reserved walk-ins, the shared pool, extra
+ * tokens, and when online booking opens. Refreshes with the dashboard.
+ */
+function CapacityStrip({
+  capacity,
+  doctorId,
+  timezone,
+  canManage,
+}: {
+  capacity: DayCapacitySummary;
+  doctorId: string;
+  timezone: string;
+  canManage: boolean;
+}) {
+  const sharedTotal = capacity.quota - capacity.walkInReserved;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-ink-200 bg-white px-4 py-3 text-sm text-ink-700">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <span>
+          <strong className="text-ink-900">Quota</strong>{' '}
+          <span className="numeric">{capacity.totalActive}/{capacity.quota}</span>
+        </span>
+        {capacity.walkInReserved > 0 ? (
+          <span>
+            Reserved walk-in{' '}
+            <span className="numeric">{capacity.reservedActive}/{capacity.walkInReserved}</span>
+            {capacity.released ? ' (released)' : ''}
+          </span>
+        ) : null}
+        <span>
+          Shared <span className="numeric">{capacity.sharedActive}/{capacity.released ? capacity.sharedCap : sharedTotal}</span>
+        </span>
+        {capacity.extraActive > 0 ? (
+          <span className="font-semibold text-amber-700">
+            Extra <span className="numeric">{capacity.extraActive}</span>
+          </span>
+        ) : null}
+        {capacity.onlineOpensAt ? (
+          <span className="text-ink-500">Online opens {formatTimeIn(timezone, capacity.onlineOpensAt)}</span>
+        ) : null}
+        {capacity.quotaReached ? (
+          <span className="font-semibold text-rose-700">Quota full</span>
+        ) : capacity.onlineBlockedByReserve ? (
+          <span className="font-semibold text-amber-700">
+            Online full — {capacity.reservedUnused} reserved walk-in place
+            {capacity.reservedUnused === 1 ? '' : 's'} unused
+          </span>
+        ) : null}
+      </div>
+      {canManage && !capacity.released && capacity.reservedUnused > 0 ? (
+        <ReleaseReservedButton doctorId={doctorId} count={capacity.reservedUnused} />
+      ) : null}
+    </div>
   );
 }

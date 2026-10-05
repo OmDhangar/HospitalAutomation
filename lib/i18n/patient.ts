@@ -50,6 +50,15 @@ type Strings = {
   refresh: string;
   waiting: string;
   leaveHint: string;
+  /** Arrival check-in. The token never changes; only whether Next may call them. */
+  arriveAction: string;
+  arrivePrompt: string;
+  arriveDone: string;
+  arriveDoneHint: string;
+  arriveNotToday: string;
+  /** The doctor is past their scheduled start and OPD has not begun. */
+  notStarted: string;
+  notStartedHint: string;
   /** Appointment details and self-cancellation. */
   appointmentTime: string;
   cancelAction: string;
@@ -101,6 +110,13 @@ export const t: Record<Locale, Strings> = {
     refresh: 'पुन्हा तपासा',
     waiting: 'रांगेत',
     leaveHint: 'तुम्ही बाहेर थांबू शकता. वेळ जवळ आल्यावर आम्ही कळवू.',
+    arriveAction: 'मी रुग्णालयात पोहोचलो',
+    arrivePrompt: 'रुग्णालयात पोहोचल्यावर हे बटण दाबा. तुम्ही पोहोचल्याची नोंद झाल्यानंतरच तुम्हाला बोलावले जाईल. तुमचा टोकन क्रमांक बदलणार नाही.',
+    arriveDone: 'तुमच्या आगमनाची नोंद झाली',
+    arriveDoneHint: 'तुम्ही आता सक्रिय रांगेत आहात. तुमचा टोकन क्रमांक तोच आहे.',
+    arriveNotToday: 'आगमन नोंद फक्त भेटीच्या दिवशीच करता येते.',
+    notStarted: 'डॉक्टरांनी अजून OPD सुरू केलेली नाही',
+    notStartedHint: 'OPD सुरू होताच अपेक्षित वेळ दाखवली जाईल. तुमचा टोकन आणि रांगेतील जागा कायम आहे.',
     appointmentTime: 'अपॉइंटमेंटची वेळ',
     cancelAction: 'अपॉइंटमेंट रद्द करा',
     cancelPrompt: 'तुम्ही येऊ शकत नसाल, तर आत्ताच रद्द करा. ती वेळ दुसऱ्या रुग्णाला मिळेल.',
@@ -148,6 +164,13 @@ export const t: Record<Locale, Strings> = {
     refresh: 'दोबारा जाँचें',
     waiting: 'कतार में',
     leaveHint: 'आप बाहर इंतज़ार कर सकते हैं। समय पास आने पर हम बता देंगे।',
+    arriveAction: 'मैं अस्पताल पहुँच गया',
+    arrivePrompt: 'अस्पताल पहुँचने पर यह बटन दबाएँ। पहुँचने की पुष्टि के बाद ही आपको बुलाया जाएगा। आपका टोकन नंबर नहीं बदलेगा।',
+    arriveDone: 'आपके पहुँचने की पुष्टि हो गई',
+    arriveDoneHint: 'अब आप सक्रिय कतार में हैं। आपका टोकन नंबर वही है।',
+    arriveNotToday: 'पहुँचने की पुष्टि केवल अपॉइंटमेंट वाले दिन ही की जा सकती है।',
+    notStarted: 'डॉक्टर ने अभी OPD शुरू नहीं की है',
+    notStartedHint: 'OPD शुरू होते ही अनुमानित समय दिखाया जाएगा। आपका टोकन और कतार में जगह सुरक्षित है।',
     appointmentTime: 'अपॉइंटमेंट का समय',
     cancelAction: 'अपॉइंटमेंट रद्द करें',
     cancelPrompt: 'यदि आप नहीं आ पा रहे हैं, तो अभी रद्द कर दें। वह समय किसी और मरीज़ को मिल जाएगा।',
@@ -195,6 +218,13 @@ export const t: Record<Locale, Strings> = {
     refresh: 'Check again',
     waiting: 'In queue',
     leaveHint: 'You can wait outside. We will message you when your turn is close.',
+    arriveAction: "I've Arrived",
+    arrivePrompt: 'Tap this when you reach the hospital. You can be called only after your arrival is confirmed. Your token number stays the same.',
+    arriveDone: 'Arrival confirmed',
+    arriveDoneHint: 'You are now in the active queue. Your token number is unchanged.',
+    arriveNotToday: 'Arrival can only be confirmed on the day of your appointment.',
+    notStarted: 'The doctor has not started OPD yet',
+    notStartedHint: 'Your expected time will appear once OPD starts. Your token and place in line are kept.',
     appointmentTime: 'Appointment time',
     cancelAction: 'Cancel appointment',
     cancelPrompt:

@@ -20,14 +20,17 @@ import {
   setConsultationPaid,
 } from '@/lib/services/patient-billing';
 import { notifyQueueMovement } from '@/lib/services/display-events';
+import { CapacityError, releaseReservedWalkIns } from '@/lib/services/capacity';
 import {
   advanceQueue,
   applyQueueAction,
   createWalkIn,
+  markArrived,
   pauseAppointment,
   resumeAppointment,
   setDoctorPaused,
   setPriority,
+  startSession,
 } from '@/lib/services/queue';
 
 async function authorize() {
@@ -89,7 +92,9 @@ export async function addWalkInDynamic(args: {
   whatsappOptIn: boolean;
   /** Paid at the desk on arrival. Charges the doctor's consultation fee. */
   paid?: boolean;
-}): Promise<{ ok: boolean; tokenNumber?: number; error?: string; warning?: string }> {
+  /** Issue an EXTRA token past a full quota (owner only). */
+  extraToken?: boolean;
+}): Promise<{ ok: boolean; tokenNumber?: number; error?: string; warning?: string; quotaReached?: boolean }> {
   const tStart = performance.now();
   try {
     const t0 = performance.now();
@@ -111,6 +116,9 @@ export async function addWalkInDynamic(args: {
     if (args.paid && !can(session.role, 'billing.collect')) {
       return { ok: false, error: 'Only reception can take payment' };
     }
+    if (args.extraToken && !can(session.role, 'capacity.manage')) {
+      return { ok: false, error: 'Only the owner can issue an extra token' };
+    }
 
     const appt = await createWalkIn({
       hospitalId: session.hospitalId,
@@ -126,6 +134,7 @@ export async function addWalkInDynamic(args: {
       actorUserId: session.userId,
       source: 'walk_in',
       whatsappOptIn: args.whatsappOptIn,
+      extraToken: args.extraToken,
     });
     const tWalkIn = performance.now();
 
@@ -164,7 +173,12 @@ export async function addWalkInDynamic(args: {
 
     return { ok: true, tokenNumber: appt.tokenNumber, warning };
   } catch (err: unknown) {
-    return { ok: false, error: err instanceof Error ? err.message : 'Failed to add walk-in' };
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Failed to add walk-in',
+      // Lets the form offer the owner an extra token, and only then.
+      quotaReached: err instanceof CapacityError && err.code === 'QUOTA_REACHED',
+    };
   }
 }
 
@@ -228,10 +242,10 @@ export async function togglePaidDynamic(args: {
 
 export async function advanceQueueDynamic(args: {
   doctorId: string;
-}): Promise<{ ok: boolean; error?: string }> {
+}): Promise<{ ok: boolean; error?: string; noArrivedPatient?: boolean; called?: boolean }> {
   try {
     const session = await authorize();
-    await advanceQueue({
+    const result = await advanceQueue({
       hospitalId: session.hospitalId,
       doctorId: args.doctorId,
       timezone: session.timezone,
@@ -240,7 +254,11 @@ export async function advanceQueueDynamic(args: {
 
     notifyQueueMovement(session.hospitalId);
     revalidatePath('/dashboard');
-    return { ok: true };
+    return {
+      ok: true,
+      noArrivedPatient: result.noArrivedPatient,
+      called: result.transitions.some((t) => t.action === 'call'),
+    };
   } catch (err: unknown) {
     return { ok: false, error: err instanceof Error ? err.message : 'Failed to advance queue' };
   }
@@ -447,4 +465,68 @@ export async function signOutAction() {
   await logout(await readSessionCookie());
   await clearSessionCookie();
   redirect('/login');
+}
+
+/** Start OPD: records when the doctor actually began. The only thing that does. */
+export async function startSessionDynamic(args: {
+  doctorId: string;
+}): Promise<{ ok: boolean; error?: string; delayMinutes?: number }> {
+  try {
+    const session = await authorize();
+    const result = await startSession({
+      hospitalId: session.hospitalId,
+      doctorId: args.doctorId,
+      timezone: session.timezone,
+      actorUserId: session.userId,
+    });
+    notifyQueueMovement(session.hospitalId);
+    revalidatePath('/dashboard');
+    return { ok: true, delayMinutes: result.delayMinutes };
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to start OPD' };
+  }
+}
+
+/** For a patient who reached the desk without using their link. A secondary action. */
+export async function markArrivedDynamic(args: {
+  doctorId: string;
+  appointmentId: string;
+}): Promise<{ ok: boolean; error?: string; late?: boolean }> {
+  try {
+    const session = await authorize();
+    const result = await markArrived({
+      hospitalId: session.hospitalId,
+      appointmentId: args.appointmentId,
+      actorUserId: session.userId,
+    });
+    if (result.outcome === 'not_today') return { ok: false, error: 'This appointment is not for today.' };
+    if (result.outcome !== 'arrived' && result.outcome !== 'already_arrived') {
+      return { ok: false, error: 'This patient is no longer in the queue.' };
+    }
+    notifyQueueMovement(session.hospitalId);
+    revalidatePath('/dashboard');
+    return { ok: true, late: result.outcome === 'arrived' && result.late };
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to mark arrived' };
+  }
+}
+
+/** Owner: let online bookings use today's unused reserved walk-in capacity. */
+export async function releaseReservedDynamic(args: {
+  doctorId: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const session = await authorize();
+    if (!can(session.role, 'capacity.manage')) return { ok: false, error: 'Only the owner can release reserved tokens' };
+    await releaseReservedWalkIns({
+      hospitalId: session.hospitalId,
+      doctorId: args.doctorId,
+      timezone: session.timezone,
+      actorUserId: session.userId,
+    });
+    revalidatePath('/dashboard');
+    return { ok: true };
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to release reserved tokens' };
+  }
 }
