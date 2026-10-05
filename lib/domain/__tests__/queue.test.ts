@@ -30,6 +30,8 @@ const entry = (
   status,
   priority,
   enqueuedAt: at(minutes),
+  // Present unless a test says otherwise: these tests predate arrival tracking.
+  arrivedAt: at(minutes),
 });
 
 describe('state machine', () => {

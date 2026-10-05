@@ -11,6 +11,7 @@ import {
   getQueueSnapshot,
   setDoctorPaused,
   setPriority,
+  startSession,
 } from '@/lib/services/queue';
 import { markStaleAppointmentsNoShowForHospital } from '@/lib/services/sweeps';
 import { makeNoPhonePlaceholder } from '@/lib/domain/phone';
@@ -323,6 +324,8 @@ describe.skipIf(!enabled)('queue engine', () => {
 
     it('keeps the break out of the consultation it interrupted', async () => {
       const base = pinnedBase();
+      // A break belongs to a started session (Start OPD).
+      await startSession({ hospitalId, doctorId, timezone: TZ, now: minutesAgo(base, 59) });
       await walkIn(1);
       await walkIn(2);
 
@@ -344,6 +347,8 @@ describe.skipIf(!enabled)('queue engine', () => {
 
     it('shifts an open consultation by the break, and nothing else', async () => {
       const base = pinnedBase();
+      // A break belongs to a started session (Start OPD).
+      await startSession({ hospitalId, doctorId, timezone: TZ, now: minutesAgo(base, 59) });
       const first = await walkIn(1);
       await walkIn(2);
 
@@ -377,6 +382,8 @@ describe.skipIf(!enabled)('queue engine', () => {
 
     it('tells waiting patients the doctor is on a break, and since when', async () => {
       const base = pinnedBase();
+      // A break belongs to a started session (Start OPD).
+      await startSession({ hospitalId, doctorId, timezone: TZ, now: minutesAgo(base, 59) });
       await walkIn(1);
       const second = await walkIn(2);
       await advanceQueue({ hospitalId, doctorId, timezone: TZ, now: minutesAgo(base, 20) });

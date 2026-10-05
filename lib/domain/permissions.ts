@@ -23,6 +23,11 @@ export const isStaffRole = (value: string): value is StaffRole =>
 const PERMISSIONS = {
   /** Add walk-ins and move tokens through the queue. */
   'queue.mutate': ['owner', 'receptionist', 'doctor'],
+  /**
+   * Past the daily quota: issue an EXTRA token, or release unused reserved
+   * walk-in capacity to online booking. The owner's call, not the desk's.
+   */
+  'capacity.manage': ['owner'],
   /** Branches, doctors, staff, WhatsApp, subscription. */
   'hospital.configure': ['owner'],
   'reports.view': ['owner', 'receptionist'],

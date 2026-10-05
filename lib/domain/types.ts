@@ -36,16 +36,41 @@ export type QueueAction = (typeof QUEUE_ACTIONS)[number];
 /**
  * A single patient's place in one doctor's queue for one service date.
  *
- * `tokenNumber` is an identifier, never a rank: cancelling a token must not
- * renumber anything. Ordering is derived from `priority` + `enqueuedAt`.
+ * `tokenNumber` is an identifier, never rewritten: cancelling, arriving early,
+ * being prioritised or returning late must not renumber anything. The serving
+ * order is derived from these fields by `orderQueue` in ./queue.ts, which is
+ * the only place that ordering is defined.
  */
 export type QueueEntry = {
   appointmentId: string;
   tokenNumber: number;
   status: AppointmentStatus;
-  /** Higher sorts earlier. 0 is normal; reception raises it for an explicit priority insert. */
+  /** Any value above 0 means "priority". Priority patients are seen FIFO by `prioritySeq`. */
   priority: number;
   enqueuedAt: Date;
+  /**
+   * When the patient was confirmed physically present: set on creation for a
+   * desk walk-in, by the patient's "I've Arrived", or by staff. Null means
+   * booked remotely and not yet here, so Next will not call them.
+   */
+  arrivedAt: Date | null;
+  /** Order in which priority was assigned, per doctor-day. Null for legacy rows. */
+  prioritySeq?: number | null;
+  /** When the patient last left the waiting line by being called. Drives the late-return frontier. */
+  calledAt?: Date | null;
+  /** Late-return marker: this patient is served right after this token's place in line. */
+  queueAfterToken?: number | null;
+  /** FIFO among late returners placed behind the same token. */
+  rejoinSeq?: number | null;
+};
+
+/**
+ * Per-doctor-day settings the ordering needs beyond the rows themselves.
+ * Shared by Next and by the ETA so the two can never disagree.
+ */
+export type QueueContext = {
+  /** How many eligible patients a late returner is placed behind. */
+  lateRejoinAfter: number;
 };
 
 export type QueueTransition = {
