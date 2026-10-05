@@ -651,16 +651,17 @@ export function SessionControl({
 }
 
 /**
- * For the patient who reached the desk without tapping "I've Arrived". Small
- * and inline on purpose: the normal desk flow is just Next.
+ * For the patient who reached the desk without tapping "I've Arrived". Shown
+ * only on rows in the "not arrived yet" section; the normal desk flow is Next.
  */
 export function MarkArrivedButton({ doctorId, appointmentId }: { doctorId: string; appointmentId: string }) {
   const toast = useToast();
   const [isPending, startTransition] = useTransition();
   return (
-    <button
+    <Button
       type="button"
-      disabled={isPending}
+      size="sm"
+      isLoading={isPending}
       onClick={() =>
         startTransition(async () => {
           const res = await markArrivedDynamic({ doctorId, appointmentId });
@@ -674,10 +675,11 @@ export function MarkArrivedButton({ doctorId, appointmentId }: { doctorId: strin
           }
         })
       }
-      className="ml-1 font-semibold text-brand-700 underline underline-offset-2 hover:text-brand-900 disabled:opacity-50"
+      className="inline-flex items-center gap-1 border border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100"
     >
+      <CheckIcon className="size-3 text-emerald-700" />
       {isPending ? 'Marking…' : 'Mark arrived'}
-    </button>
+    </Button>
   );
 }
 
