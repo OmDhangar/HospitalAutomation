@@ -264,3 +264,19 @@ the ward grid already shows who is in which bed.
 - **Calling absent patients:** Next called whoever was first, present or not.
 - **Priority:** it was ordered by enqueue time, so a later-prioritised patient could jump an earlier one.
 - **Delay:** a recorded delay would have been added on top of a now-based wait for the rest of the day.
+
+### ADR-020 · The serving order is shown as a call number, not a token
+*Oct 2026 · Queue*
+
+**Decision:**
+- **Call number.** Each doctor-day issues a call number (1, 2, 3…) at the moment Next calls a patient
+  (`appointments.call_number`, `doctor_day_states.last_call_number`).
+- **Waiting patients.** They see the call number Next will give them. It comes from `projectedCallNumber` in
+  `lib/domain/queue.ts`, which uses the same order as Next and the ETA.
+- **Where it shows.** The dashboard, patient page, waiting-room TV and WhatsApp "currently serving" lead with
+  the call number, with the token beside it.
+- **Tokens.** They stay the permanent booking identity and are never renumbered.
+
+**Why:** a token served first for a legitimate reason looked like it had jumped lower tokens. Examples are an
+arrived later token, a priority patient and an emergency; for instance, "Now serving 31" with 29 and 30 waiting.
+Call numbers only ever count up, so the order patients see is the order they are seen in.

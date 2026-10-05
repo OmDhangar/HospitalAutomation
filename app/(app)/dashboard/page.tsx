@@ -284,7 +284,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
               <Card>
                 <CardHeader
                   title="Now Serving"
-                  hint={serving ? `Token #${serving.tokenNumber}` : 'Room is ready'}
+                  hint={serving ? servingHint(serving) : 'Room is ready'}
                 />
 
                 <div className="p-4 sm:p-6">
@@ -297,9 +297,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                           serving.status === 'CALLED' && 'pulse-ring',
                         )}
                       >
-                        <span className="numeric text-4xl font-bold sm:text-5xl">
-                          {serving.tokenNumber}
-                        </span>
+                        <ServingNumber row={serving} />
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-2xl font-bold text-ink-900">
@@ -312,6 +310,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                         </p>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <StatusPill status={serving.status} />
+                          <TokenChip token={serving.tokenNumber} />
                           {serving.patientPhone && !isMockPhone(serving.patientPhone) ? (
                             <a
                               href={`tel:${serving.patientPhone}`}
@@ -561,7 +560,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                 <Card>
                   <CardHeader
                     title="Now serving"
-                    hint={snapshot?.doctorName}
+                    hint={serving ? `${snapshot?.doctorName} · ${servingHint(serving)}` : snapshot?.doctorName}
                     action={
                       <SessionControl
                         doctorId={selectedId ?? ''}
@@ -581,9 +580,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                             serving.status === 'CALLED' && 'pulse-ring',
                           )}
                         >
-                          <span className="numeric text-4xl font-bold sm:text-5xl">
-                            {serving.tokenNumber}
-                          </span>
+                          <ServingNumber row={serving} />
                         </div>
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-2xl font-semibold text-ink-900">
@@ -596,6 +593,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                           </p>
                           <div className="mt-2 flex flex-wrap items-center gap-2">
                             <StatusPill status={serving.status} />
+                            <TokenChip token={serving.tokenNumber} />
                             {serving.patientPhone && !isMockPhone(serving.patientPhone) ? (
                               <a
                                 href={`tel:${serving.patientPhone}`}
@@ -844,9 +842,22 @@ function WaitingRow({
   return (
     <li className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 sm:px-5 sm:py-3.5 hover:bg-ink-50/50 transition-colors">
       <div className="flex items-start sm:items-center gap-3 min-w-0">
-        <span className="numeric shrink-0 size-9 rounded-xl bg-brand-50 border border-brand-200 text-brand-800 text-base font-bold flex items-center justify-center">
-          {row.tokenNumber}
-        </span>
+        {row.callNumber != null ? (
+          /* The serving order: what this patient will be called as. */
+          <span
+            className="shrink-0 flex flex-col items-center justify-center size-11 rounded-xl bg-brand-50 border border-brand-200 text-brand-800 leading-none"
+            title={`Will be called as number ${row.callNumber}`}
+          >
+            <span className="text-[9px] font-semibold uppercase tracking-wide text-brand-600">Call</span>
+            <span className="numeric text-base font-bold">{row.callNumber}</span>
+          </span>
+        ) : (
+          /* Not here yet: no place in the call order, only their token. */
+          <span className="shrink-0 flex flex-col items-center justify-center size-11 rounded-xl bg-ink-50 border border-ink-200 text-ink-600 leading-none">
+            <span className="text-[9px] font-semibold uppercase tracking-wide text-ink-500">Token</span>
+            <span className="numeric text-base font-bold">{row.tokenNumber}</span>
+          </span>
+        )}
 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
@@ -879,7 +890,7 @@ function WaitingRow({
           <p className="text-xs text-ink-500 mt-0.5 flex flex-wrap items-center gap-1">
             <span>
               {row.arrivedAt
-                ? `#${position} in line · waiting ${waitedFor(row.enqueuedAt, now)}`
+                ? `Token ${row.tokenNumber} · #${position} in line · waiting ${waitedFor(row.enqueuedAt, now)}`
                 : `Booked ${waitedFor(row.enqueuedAt, now)} ago · not here yet`}
             </span>
             {row.etaAt && row.arrivedAt ? (
@@ -1200,5 +1211,35 @@ function WaitingSections({
         </>
       ) : null}
     </ul>
+  );
+}
+
+/** "Call 3 · Token 31": the serving number first, the booking token beside it. */
+function servingHint(row: QueueRow): string {
+  return row.callNumber != null ? `Call ${row.callNumber} · Token #${row.tokenNumber}` : `Token #${row.tokenNumber}`;
+}
+
+/**
+ * The big number in the Now serving card. It is the call number — the order
+ * patients are seen in — so a token served early never reads as a jump.
+ */
+function ServingNumber({ row }: { row: QueueRow }) {
+  if (row.callNumber == null) {
+    return <span className="numeric text-4xl font-bold sm:text-5xl">{row.tokenNumber}</span>;
+  }
+  return (
+    <span className="flex flex-col items-center leading-none">
+      <span className="text-[10px] font-semibold uppercase tracking-wider opacity-80 sm:text-xs">Call</span>
+      <span className="numeric text-4xl font-bold sm:text-5xl">{row.callNumber}</span>
+    </span>
+  );
+}
+
+/** The booking token, shown beside the call number; it never changes. */
+function TokenChip({ token }: { token: number }) {
+  return (
+    <span className="inline-flex items-center rounded-md bg-ink-100 px-2 py-0.5 text-xs font-semibold text-ink-700">
+      Token {token}
+    </span>
   );
 }

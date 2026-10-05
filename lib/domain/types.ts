@@ -62,6 +62,13 @@ export type QueueEntry = {
   queueAfterToken?: number | null;
   /** FIFO among late returners placed behind the same token. */
   rejoinSeq?: number | null;
+  /**
+   * The serving sequence for the day: 1 for the first patient called, 2 for
+   * the next, whatever their tokens. Set when the patient is called. Shown to
+   * patients so that serving order reads as order, and a token served early
+   * never looks like it jumped the line.
+   */
+  callNumber?: number | null;
 };
 
 /**

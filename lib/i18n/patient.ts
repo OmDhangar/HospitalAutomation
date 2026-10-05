@@ -20,6 +20,14 @@ export const LOCALE_NAMES: Record<Locale, string> = {
  */
 type Strings = {
   yourToken: string;
+  /** The day's serving sequence, separate from the token. */
+  yourCallNumber: string;
+  yourCallNumberIfArrived: string;
+  callNumberHint: string;
+  /** Prefix for a call number: "Call 3". */
+  callWord: string;
+  /** Prefix for a token: "Token 31". */
+  tokenWord: string;
   nowServing: string;
   peopleAhead: string;
   youAreNext: string;
@@ -82,6 +90,11 @@ type Strings = {
 export const t: Record<Locale, Strings> = {
   mr: {
     yourToken: 'तुमचा टोकन क्रमांक',
+    yourCallNumber: 'तुमचा कॉल क्रमांक',
+    yourCallNumberIfArrived: 'पोहोचल्यावर तुमचा कॉल क्रमांक',
+    callNumberHint: 'रुग्णांना या क्रमाने बोलावले जाते. तुमचा टोकन क्रमांक बदलत नाही.',
+    callWord: 'कॉल',
+    tokenWord: 'टोकन',
     nowServing: 'सध्या सुरू',
     peopleAhead: 'तुमच्या आधी रुग्ण',
     youAreNext: 'तुमचा नंबर पुढचा आहे',
@@ -136,6 +149,11 @@ export const t: Record<Locale, Strings> = {
   },
   hi: {
     yourToken: 'आपका टोकन नंबर',
+    yourCallNumber: 'आपका कॉल नंबर',
+    yourCallNumberIfArrived: 'पहुँचने पर आपका कॉल नंबर',
+    callNumberHint: 'मरीज़ों को इसी क्रम में बुलाया जाता है। आपका टोकन नंबर नहीं बदलता।',
+    callWord: 'कॉल',
+    tokenWord: 'टोकन',
     nowServing: 'अभी चल रहा है',
     peopleAhead: 'आपसे पहले मरीज़',
     youAreNext: 'आपका नंबर अगला है',
@@ -190,6 +208,11 @@ export const t: Record<Locale, Strings> = {
   },
   en: {
     yourToken: 'Your token number',
+    yourCallNumber: 'Your call number',
+    yourCallNumberIfArrived: 'Your call number once you arrive',
+    callNumberHint: 'Patients are called in this order. Your token number stays the same.',
+    callWord: 'Call',
+    tokenWord: 'Token',
     nowServing: 'Now serving',
     peopleAhead: 'patients ahead of you',
     youAreNext: 'You are next',

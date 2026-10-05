@@ -315,6 +315,31 @@ export function patientsAhead(
   return null;
 }
 
+/**
+ * The call number a patient has, or will get if things stay as they are.
+ *
+ * Called patients keep the number they were called with. Waiting patients get
+ * the next numbers after the last one issued, in exactly the order Next will
+ * call them — derived from `patientsAhead`, so the call number, Next and the
+ * ETA can never disagree. For a patient who has not arrived it is the number
+ * they would get on arriving now. Priority or a late return ahead can move a
+ * projected number by one; the token never moves. Null when finished with.
+ */
+export function projectedCallNumber(
+  entries: QueueEntry[],
+  appointmentId: string,
+  lastCallNumber: number,
+  ctx: QueueContext = DEFAULT_CONTEXT,
+): number | null {
+  const self = entries.find((entry) => entry.appointmentId === appointmentId);
+  if (!self || isTerminal(self.status)) return null;
+  if (isServing(self)) return self.callNumber ?? null;
+  const ahead = patientsAhead(entries, appointmentId, ctx);
+  if (ahead === null) return null;
+  const serving = entries.filter((entry) => isActive(entry.status) && isServing(entry)).length;
+  return lastCallNumber + (ahead - serving) + 1;
+}
+
 /** 1-based place among waiting priority patients ("Priority #2"), or null. */
 export function priorityRank(entries: QueueEntry[], appointmentId: string): number | null {
   const line = orderQueue(entries).filter(

@@ -173,7 +173,7 @@ export default async function PatientQueuePage({
             strings={s}
             doctorName={view.doctorName}
             eta={null}
-            currentToken={view.currentToken}
+            currentToken={view.currentCallNumber !== null ? `${s.callWord} ${view.currentCallNumber}` : view.currentToken}
           />
         </>
       ) : (
@@ -186,22 +186,34 @@ export default async function PatientQueuePage({
               ? formatWindowIn(view.timezone, view.eta.windowStart, view.eta.windowEnd)
               : null
           }
-          currentToken={view.currentToken}
+          currentToken={view.currentCallNumber !== null ? `${s.callWord} ${view.currentCallNumber}` : view.currentToken}
         />
       )}
 
       {/**
-       * Token and appointment time, side by side.
+       * Call number and token, side by side. The call number is the order
+       * patients are seen in; the token is their booking and never changes.
+       * Showing tokens as the order made a token served early look like it
+       * had jumped the line.
        */}
-      <div className={cn('grid gap-3', view.scheduledSlotAt ? 'grid-cols-2' : 'grid-cols-1')}>
-        <TokenCard label={s.yourToken} token={view.tokenNumber} />
-        {view.scheduledSlotAt ? (
-          <Tile
-            label={s.appointmentTime}
-            value={formatTimeIn(view.timezone, view.scheduledSlotAt)}
+      <div className={cn('grid gap-3', view.callNumber !== null ? 'grid-cols-2' : 'grid-cols-1')}>
+        {view.callNumber !== null ? (
+          <CallNumberCard
+            label={view.callNumberIfArrived ? s.yourCallNumberIfArrived : s.yourCallNumber}
+            value={view.callNumber}
           />
         ) : null}
+        <TokenCard label={s.yourToken} token={view.tokenNumber} />
       </div>
+      {view.callNumber !== null ? (
+        <p className="-mt-2 px-2 text-center text-sm text-ink-500">{s.callNumberHint}</p>
+      ) : null}
+      {view.scheduledSlotAt ? (
+        <Tile
+          label={s.appointmentTime}
+          value={formatTimeIn(view.timezone, view.scheduledSlotAt)}
+        />
+      ) : null}
 
       {query.cancel === 'late' ? (
         <Message title={s.cancelTooLate} hint={s.cancelTooLateHint} tone="warn" />
@@ -376,7 +388,8 @@ function AheadHero({
   doctorName: string;
   /** Pre-formatted window, or null when no estimate can be trusted. */
   eta: string | null;
-  currentToken: number | null;
+  /** What is being served now: a call number ("Call 3"), or a token for older days. */
+  currentToken: number | string | null;
   /** Hides the serving token, which does not move while the doctor is away. */
   onBreak?: boolean;
 }) {
@@ -455,6 +468,15 @@ function AheadHero({
           </span>
         </p>
       )}
+    </div>
+  );
+}
+
+function CallNumberCard({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex flex-col items-center justify-center rounded-2xl bg-brand-600 px-4 py-3 text-center">
+      <span className="text-sm font-medium text-white/85">{label}</span>
+      <span className="numeric text-4xl font-bold text-white">{value}</span>
     </div>
   );
 }

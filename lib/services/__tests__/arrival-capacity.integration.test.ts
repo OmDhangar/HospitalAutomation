@@ -389,6 +389,45 @@ describe.skipIf(!enabled)('arrival, priority and capacity', () => {
     });
   });
 
+  describe('call numbers', () => {
+    it('are issued 1, 2, 3 in serving order while tokens stay untouched', async () => {
+      const remote = await book('whatsapp'); // token 1, not here
+      const t2 = await book('walk_in'); // token 2
+      const t3 = await book('walk_in'); // token 3
+      await setPriority({ hospitalId, appointmentId: t3.appointment.id, priority: 10 });
+
+      await advanceQueue({ hospitalId, doctorId, timezone: TZ }); // priority token 3 → call 1
+      let snapshot = (await getQueueSnapshot({ hospitalId, doctorId, timezone: TZ }))!;
+      expect(snapshot.currentToken).toBe(3);
+      expect(snapshot.currentCallNumber).toBe(1);
+      // Token 2 is next: call 2. Token 1 is not here, so has no call number yet.
+      expect(snapshot.rows.find((r) => r.tokenNumber === 2)?.callNumber).toBe(2);
+      expect(snapshot.rows.find((r) => r.tokenNumber === 1)?.callNumber).toBeNull();
+
+      // The absent patient's own page tells them what they'd get on arriving.
+      let view = (await getPublicQueueView(remote.publicToken))!;
+      expect(view).toMatchObject({ tokenNumber: 1, callNumber: 2, callNumberIfArrived: true, currentCallNumber: 1 });
+
+      await arriveByPublicToken({ publicToken: remote.publicToken });
+      await advanceQueue({ hospitalId, doctorId, timezone: TZ });
+      snapshot = (await getQueueSnapshot({ hospitalId, doctorId, timezone: TZ }))!;
+      expect(snapshot.currentToken).toBe(1);
+      expect(snapshot.currentCallNumber).toBe(2);
+      view = (await getPublicQueueView(t2.publicToken))!;
+      expect(view).toMatchObject({ tokenNumber: 2, callNumber: 3, callNumberIfArrived: false });
+    });
+
+    it('concurrent Next presses never share a call number', async () => {
+      for (let i = 0; i < 4; i += 1) await book('walk_in');
+      await Promise.all([1, 2, 3].map(() => advanceQueue({ hospitalId, doctorId, timezone: TZ })));
+      const rows = await withTenant(hospitalId, (tx) =>
+        tx.select({ n: appointments.callNumber }).from(appointments).where(eq(appointments.doctorId, doctorId)),
+      );
+      const issued = rows.map((r) => r.n).filter((n): n is number => n !== null).sort();
+      expect(issued).toEqual([1, 2, 3]);
+    });
+  });
+
   describe('Start OPD', () => {
     it('is the only thing that starts the session; Next and breaks never do', async () => {
       await book('walk_in');

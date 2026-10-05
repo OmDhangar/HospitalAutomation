@@ -34,6 +34,7 @@ import {
   orderQueue,
   patientsAhead,
   priorityRank,
+  projectedCallNumber,
 } from '@/lib/domain/queue';
 import { isMockPhone } from '@/lib/domain/phone';
 import { formatTimeIn, serviceDateIn } from '@/lib/domain/time';
@@ -93,6 +94,11 @@ export type QueueRow = {
   /** Internal estimate for staff; from the same ordering Next uses. */
   patientsAhead?: number | null;
   etaAt?: Date | null;
+  /**
+   * Serving sequence: the number they were called with, or for a waiting
+   * patient the number Next will give them. Null for anyone not arrived.
+   */
+  callNumber?: number | null;
 };
 
 export type QueueSnapshot = {
@@ -104,8 +110,10 @@ export type QueueSnapshot = {
   /** When the doctor's current break began, or null when not on a break. */
   breakStartedAt: Date | null;
   currentToken: number | null;
+  /** Call number of whoever is with the doctor: what the room and the TV announce. */
+  currentCallNumber: number | null;
   currentPatientName?: string | null;
-  nextPatient?: { tokenNumber: number; patientName: string } | null;
+  nextPatient?: { tokenNumber: number; patientName: string; callNumber: number | null } | null;
   waitingCount: number;
   completedCount: number;
   rows: QueueRow[];
@@ -141,6 +149,7 @@ const toQueueEntry = (row: {
   calledAt: Date | null;
   queueAfterToken: number | null;
   rejoinSeq: number | null;
+  callNumber: number | null;
 }): QueueEntry => ({
   appointmentId: row.id,
   tokenNumber: row.tokenNumber,
@@ -154,6 +163,7 @@ const toQueueEntry = (row: {
   calledAt: row.calledAt,
   queueAfterToken: row.queueAfterToken,
   rejoinSeq: row.rejoinSeq,
+  callNumber: row.callNumber,
 });
 
 /**
@@ -190,6 +200,16 @@ async function nextQueueSeq(tx: Tx, doctorId: string, serviceDate: string): Prom
     .where(and(eq(doctorDayStates.doctorId, doctorId), eq(doctorDayStates.serviceDate, serviceDate)))
     .returning({ seq: doctorDayStates.lastQueueSeq });
   return row.seq;
+}
+
+/** Next call number for the doctor-day. Under the lock, so two Nexts never share one. */
+async function nextCallNumber(tx: Tx, doctorId: string, serviceDate: string): Promise<number> {
+  const [row] = await tx
+    .update(doctorDayStates)
+    .set({ lastCallNumber: sql`${doctorDayStates.lastCallNumber} + 1` })
+    .where(and(eq(doctorDayStates.doctorId, doctorId), eq(doctorDayStates.serviceDate, serviceDate)))
+    .returning({ n: doctorDayStates.lastCallNumber });
+  return row.n;
 }
 
 /**
@@ -261,6 +281,7 @@ async function loadDayAppointments(
       prioritySeq: appointments.prioritySeq,
       queueAfterToken: appointments.queueAfterToken,
       rejoinSeq: appointments.rejoinSeq,
+      callNumber: appointments.callNumber,
       quotaPool: appointments.quotaPool,
     })
     .from(appointments)
@@ -355,6 +376,8 @@ async function writeTransition(
     metadata?: Record<string, unknown>;
     now: Date;
     calledAt?: Date | null;
+    /** Issued by the caller from the doctor-day counter, for a `call`. */
+    callNumber?: number | null;
   },
 ) {
   const patch: Partial<typeof appointments.$inferInsert> = {
@@ -373,6 +396,7 @@ async function writeTransition(
       break;
     case 'call':
       patch.calledAt = args.now;
+      if (args.callNumber != null) patch.callNumber = args.callNumber;
       break;
     case 'start_consultation':
       patch.consultStartedAt = args.now;
@@ -759,6 +783,7 @@ export async function createWalkIn(args: {
       prioritySeq: null,
       queueAfterToken: null,
       rejoinSeq: null,
+      callNumber: null,
       quotaPool: row.appt_quota_pool,
       createdAt: new Date(row.appt_created_at),
       updatedAt: new Date(row.appt_updated_at),
@@ -836,6 +861,8 @@ export async function advanceQueue(args: {
 
     for (const transition of transitions) {
       const row = rows.find((r) => r.id === transition.appointmentId)!;
+      // The day's serving sequence: the next number, whatever the token.
+      const callNumber = transition.action === 'call' ? await nextCallNumber(tx, args.doctorId, serviceDate) : null;
       await writeTransition(tx, {
         hospitalId: args.hospitalId,
         doctorId: args.doctorId,
@@ -845,9 +872,15 @@ export async function advanceQueue(args: {
         to: transition.to,
         actorUserId: args.actorUserId,
         calledAt: row.calledAt,
+        callNumber,
         metadata:
-          transition.action === 'call' && passedOver.length > 0
-            ? { reason: 'earlier_tokens_not_arrived', passed_over_tokens: passedOver }
+          transition.action === 'call'
+            ? {
+                call_number: callNumber,
+                ...(passedOver.length > 0
+                  ? { reason: 'earlier_tokens_not_arrived', passed_over_tokens: passedOver }
+                  : {}),
+              }
             : undefined,
         now,
       });
@@ -1639,6 +1672,13 @@ export async function getQueueSnapshotInTx(
   // "Next" on the dashboard is who Next will actually call: present patients only.
   const nextWaiting = ordered.find(isEligible);
   const nextWaitingRow = nextWaiting ? byId.get(nextWaiting.appointmentId) : null;
+  const lastCallNumber = day?.lastCallNumber ?? 0;
+  // Only arrived (callable) and serving patients have a place in the call
+  // sequence; a booking not yet here gets one when they check in.
+  const callNumberFor = (entry: QueueEntry) =>
+    isEligible(entry) || entry.status === 'CALLED' || entry.status === 'IN_CONSULTATION'
+      ? projectedCallNumber(entries, entry.appointmentId, lastCallNumber, settings.ctx)
+      : null;
 
   const etaFor = (appointmentId: string) => {
     const ahead = patientsAhead(entries, appointmentId, settings.ctx);
@@ -1665,9 +1705,14 @@ export async function getQueueSnapshotInTx(
     pausedReason: day?.pausedReason ?? null,
     breakStartedAt: day?.paused ? (day.pausedAt ?? null) : null,
     currentToken: serving?.tokenNumber ?? null,
+    currentCallNumber: serving?.callNumber ?? null,
     currentPatientName: servingRow ? servingRow.patientName : null,
     nextPatient: nextWaitingRow
-      ? { tokenNumber: nextWaitingRow.tokenNumber, patientName: nextWaitingRow.patientName }
+      ? {
+          tokenNumber: nextWaitingRow.tokenNumber,
+          patientName: nextWaitingRow.patientName,
+          callNumber: nextWaiting ? callNumberFor(nextWaiting) : null,
+        }
       : null,
     waitingCount: ordered.filter((e) => e.status === 'WAITING').length,
     eligibleCount: ordered.filter(isEligible).length,
@@ -1691,6 +1736,7 @@ export async function getQueueSnapshotInTx(
         priorityRank: priorityRank(entries, entry.appointmentId),
         patientsAhead: ahead,
         etaAt,
+        callNumber: callNumberFor(entry),
       };
     }),
     parked: rows
@@ -1753,6 +1799,15 @@ export type PublicQueueView = {
   cancellable: boolean;
   patientFirstName: string;
   currentToken: number | null;
+  /** Call number now with the doctor: the serving order, not a token. */
+  currentCallNumber: number | null;
+  /**
+   * This patient's call number: the one they were called with, or the one Next
+   * will give them. For a patient not yet arrived, the one they would get on
+   * arriving now (`callNumberIfArrived`). Tokens never change; this does.
+   */
+  callNumber: number | null;
+  callNumberIfArrived: boolean;
   /**
    * Patients who will be seen first, counted on the order Next uses. For a
    * patient not here yet: the place they would take on arriving now.
@@ -1874,6 +1929,9 @@ export async function getPublicQueueView(
       // First name only: a forwarded link should not expose a full identity.
       patientFirstName: appointment.patientName.split(' ')[0] ?? '',
       currentToken: serving?.tokenNumber ?? null,
+      currentCallNumber: serving?.callNumber ?? null,
+      callNumber: projectedCallNumber(entries, appointment.id, day?.lastCallNumber ?? 0, settings.ctx),
+      callNumberIfArrived: appointment.arrivedAt === null || appointment.status !== 'WAITING',
       patientsAhead: ahead,
       paused: day?.paused ?? false,
       breakStartedAt: day?.paused ? (day.pausedAt ?? null) : null,

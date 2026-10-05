@@ -9,6 +9,7 @@ import {
   orderQueue,
   patientsAhead,
   priorityRank,
+  projectedCallNumber,
 } from '../queue';
 import type { AppointmentStatus, QueueContext, QueueEntry } from '../types';
 
@@ -316,6 +317,83 @@ describe('ETA ahead-count uses the exact order Next uses', () => {
       }
       if (rand() < 0.5) queue.push(e(size + 1, { status: 'IN_CONSULTATION', called: true }));
       expectAheadMatchesCalls(queue);
+    }
+  });
+});
+
+describe('call numbers', () => {
+  /** Plays Next, issuing call numbers the way the service does. */
+  function playWithCallNumbers(start: QueueEntry[], lastCall: number) {
+    let entries = start.map((x) => ({ ...x }));
+    let last = lastCall;
+    const issued = new Map<string, number>();
+    for (let i = 0; i < entries.length + 2; i += 1) {
+      const transitions = callNext(entries);
+      if (transitions.length === 0) break;
+      entries = entries.map((x) => {
+        const t = transitions.find((tr) => tr.appointmentId === x.appointmentId);
+        if (!t) return x;
+        if (t.action === 'call') {
+          last += 1;
+          issued.set(x.appointmentId, last);
+          return { ...x, status: t.to, calledAt: at(59), callNumber: last };
+        }
+        return { ...x, status: t.to };
+      });
+    }
+    return issued;
+  }
+
+  it('serving token 31 is call 3; waiting 29 and 30 become calls 4 and 5', () => {
+    const queue = [
+      e(31, { status: 'CALLED', called: true }),
+      e(29),
+      e(30),
+    ].map((x) => (x.appointmentId === 't31' ? { ...x, callNumber: 3 } : x));
+    expect(projectedCallNumber(queue, 't31', 3)).toBe(3);
+    expect(projectedCallNumber(queue, 't29', 3)).toBe(4);
+    expect(projectedCallNumber(queue, 't30', 3)).toBe(5);
+  });
+
+  it('call numbers rise in serving order, whatever the tokens', () => {
+    const queue = [e(40, { priority: 10, prioritySeq: 1 }), e(12), e(5, { arrived: false }), e(9)];
+    const issued = playWithCallNumbers(queue, 0);
+    expect([...issued.entries()]).toEqual([
+      ['t40', 1],
+      ['t9', 2],
+      ['t12', 3],
+    ]);
+  });
+
+  it('the projected number is exactly the number Next will give, for random queues', () => {
+    let seed = 11;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    };
+    for (let run = 0; run < 200; run += 1) {
+      const size = 3 + Math.floor(rand() * 12);
+      const queue: QueueEntry[] = [];
+      let seq = 0;
+      for (let token = 1; token <= size; token += 1) {
+        const prio = rand() < 0.2;
+        queue.push(
+          e(token, {
+            status: rand() < 0.1 ? 'HELD' : 'WAITING',
+            arrived: rand() < 0.75,
+            priority: prio ? 10 : 0,
+            prioritySeq: prio ? (seq += 1) : undefined,
+            after: !prio && rand() < 0.15 ? Math.floor(rand() * size) + 1 : undefined,
+            rejoinSeq: Math.floor(rand() * 5),
+          }),
+        );
+      }
+      const last = Math.floor(rand() * 20);
+      if (rand() < 0.5) queue.push({ ...e(size + 1, { status: 'IN_CONSULTATION', called: true }), callNumber: last });
+      const issued = playWithCallNumbers(queue, last);
+      for (const x of queue.filter(isEligible)) {
+        expect(projectedCallNumber(queue, x.appointmentId, last), x.appointmentId).toBe(issued.get(x.appointmentId));
+      }
     }
   });
 });
