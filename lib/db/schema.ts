@@ -604,11 +604,6 @@ export const appointments = pgTable(
     calledAt: timestamp('called_at', { withTimezone: true }),
     consultStartedAt: timestamp('consult_started_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
-    /**
-     * When the patient was confirmed physically present (0034). Null for a
-     * remote booking that has not checked in; Next passes over them.
-     */
-    arrivedAt: timestamp('arrived_at', { withTimezone: true }),
     /** FIFO order in which priority was given, per doctor-day. */
     prioritySeq: integer('priority_seq'),
     /** Late-return marker: served right after this token's place in line. */

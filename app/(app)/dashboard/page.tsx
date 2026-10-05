@@ -54,7 +54,6 @@ import {
   PriorityButton,
   QueueActionButton,
   ReceptionDashboardLayout,
-  MarkArrivedButton,
   ReleaseReservedButton,
   ResumePatientButton,
   SessionControl,
@@ -398,7 +397,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
               <Card>
                 <CardHeader
                   title="Waiting Queue"
-                  hint={waitingHint(waiting)}
+                  hint={`${waiting.length} patient${waiting.length === 1 ? '' : 's'} in line`}
                 />
                 {waiting.length === 0 ? (
                   <EmptyState
@@ -406,7 +405,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                     hint="New arrivals registered at reception will appear here instantly."
                   />
                 ) : (
-                  <WaitingSections
+                  <WaitingList
                     rows={waiting}
                     doctorId={selectedId!}
                     now={now}
@@ -659,11 +658,11 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                 </Card>
 
                 <Card>
-                  <CardHeader title="Waiting" hint={waitingHint(waiting)} />
+                  <CardHeader title="Waiting" hint={`${waiting.length} in line`} />
                   {waiting.length === 0 ? (
                     <EmptyState title="Nobody is waiting" hint="Add a walk-in to start the queue." />
                   ) : (
-                    <WaitingSections
+                    <WaitingList
                       rows={waiting}
                       doctorId={selectedId!}
                       now={now}
@@ -826,14 +825,12 @@ function ParkedPatientsCard({
 
 function WaitingRow({
   row,
-  position,
   doctorId,
   now,
   timezone,
   payment,
 }: {
   row: QueueRow;
-  position: number;
   doctorId: string;
   now: Date;
   timezone: string;
@@ -889,11 +886,9 @@ function WaitingRow({
           </div>
           <p className="text-xs text-ink-500 mt-0.5 flex flex-wrap items-center gap-1">
             <span>
-              {row.arrivedAt
-                ? `Token ${row.tokenNumber} · #${position} in line · waiting ${waitedFor(row.enqueuedAt, now)}`
-                : `Booked ${waitedFor(row.enqueuedAt, now)} ago · not here yet`}
+              Token {row.tokenNumber} · waiting {waitedFor(row.enqueuedAt, now)}
             </span>
-            {row.etaAt && row.arrivedAt ? (
+            {row.etaAt ? (
               <span>· expected ~{formatTimeIn(timezone, row.etaAt)}</span>
             ) : null}
             {row.priority > 0 ? (
@@ -908,16 +903,11 @@ function WaitingRow({
             {row.quotaPool === 'extra' ? (
               <span className="font-semibold text-amber-700">· extra token</span>
             ) : null}
-
           </p>
         </div>
       </div>
 
       <div className="flex items-center gap-1.5 self-end sm:self-auto shrink-0 pt-1 sm:pt-0">
-        {!row.arrivedAt ? (
-          /* Booked remotely: Next passes over them until they are marked here. */
-          <MarkArrivedButton doctorId={doctorId} appointmentId={row.appointmentId} />
-        ) : null}
         {row.priority === 0 ? (
           <PriorityButton doctorId={doctorId} appointmentId={row.appointmentId} />
         ) : null}
@@ -1133,24 +1123,12 @@ function CapacityStrip({
   );
 }
 
-/** "3 arrived · 2 not here yet", or the plain count when everyone is here. */
-function waitingHint(rows: QueueRow[]): string {
-  const arrived = rows.filter((row) => row.arrivedAt).length;
-  const away = rows.length - arrived;
-  if (away === 0) return `${rows.length} patient${rows.length === 1 ? '' : 's'} in line`;
-  return `${arrived} arrived · ${away} not here yet`;
-}
-
 /**
- * The waiting line, split by whether the patient is physically here.
- *
- * Arrived: walk-ins added at the desk, and bookings that checked in. These are
- * the people Next calls, in the order shown. Not here yet: WhatsApp and web
- * bookings that have not checked in; Next passes over them, keeping their
- * token. When one reaches the desk, "Mark arrived" moves them up — before or
- * after Start OPD.
+ * The one waiting line, in the order Next calls it. Each row leads with its
+ * call number. A patient who is not there when called is put on hold and
+ * leaves this list until they are resumed.
  */
-function WaitingSections({
+function WaitingList({
   rows,
   doctorId,
   now,
@@ -1163,53 +1141,18 @@ function WaitingSections({
   timezone: string;
   payment: PaymentPillContext;
 }) {
-  const arrived = rows.filter((row) => row.arrivedAt);
-  const away = rows.filter((row) => !row.arrivedAt);
-  const section = (title: string, hint: string) => (
-    <li className="bg-ink-50 px-4 py-2 sm:px-5">
-      <p className="text-xs font-bold uppercase tracking-wide text-ink-700">{title}</p>
-      <p className="text-xs text-ink-500">{hint}</p>
-    </li>
-  );
-
   return (
     <ul className="divide-y divide-ink-200">
-      {section(
-        `Arrived at the hospital (${arrived.length})`,
-        arrived.length > 0
-          ? 'Next calls from this list, in this order.'
-          : 'Nobody here yet. Add walk-ins, or mark a booking arrived when they reach the desk.',
-      )}
-      {arrived.map((row, index) => (
+      {rows.map((row) => (
         <WaitingRow
           key={row.appointmentId}
           row={row}
-          position={index + 1}
           doctorId={doctorId}
           now={now}
           timezone={timezone}
           payment={payment}
         />
       ))}
-      {away.length > 0 ? (
-        <>
-          {section(
-            `Booked, not arrived yet (${away.length})`,
-            'Online and WhatsApp bookings. They keep their token; tap Mark arrived when they reach the desk.',
-          )}
-          {away.map((row) => (
-            <WaitingRow
-              key={row.appointmentId}
-              row={row}
-              position={0}
-              doctorId={doctorId}
-              now={now}
-              timezone={timezone}
-              payment={payment}
-            />
-          ))}
-        </>
-      ) : null}
     </ul>
   );
 }

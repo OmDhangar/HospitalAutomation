@@ -5,7 +5,7 @@ import { cn } from '@/components/ui';
 import { formatTimeIn, formatWindowIn } from '@/lib/domain/time';
 import { isLocale, LOCALE_NAMES, LOCALES, t, type Locale } from '@/lib/i18n/patient';
 import { getPublicQueueView } from '@/lib/services/queue';
-import { arriveAppointment, cancelAppointment, resumeAppointment } from './actions';
+import { cancelAppointment, resumeAppointment } from './actions';
 
 export const metadata = { title: 'Your queue' };
 export const dynamic = 'force-dynamic';
@@ -76,33 +76,6 @@ export default async function PatientQueuePage({
 
       {query.resume === 'done' ? (
         <Message title={s.resumeDone} hint={s.resumeDoneHint} tone="done" />
-      ) : null}
-
-      {query.arrive === 'done' && view.arrived ? (
-        <Message title={s.arriveDone} hint={s.arriveDoneHint} tone="done" />
-      ) : query.arrive === 'not_today' ? (
-        <Message title={s.arriveNotToday} tone="warn" />
-      ) : null}
-
-      {/* Booked from home and not here yet, or passed over while away: the one
-          action on this page that puts them in the line Next calls from. Their
-          token never changes; if their turn has passed they join after the
-          next patients who are present. */}
-      {view.canCheckIn &&
-      (view.status === 'SKIPPED' || (view.status === 'WAITING' && !view.arrived)) ? (
-        <div className="space-y-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-          <p className="text-base leading-relaxed text-emerald-900">{s.arrivePrompt}</p>
-          <form action={arriveAppointment}>
-            <input type="hidden" name="token" value={token} />
-            <input type="hidden" name="lang" value={locale} />
-            <button
-              type="submit"
-              className="w-full rounded-2xl bg-emerald-600 px-5 py-4 text-center text-lg font-bold text-white shadow-md hover:bg-emerald-700 active:scale-[0.99] transition-all cursor-pointer"
-            >
-              {s.arriveAction}
-            </button>
-          </form>
-        </div>
       ) : null}
 
       {isTurn ? (
@@ -199,7 +172,7 @@ export default async function PatientQueuePage({
       <div className={cn('grid gap-3', view.callNumber !== null ? 'grid-cols-2' : 'grid-cols-1')}>
         {view.callNumber !== null ? (
           <CallNumberCard
-            label={view.callNumberIfArrived ? s.yourCallNumberIfArrived : s.yourCallNumber}
+            label={s.yourCallNumber}
             value={view.callNumber}
           />
         ) : null}

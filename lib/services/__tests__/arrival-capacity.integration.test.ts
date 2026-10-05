@@ -1,8 +1,8 @@
 import postgres from 'postgres';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, withTenant } from '@/lib/db';
-import { appointments, auditLogs, doctorDayStates, queueEvents } from '@/lib/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { appointments, auditLogs, doctorDayStates } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
 import {
   CapacityError,
   getDayCapacity,
@@ -12,11 +12,10 @@ import {
 import {
   advanceQueue,
   applyQueueAction,
-  arriveByPublicToken,
   createWalkIn,
   getPublicQueueView,
   getQueueSnapshot,
-  markArrived,
+  resumeByPublicToken,
   setDoctorPaused,
   setPriority,
   startSession,
@@ -91,114 +90,60 @@ describe.skipIf(!enabled)('arrival, priority and capacity', () => {
     await Promise.all([admin.end(), closeDb()]);
   });
 
-  describe('arrival', () => {
-    it('a walk-in is arrived on creation; a WhatsApp booking is not', async () => {
-      const walk = await book('walk_in');
-      const remote = await book('whatsapp');
-      expect(walk.appointment.arrivedAt).not.toBeNull();
-      expect(remote.appointment.arrivedAt).toBeNull();
-    });
-
-    it('Next passes over a booking that has not arrived, without marking it arrived or changing tokens', async () => {
-      const remote = await book('whatsapp'); // token 1, not here
-      const walk = await book('walk_in'); // token 2, here
-
+  describe('one waiting queue', () => {
+    it('every booking enters WAITING and Next calls them in order, no check-in needed', async () => {
+      await book('whatsapp'); // token 1
+      await book('walk_in'); // token 2
       const result = await advanceQueue({ hospitalId, doctorId, timezone: TZ });
-      expect(result.transitions).toEqual([
-        expect.objectContaining({ appointmentId: walk.appointment.id, action: 'call' }),
-      ]);
-
-      const rows = await tokensOf();
-      expect(rows.find((r) => r.id === remote.appointment.id)).toMatchObject({ token: 1, status: 'WAITING' });
-      const view = (await getPublicQueueView(remote.publicToken))!;
-      expect(view.arrived).toBe(false);
-      expect(view.canCheckIn).toBe(true);
-      expect(view.tokenNumber).toBe(1);
-
-      // Events record which earlier tokens were passed over and why.
-      const [event] = await withTenant(hospitalId, (tx) =>
-        tx
-          .select({ metadata: queueEvents.metadata })
-          .from(queueEvents)
-          .where(and(eq(queueEvents.appointmentId, walk.appointment.id), eq(queueEvents.action, 'call'))),
-      );
-      expect(event.metadata).toMatchObject({ passed_over_tokens: [1] });
+      const called = result.transitions.find((t) => t.action === 'call')!;
+      expect((await tokensOf()).find((r) => r.id === called.appointmentId)?.token).toBe(1);
     });
 
-    it('reports no arrived patient instead of calling an absent one', async () => {
-      await book('whatsapp');
-      const result = await advanceQueue({ hospitalId, doctorId, timezone: TZ });
-      expect(result.transitions).toEqual([]);
-      expect(result.noArrivedPatient).toBe(true);
+    it('a patient who is not there is put on hold, leaves the line, and is resumed with their token', async () => {
+      const a = await book('walk_in'); // 1
+      await book('walk_in'); // 2
+      await advanceQueue({ hospitalId, doctorId, timezone: TZ }); // calls 1
+      await applyQueueAction({ hospitalId, appointmentId: a.appointment.id, action: 'hold', timezone: TZ });
+
+      let snapshot = (await getQueueSnapshot({ hospitalId, doctorId, timezone: TZ }))!;
+      expect(snapshot.parked.map((r) => r.tokenNumber)).toEqual([1]);
+      expect(snapshot.completed).toHaveLength(0); // not moved to history
+
+      expect(await resumeByPublicToken({ publicToken: a.publicToken })).toMatchObject({ outcome: 'resumed' });
+      const view = (await getPublicQueueView(a.publicToken))!;
+      expect(view).toMatchObject({ status: 'WAITING', tokenNumber: 1 });
+      snapshot = (await getQueueSnapshot({ hospitalId, doctorId, timezone: TZ }))!;
+      expect(snapshot.parked).toHaveLength(0);
     });
 
-    it("I've Arrived makes the patient callable and is idempotent", async () => {
-      const remote = await book('whatsapp');
-      expect(await arriveByPublicToken({ publicToken: remote.publicToken })).toMatchObject({ outcome: 'arrived', late: false });
-      expect(await arriveByPublicToken({ publicToken: remote.publicToken })).toMatchObject({ outcome: 'already_arrived' });
-
-      const result = await advanceQueue({ hospitalId, doctorId, timezone: TZ });
-      expect(result.transitions[0]).toMatchObject({ appointmentId: remote.appointment.id, action: 'call' });
-    });
-
-    it('staff can mark a patient arrived', async () => {
-      const remote = await book('whatsapp');
-      expect(await markArrived({ hospitalId, appointmentId: remote.appointment.id })).toMatchObject({ outcome: 'arrived' });
-      const snapshot = (await getQueueSnapshot({ hospitalId, doctorId, timezone: TZ }))!;
-      expect(snapshot.eligibleCount).toBe(1);
-      expect(snapshot.nextPatient?.tokenNumber).toBe(remote.tokenNumber);
-    });
-
-    it('a concurrent check-in and Next never leave the queue inconsistent', async () => {
-      const remote = await book('whatsapp');
+    it('a concurrent resume and Next never leave the queue inconsistent', async () => {
+      const a = await book('walk_in');
       await book('walk_in');
+      await applyQueueAction({ hospitalId, appointmentId: a.appointment.id, action: 'hold', timezone: TZ });
       await Promise.all([
-        arriveByPublicToken({ publicToken: remote.publicToken }),
+        resumeByPublicToken({ publicToken: a.publicToken }),
         advanceQueue({ hospitalId, doctorId, timezone: TZ }),
       ]);
       const rows = await tokensOf();
       expect(rows.filter((r) => r.status === 'CALLED')).toHaveLength(1);
       expect(rows.map((r) => r.token).sort()).toEqual([1, 2]);
     });
-
-    it('a held (temporarily absent) patient stays out of history and returns on arrival', async () => {
-      const a = await book('walk_in');
-      await applyQueueAction({ hospitalId, appointmentId: a.appointment.id, action: 'hold', timezone: TZ });
-      let view = (await getPublicQueueView(a.publicToken))!;
-      expect(view.status).toBe('HELD');
-      expect(view.canCheckIn).toBe(true);
-
-      expect(await arriveByPublicToken({ publicToken: a.publicToken })).toMatchObject({ outcome: 'arrived' });
-      view = (await getPublicQueueView(a.publicToken))!;
-      expect(view.status).toBe('WAITING');
-      expect(view.tokenNumber).toBe(1);
-    });
   });
 
   describe('late return', () => {
-    it('a skipped patient can check in from their link', async () => {
-      const a = await book('walk_in');
-      await book('walk_in');
-      await advanceQueue({ hospitalId, doctorId, timezone: TZ });
-      await applyQueueAction({ hospitalId, appointmentId: a.appointment.id, action: 'skip', timezone: TZ });
-      expect((await getPublicQueueView(a.publicToken))!.canCheckIn).toBe(true);
-      expect(await arriveByPublicToken({ publicToken: a.publicToken })).toMatchObject({ outcome: 'arrived' });
-      expect((await getPublicQueueView(a.publicToken))!.status).toBe('WAITING');
-    });
-
-    it('a skipped patient who comes back goes behind the next two present patients, tokens unchanged', async () => {
+    it('a held patient who comes back after their turn goes behind the next two waiting, tokens unchanged', async () => {
       const first = await book('walk_in'); // 1
       await book('walk_in'); // 2
       await book('walk_in'); // 3
       await book('walk_in'); // 4
       await book('walk_in'); // 5
 
-      await advanceQueue({ hospitalId, doctorId, timezone: TZ }); // calls 1
-      await applyQueueAction({ hospitalId, appointmentId: first.appointment.id, action: 'skip', timezone: TZ });
+      await advanceQueue({ hospitalId, doctorId, timezone: TZ }); // calls 1 — not there
+      await applyQueueAction({ hospitalId, appointmentId: first.appointment.id, action: 'hold', timezone: TZ });
       await advanceQueue({ hospitalId, doctorId, timezone: TZ }); // calls 2
 
       // Token 1 returns while 2 is with the doctor: frontier 2 > 1, so late.
-      expect(await arriveByPublicToken({ publicToken: first.publicToken })).toMatchObject({ outcome: 'arrived', late: true });
+      await applyQueueAction({ hospitalId, appointmentId: first.appointment.id, action: 'resume', timezone: TZ });
 
       const called: number[] = [];
       for (let i = 0; i < 4; i += 1) {
@@ -391,7 +336,7 @@ describe.skipIf(!enabled)('arrival, priority and capacity', () => {
 
   describe('call numbers', () => {
     it('are issued 1, 2, 3 in serving order while tokens stay untouched', async () => {
-      const remote = await book('whatsapp'); // token 1, not here
+      const t1 = await book('whatsapp'); // token 1
       const t2 = await book('walk_in'); // token 2
       const t3 = await book('walk_in'); // token 3
       await setPriority({ hospitalId, appointmentId: t3.appointment.id, priority: 10 });
@@ -400,21 +345,24 @@ describe.skipIf(!enabled)('arrival, priority and capacity', () => {
       let snapshot = (await getQueueSnapshot({ hospitalId, doctorId, timezone: TZ }))!;
       expect(snapshot.currentToken).toBe(3);
       expect(snapshot.currentCallNumber).toBe(1);
-      // Token 2 is next: call 2. Token 1 is not here, so has no call number yet.
-      expect(snapshot.rows.find((r) => r.tokenNumber === 2)?.callNumber).toBe(2);
-      expect(snapshot.rows.find((r) => r.tokenNumber === 1)?.callNumber).toBeNull();
+      // Tokens 1 and 2 will be calls 2 and 3.
+      expect(snapshot.rows.find((r) => r.tokenNumber === 1)?.callNumber).toBe(2);
+      expect(snapshot.rows.find((r) => r.tokenNumber === 2)?.callNumber).toBe(3);
 
-      // The absent patient's own page tells them what they'd get on arriving.
-      let view = (await getPublicQueueView(remote.publicToken))!;
-      expect(view).toMatchObject({ tokenNumber: 1, callNumber: 2, callNumberIfArrived: true, currentCallNumber: 1 });
+      let view = (await getPublicQueueView(t1.publicToken))!;
+      expect(view).toMatchObject({ tokenNumber: 1, callNumber: 2, currentCallNumber: 1 });
 
-      await arriveByPublicToken({ publicToken: remote.publicToken });
+      // Token 1 is on hold: no call number while away; token 2 moves up to call 2.
+      await applyQueueAction({ hospitalId, appointmentId: t1.appointment.id, action: 'hold', timezone: TZ });
+      view = (await getPublicQueueView(t1.publicToken))!;
+      expect(view.callNumber).toBeNull();
+      view = (await getPublicQueueView(t2.publicToken))!;
+      expect(view).toMatchObject({ tokenNumber: 2, callNumber: 2 });
+
       await advanceQueue({ hospitalId, doctorId, timezone: TZ });
       snapshot = (await getQueueSnapshot({ hospitalId, doctorId, timezone: TZ }))!;
-      expect(snapshot.currentToken).toBe(1);
+      expect(snapshot.currentToken).toBe(2);
       expect(snapshot.currentCallNumber).toBe(2);
-      view = (await getPublicQueueView(t2.publicToken))!;
-      expect(view).toMatchObject({ tokenNumber: 2, callNumber: 3, callNumberIfArrived: false });
     });
 
     it('concurrent Next presses never share a call number', async () => {
