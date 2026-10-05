@@ -19,6 +19,7 @@ import {
   LayersIcon,
   ActivityIcon,
 } from '@/components/icons';
+import { SaveButton, SaveForm } from '@/components/save-form';
 import { requireSession } from '@/lib/auth/session';
 import { canConfigureHospital, listBranches, listStaffMembers } from '@/lib/services/auth';
 import { describeLimit } from '@/lib/services/entitlements';
@@ -352,8 +353,9 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                     </form>
                   </div>
 
-                  <form
+                  <SaveForm
                     action={setConsultationFeeAction}
+                    justSaved={params.saved === 'fee' && params.id === doctor.id}
                     className="flex flex-wrap items-end gap-2"
                   >
                     <input type="hidden" name="doctorId" value={doctor.id} />
@@ -373,17 +375,22 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                         required
                       />
                     </label>
-                    <Button type="submit" size="sm" variant="secondary">
-                      Save fee
-                    </Button>
-                  </form>
+                    <SaveButton label="Save fee" />
+                  </SaveForm>
 
                   {/*
                     Daily token quota. Tokens 1..reserved are kept for patients who
                     reach the hospital early; the rest are shared by online
                     bookings and further walk-ins. Blank quota = no limit.
                   */}
-                  <form action={setDoctorCapacityAction} className="space-y-2">
+                  <SaveForm
+                    action={setDoctorCapacityAction}
+                    justSaved={
+                      (params.saved === 'capacity' || params.saved === 'capacity_above_plan') &&
+                      params.id === doctor.id
+                    }
+                    className="space-y-2"
+                  >
                     <input type="hidden" name="doctorId" value={doctor.id} />
                     <div className="flex flex-wrap items-end gap-2">
                       <label className="block">
@@ -419,33 +426,36 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                         />
                       </label>
                       <label className="block">
-                        <span className="mb-1 block text-xs font-medium text-ink-600">Release unused walk-ins (min after start)</span>
+                        <span className="mb-1 block text-xs font-medium text-ink-600">Release unused walk-ins (min after Start OPD)</span>
                         <Input
                           name="walkInReleaseMinutes"
                           type="number"
                           min={0}
                           max={720}
                           defaultValue={doctor.walkInReleaseMinutes ?? ''}
-                          placeholder="Manual"
+                          placeholder="0 = at Start OPD"
                           className="w-28 py-1.5"
                         />
                       </label>
-                      <Button type="submit" size="sm" variant="secondary">
-                        Save quota
-                      </Button>
+                      <SaveButton label="Save quota" />
                     </div>
                     <p className="text-xs text-ink-500">
                       Tokens 1–{doctor.walkInReserved || 'N'} are kept for walk-ins who arrive early; online
-                      bookings and further walk-ins share the rest. Once the quota is full, only the owner can
+                      bookings and further walk-ins share the rest. Walk-in places not used by the time OPD
+                      starts go to online bookings automatically. Once the quota is full, only the owner can
                       issue an extra token.
                     </p>
-                  </form>
+                  </SaveForm>
 
                   {/*
                     Which login is this doctor. It decides who may write this
                     doctor's consultations and whose name goes on a prescription.
                   */}
-                  <form action={linkDoctorAccountAction} className="flex flex-wrap items-end gap-2">
+                  <SaveForm
+                    action={linkDoctorAccountAction}
+                    justSaved={params.saved === 'link' && params.id === doctor.id}
+                    className="flex flex-wrap items-end gap-2"
+                  >
                     <input type="hidden" name="doctorId" value={doctor.id} />
                     <label className="block">
                       <span className="mb-1 block text-xs font-medium text-ink-600">
@@ -466,10 +476,8 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                           ))}
                       </select>
                     </label>
-                    <Button type="submit" size="sm" variant="secondary">
-                      Save login
-                    </Button>
-                  </form>
+                    <SaveButton label="Save login" />
+                  </SaveForm>
 
                   {/* Mode badge */}
                   <div className="pt-0.5">

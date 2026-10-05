@@ -1,3 +1,4 @@
+import { SaveButton, SaveForm, SavedSummary } from '@/components/save-form';
 import { SavedNotice } from '@/components/saved-notice';
 import Link from 'next/link';
 import { Alert, Button, Card, CardHeader, EmptyState, Field, Input, cn } from '@/components/ui';
@@ -126,9 +127,12 @@ export default async function MedicinesPage({ searchParams }: PageProps<'/settin
             }
           />
           {rows.length === 0 ? (
-            <EmptyState title="Every medicine has a price" />
+            <div className="space-y-2 p-4 sm:p-5">
+              <SavedSummary text={typeof params.savedList === 'string' ? params.savedList : null} />
+              <EmptyState title="Every medicine has a price" />
+            </div>
           ) : (
-            <form action={setMedicinePricesAction}>
+            <SaveForm action={setMedicinePricesAction}>
               <input type="hidden" name="_mode" value="prices" />
               <input type="hidden" name="_q" value={q} />
               <ul className="divide-y divide-ink-200">
@@ -136,6 +140,8 @@ export default async function MedicinesPage({ searchParams }: PageProps<'/settin
                   <li key={row.id} className="flex items-center justify-between gap-3 px-4 py-2.5 sm:px-5">
                     <label htmlFor={`price-${row.id}`} className="min-w-0">
                       <span className="block truncate font-medium text-ink-900">{row.label}</span>
+                      {/* Lets the confirmation name what was priced. */}
+                      <input type="hidden" name={`label:${row.id}`} value={row.label} />
                       <span className="text-xs text-ink-500">per {row.unit}</span>
                     </label>
                     <span className="flex shrink-0 items-center gap-1.5">
@@ -152,14 +158,15 @@ export default async function MedicinesPage({ searchParams }: PageProps<'/settin
                 ))}
               </ul>
               <div className="sticky bottom-0 flex flex-col gap-2 border-t border-ink-200 bg-white px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between sm:px-5">
-                <p className="text-xs text-ink-500">
-                  {rows.length > 50 ? 'Showing the first 50; save to see the rest.' : 'Bills already issued keep their old price.'}
-                </p>
-                <Button type="submit" variant="primary" size="lg" className="w-full sm:w-auto">
-                  Save prices
-                </Button>
+                <div className="space-y-1">
+                  <SavedSummary text={typeof params.savedList === 'string' ? params.savedList : null} />
+                  <p className="text-xs text-ink-500">
+                    {rows.length > 50 ? 'Showing the first 50; save to see the rest.' : 'Bills already issued keep their old price.'}
+                  </p>
+                </div>
+                <SaveButton label="Save prices" countNoun="price" size="lg" variant="primary" className="w-full sm:w-auto" />
               </div>
-            </form>
+            </SaveForm>
           )}
         </Card>
       ) : null}
@@ -239,7 +246,13 @@ export default async function MedicinesPage({ searchParams }: PageProps<'/settin
         ) : (
           <ul className="divide-y divide-ink-200">
             {rows.map((row) => (
-              <MedicineRow key={row.id} row={row} q={q} filter={filter} />
+              <MedicineRow
+                key={row.id}
+                row={row}
+                q={q}
+                filter={filter}
+                savedForm={params.id === row.id && typeof params.form === 'string' ? params.form : null}
+              />
             ))}
           </ul>
         )}
@@ -266,7 +279,18 @@ export default async function MedicinesPage({ searchParams }: PageProps<'/settin
  * changes most; everything else sits behind "Edit details". Both forms post
  * every field, so a save never clears a value that was not on screen.
  */
-function MedicineRow({ row, q, filter }: { row: CatalogueRow; q: string; filter: CatalogueFilter }) {
+function MedicineRow({
+  row,
+  q,
+  filter,
+  savedForm,
+}: {
+  row: CatalogueRow;
+  q: string;
+  filter: CatalogueFilter;
+  /** Which of this row's forms just saved ('price' or 'details'), if any. */
+  savedForm: string | null;
+}) {
   const price = row.sellingPricePaise === null ? '' : (row.sellingPricePaise / 100).toFixed(2);
   const tax = row.taxRateBp ? String(row.taxRateBp / 100) : '';
   const keep = (
@@ -297,8 +321,13 @@ function MedicineRow({ row, q, filter }: { row: CatalogueRow; q: string; filter:
 
         <div className="flex flex-wrap items-center gap-2">
           {row.active ? (
-            <form action={updateMedicineAction} className="flex items-center gap-2">
+            <SaveForm
+              action={updateMedicineAction}
+              justSaved={savedForm === 'price'}
+              className="flex items-center gap-2"
+            >
               {keep}
+              <input type="hidden" name="_form" value="price" />
               <input type="hidden" name="name" value={row.name} />
               <input type="hidden" name="genericName" value={row.genericName ?? ''} />
               <input type="hidden" name="strength" value={row.strength ?? ''} />
@@ -314,10 +343,8 @@ function MedicineRow({ row, q, filter }: { row: CatalogueRow; q: string; filter:
                 placeholder="Price"
                 className="w-24 py-1.5"
               />
-              <Button type="submit" size="sm" variant="secondary">
-                Save
-              </Button>
-            </form>
+              <SaveButton label="Save" />
+            </SaveForm>
           ) : null}
           <form action={toggleMedicineAction}>
             {keep}
@@ -330,10 +357,15 @@ function MedicineRow({ row, q, filter }: { row: CatalogueRow; q: string; filter:
       </div>
 
       {row.active ? (
-        <details className="text-sm">
+        <details className="text-sm" open={savedForm === 'details'}>
           <summary className="cursor-pointer text-xs text-ink-500 hover:text-ink-800">Edit details</summary>
-          <form action={updateMedicineAction} className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <SaveForm
+            action={updateMedicineAction}
+            justSaved={savedForm === 'details'}
+            className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4"
+          >
             {keep}
+            <input type="hidden" name="_form" value="details" />
             <div className="col-span-2">
               <Field label="Name">
                 <Input name="name" defaultValue={row.name} required />
@@ -360,11 +392,9 @@ function MedicineRow({ row, q, filter }: { row: CatalogueRow; q: string; filter:
               <Input name="tax" defaultValue={tax} inputMode="decimal" />
             </Field>
             <div className="col-span-2 flex items-end sm:col-span-3 sm:justify-end">
-              <Button type="submit" size="sm" variant="primary">
-                Save details
-              </Button>
+              <SaveButton label="Save details" variant="primary" />
             </div>
-          </form>
+          </SaveForm>
         </details>
       ) : null}
     </li>

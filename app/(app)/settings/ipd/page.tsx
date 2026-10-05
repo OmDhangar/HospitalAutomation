@@ -1,3 +1,4 @@
+import { SaveButton, SaveForm } from '@/components/save-form';
 import { SavedNotice } from '@/components/saved-notice';
 import Link from 'next/link';
 import { Alert, Button, Card, CardHeader, EmptyState, Field, Input, cn } from '@/components/ui';
@@ -92,7 +93,13 @@ export default async function IpdSettingsPage({ searchParams }: PageProps<'/sett
       {wardRows.length === 0 ? null : (
         <div className="grid gap-5 lg:grid-cols-2 lg:items-start">
           {wardRows.map((ward) => (
-            <WardCard key={ward.id} ward={ward} roomItems={roomItems} showBranch={branchRows.length > 1} />
+            <WardCard
+              key={ward.id}
+              ward={ward}
+              roomItems={roomItems}
+              showBranch={branchRows.length > 1}
+              savedId={typeof params.id === 'string' ? params.id : null}
+            />
           ))}
         </div>
       )}
@@ -155,10 +162,13 @@ function WardCard({
   ward,
   roomItems,
   showBranch,
+  savedId,
 }: {
   ward: WardSetupRow;
   roomItems: Awaited<ReturnType<typeof listRoomChargeItems>>;
   showBranch: boolean;
+  /** The form the page was just reloaded by, to mark it saved. */
+  savedId: string | null;
 }) {
   const activeBeds = ward.beds.filter((bed) => bed.active);
   const occupied = activeBeds.filter((bed) => bed.occupied).length;
@@ -209,7 +219,11 @@ function WardCard({
           </ul>
         )}
 
-        <form action={addBedsAction} className="flex items-start gap-2">
+        <SaveForm
+          action={addBedsAction}
+          justSaved={savedId === `beds:${ward.id}`}
+          className="flex items-start gap-2"
+        >
           <input type="hidden" name="wardId" value={ward.id} />
           <div className="flex-1">
             <BedCountField
@@ -220,26 +234,29 @@ function WardCard({
               existingLabels={ward.beds.map((bed) => bed.label)}
             />
           </div>
-          <Button type="submit" size="lg" className="mt-[26px]">
-            Add
-          </Button>
-        </form>
+          <SaveButton label="Add" size="lg" className="mt-[26px]" />
+        </SaveForm>
 
-        <details className="text-sm">
+        {/* Stays open after a save so the confirmation is visible. */}
+        <details className="text-sm" open={savedId === ward.id}>
           <summary className="cursor-pointer text-xs font-medium text-ink-500 hover:text-ink-800">
             Edit ward, or take beds out of use
           </summary>
           <div className="mt-3 space-y-4">
-            <form action={updateWardAction} className="grid gap-3 sm:grid-cols-2">
+            <SaveForm
+              action={updateWardAction}
+              justSaved={savedId === ward.id}
+              className="grid gap-3 sm:grid-cols-2"
+            >
               <input type="hidden" name="wardId" value={ward.id} />
               <Field label="Ward name">
                 <Input name="name" required maxLength={60} defaultValue={ward.name} />
               </Field>
               <RoomChargeField roomItems={roomItems} defaultValue={ward.dailyChargeItemId} />
               <div className="sm:col-span-2">
-                <Button type="submit">Save ward</Button>
+                <SaveButton label="Save ward" size="md" />
               </div>
-            </form>
+            </SaveForm>
 
             {ward.beds.length > 0 ? (
               <ul className="divide-y divide-ink-100 rounded-lg ring-1 ring-ink-200">

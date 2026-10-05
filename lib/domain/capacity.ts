@@ -47,7 +47,10 @@ export type CapacityConfig = {
   dailyQuota: number | null;
   walkInReserved: number;
   onlineOpensMinutesBefore: number;
-  /** Minutes after the scheduled start at which unused reserved capacity is released; null = manual only. */
+  /**
+   * Minutes after Start OPD at which unused reserved walk-in capacity joins the
+   * shared pool. Null means 0: released the moment OPD starts.
+   */
   walkInReleaseMinutes: number | null;
 };
 
@@ -59,6 +62,8 @@ export type DayCapacityState = {
   walkInReleaseMinutes: number | null;
   reservedReleasedAt: Date | null;
   scheduledStartAt: Date | null;
+  /** Set only by Start OPD. Unused reserved capacity is released from here. */
+  sessionStartedAt: Date | null;
   /** Highest reserved token issued (1..W). */
   lastReservedToken: number;
   /** Highest shared/extra token issued; seeded to W. */
@@ -102,7 +107,7 @@ export function validateCapacityConfig(config: CapacityConfig): string[] {
       config.walkInReleaseMinutes < 0 ||
       config.walkInReleaseMinutes > MAX_WINDOW_MINUTES)
   ) {
-    errors.push('Release time must be between 0 and 720 minutes after the start.');
+    errors.push('Release time must be between 0 and 720 minutes after Start OPD.');
   }
   return errors;
 }
@@ -123,14 +128,23 @@ export function onlineOpensAt(day: Pick<DayCapacityState, 'scheduledStartAt' | '
   return new Date(day.scheduledStartAt.getTime() - day.onlineOpensMinutesBefore * 60_000);
 }
 
-/** Whether unused reserved walk-in capacity has been handed to the shared pool. */
+/**
+ * Whether unused reserved walk-in capacity has been handed to the shared pool.
+ *
+ * Automatic once OPD actually starts (Start OPD, plus the configured minutes,
+ * 0 by default): the reservation protects patients who arrive before the
+ * doctor, and once the doctor is seeing patients, places nobody walked in for
+ * are better used by online bookings. Keyed to the real start, not the
+ * scheduled one — a late doctor keeps the reservation until they arrive. The
+ * owner can also release by hand at any time.
+ */
 export function isReleased(
-  day: Pick<DayCapacityState, 'reservedReleasedAt' | 'walkInReleaseMinutes' | 'scheduledStartAt'>,
+  day: Pick<DayCapacityState, 'reservedReleasedAt' | 'walkInReleaseMinutes' | 'sessionStartedAt'>,
   now: Date,
 ): boolean {
   if (day.reservedReleasedAt) return true;
-  if (day.walkInReleaseMinutes === null || !day.scheduledStartAt) return false;
-  return now.getTime() >= day.scheduledStartAt.getTime() + day.walkInReleaseMinutes * 60_000;
+  if (!day.sessionStartedAt) return false;
+  return now.getTime() >= day.sessionStartedAt.getTime() + (day.walkInReleaseMinutes ?? 0) * 60_000;
 }
 
 const totalActive = (day: DayCapacityState) => day.reservedActive + day.sharedActive + day.extraActive;

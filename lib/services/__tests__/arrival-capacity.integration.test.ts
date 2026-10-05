@@ -292,6 +292,23 @@ describe.skipIf(!enabled)('arrival, priority and capacity', () => {
       expect(next.tokenNumber).toBe(4);
     });
 
+    it('Start OPD releases unused reserved walk-in places to online, without handing out reserved numbers', async () => {
+      await configure(3, 2);
+      await book('walk_in'); // 1 (reserved)
+      await book('whatsapp'); // 3 (shared)
+      await expect(book('whatsapp')).rejects.toMatchObject({ code: 'FULLY_BOOKED' });
+
+      await startSession({ hospitalId, doctorId, timezone: TZ });
+      const next = await book('whatsapp');
+      expect(next.tokenNumber).toBe(4);
+      expect(next.appointment.quotaPool).toBe('shared');
+
+      const [audit] = await withTenant(hospitalId, (tx) =>
+        tx.select({ metadata: auditLogs.metadata }).from(auditLogs).where(eq(auditLogs.action, 'opd.session.started')),
+      );
+      expect(audit.metadata).toMatchObject({ reserved_unused_released: 1 });
+    });
+
     it('extra tokens only once the quota is reached, continuing the sequence and audited', async () => {
       await configure(2, 1);
       await book('walk_in'); // 1

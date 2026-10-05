@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { requireWritableSession } from '@/lib/auth/session';
-import { parsePriceEdits } from '@/lib/domain/ipd-config';
+import { describeSavedPrices, parsePriceEdits, priceLabelsFrom } from '@/lib/domain/ipd-config';
 import { formatUndoToken, isId, parseUndoToken } from '@/lib/domain/undo';
 import { UndoError, undoCreateItem, undoPriceBatch } from '@/lib/services/ipd-undo';
 import { parsePercentToBasisPoints, parseRupeesToPaise } from '@/lib/domain/patient-billing';
@@ -104,7 +104,17 @@ export async function updateMedicineAction(form: FormData) {
     if (err instanceof MedicineError) back({ error: err.message }, form);
     throw err;
   }
-  back({ saved: 'Saved. Bills already issued keep their old price.', undo: formatUndoToken('prices', batch) }, form);
+  back(
+    {
+      saved: 'Saved. Bills already issued keep their old price.',
+      undo: formatUndoToken('prices', batch),
+      // Lets the page mark this medicine's form saved, beside its button.
+      id: String(form.get('medicineId') ?? ''),
+      // A row has a price form and a details form; mark the one used.
+      form: String(form.get('_form') ?? '') || 'price',
+    },
+    form,
+  );
 }
 
 export async function toggleMedicineAction(form: FormData) {
@@ -168,6 +178,11 @@ export async function setMedicinePricesAction(form: FormData) {
           ? 'No prices changed.'
           : `${changed} price${changed === 1 ? '' : 's'} saved${billed > 0 ? `, and ${billed} waiting entries billed` : ''}.`,
       ...(changed > 0 ? { undo: formatUndoToken('prices', batch) } : {}),
+      // Shown beside the Save button: priced medicines leave this list.
+      savedList: describeSavedPrices(
+        (edits as { ok: true; value: { id: string; sellingPricePaise: number }[] }).value,
+        priceLabelsFrom([...form.entries()].map(([key, value]) => [key, String(value)] as [string, string])),
+      ),
     },
     form,
   );

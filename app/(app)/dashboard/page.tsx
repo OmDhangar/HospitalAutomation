@@ -1102,7 +1102,7 @@ function CapacityStrip({
           <span>
             Reserved walk-in{' '}
             <span className="numeric">{capacity.reservedActive}/{capacity.walkInReserved}</span>
-            {capacity.released ? ' (released)' : ''}
+            {capacity.released ? ' (unused released to online)' : ''}
           </span>
         ) : null}
         <span>

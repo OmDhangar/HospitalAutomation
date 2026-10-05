@@ -22,6 +22,7 @@ const day = (over: Partial<DayCapacityState> = {}): DayCapacityState => ({
   walkInReleaseMinutes: null,
   reservedReleasedAt: null,
   scheduledStartAt: start,
+  sessionStartedAt: null,
   lastReservedToken: 0,
   lastToken: 30,
   reservedActive: 0,
@@ -99,11 +100,35 @@ describe('reserved walk-in pool and shared pool', () => {
     expect(decideAllocation(released, 'walk_in', at(1))).toEqual({ ok: true, pool: 'shared', tokenNumber: 11 });
   });
 
-  it('auto-release happens at scheduled start + release minutes', () => {
-    const s = day({ walkInReleaseMinutes: 30 });
-    expect(isReleased(s, at(29))).toBe(false);
-    expect(isReleased(s, at(30))).toBe(true);
+  it('releases unused reserved capacity automatically at Start OPD', () => {
+    // Not before OPD starts, however late it gets.
     expect(isReleased(day(), at(10_000))).toBe(false);
+    // Blank minutes means at the moment OPD starts.
+    const started = day({ sessionStartedAt: at(20) });
+    expect(isReleased(started, at(19))).toBe(false);
+    expect(isReleased(started, at(20))).toBe(true);
+    expect(isReleased(day({ sessionStartedAt: at(20), walkInReleaseMinutes: 0 }), at(20))).toBe(true);
+  });
+
+  it('can wait a configured number of minutes after Start OPD', () => {
+    const s = day({ sessionStartedAt: at(20), walkInReleaseMinutes: 30 });
+    expect(isReleased(s, at(49))).toBe(false);
+    expect(isReleased(s, at(50))).toBe(true);
+  });
+
+  it('the scheduled start alone does not release; the manual release still does', () => {
+    expect(isReleased(day({ walkInReleaseMinutes: 0 }), at(60))).toBe(false);
+    expect(isReleased(day({ reservedReleasedAt: at(-30) }), at(-30))).toBe(true);
+  });
+
+  it('after Start OPD, online gets the next shared number, never a reserved one', () => {
+    const s = day({ quota: 3, walkInReserved: 2, lastReservedToken: 1, reservedActive: 1, sharedActive: 1, lastToken: 3 });
+    expect(decideAllocation(s, 'online', at(5)).ok).toBe(false);
+    expect(decideAllocation({ ...s, sessionStartedAt: at(5) }, 'online', at(5))).toEqual({
+      ok: true,
+      pool: 'shared',
+      tokenNumber: 4,
+    });
   });
 
   it('a cancellation frees capacity but never its number', () => {
@@ -153,7 +178,7 @@ describe('quota and extra tokens', () => {
     const channels: CapacityChannel[] = ['walk_in', 'online', 'online_slot'];
     let seed = 3;
     for (let run = 0; run < 100; run += 1) {
-      let s = day({ quota: 12, walkInReserved: 4, lastToken: 4, walkInReleaseMinutes: run % 2 ? 20 : null });
+      let s = day({ quota: 12, walkInReserved: 4, lastToken: 4, walkInReleaseMinutes: run % 2 ? 20 : null, sessionStartedAt: run % 3 ? at(-10) : null });
       const seen = new Set<number>();
       for (let i = 0; i < 40; i += 1) {
         seed = (seed * 48271) % 2147483647;
