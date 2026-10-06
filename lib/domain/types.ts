@@ -47,6 +47,8 @@ export type QueueEntry = {
   status: AppointmentStatus;
   /** Any value above 0 means "priority". Priority patients are seen FIFO by `prioritySeq`. */
   priority: number;
+  /** True if patient was admitted through emergency. Takes top precedence in queue. */
+  isEmergency?: boolean;
   enqueuedAt: Date;
   /** Order in which priority was assigned, per doctor-day. Null for legacy rows. */
   prioritySeq?: number | null;

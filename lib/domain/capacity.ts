@@ -167,6 +167,7 @@ export function decideAllocation(
   day: DayCapacityState,
   channel: CapacityChannel,
   now: Date,
+  options?: { isSameDay?: boolean },
 ): AllocationDecision {
   const total = totalActive(day);
 
@@ -182,7 +183,8 @@ export function decideAllocation(
     }
     case 'online':
     case 'online_slot': {
-      if (channel === 'online') {
+      const isSameDay = options?.isSameDay ?? true;
+      if (isSameDay) {
         const opens = onlineOpensAt(day);
         if (opens && now.getTime() < opens.getTime()) {
           return { ok: false, reason: 'online_not_open', opensAt: opens };

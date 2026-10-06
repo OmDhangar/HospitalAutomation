@@ -173,7 +173,8 @@ export async function allocateTokenInTx(
     return { tokenNumber, pool: null };
   }
 
-  const decision = decideAllocation(state, args.channel, args.now);
+  const isSameDay = args.serviceDate === serviceDateIn(args.timezone, args.now);
+  const decision = decideAllocation(state, args.channel, args.now, { isSameDay });
   if (!decision.ok) throw refusal(decision, args.timezone);
 
   await tx

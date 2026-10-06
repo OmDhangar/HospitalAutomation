@@ -153,7 +153,9 @@ export const DEFAULT_LATE_REJOIN_AFTER = 2;
 
 const DEFAULT_CONTEXT: QueueContext = { lateRejoinAfter: DEFAULT_LATE_REJOIN_AFTER };
 
-const isPriority = (entry: QueueEntry): boolean => entry.priority > 0;
+export const isEmergency = (entry: QueueEntry): boolean => Boolean(entry.isEmergency);
+
+const isPriority = (entry: QueueEntry): boolean => entry.priority > 0 || Boolean(entry.isEmergency);
 
 /**
  * Whether Next may call this patient right now: anyone WAITING.
@@ -184,16 +186,29 @@ const NO_SEQ = Number.MAX_SAFE_INTEGER;
  * The single comparator for the serving order. Next and the ETA both use it.
  *
  * 1. Whoever is with the doctor (in consultation, then called).
- * 2. Priority patients, first-come first-served by when priority was given.
+ * 2. Emergency patients (isEmergency: true) — highest priority among waiting.
+ * 3. Priority patients, first-come first-served by when priority was given.
  *    A newly prioritised patient never overtakes an earlier one. Legacy rows
  *    without a sequence fall back to enqueue time, after the sequenced ones.
- * 3. Everyone else by token — the token is a stable place in line, so an early
+ * 4. Everyone else by token — the token is a stable place in line, so an early
  *    arrival with a later token waits for earlier tokens who are present, but
  *    not for those who are not (that part is eligibility, not order).
  */
 function compare(a: QueueEntry, b: QueueEntry): number {
   const weight = STATUS_WEIGHT[a.status]! - STATUS_WEIGHT[b.status]!;
   if (weight !== 0) return weight;
+
+  const aEmerg = isEmergency(a);
+  const bEmerg = isEmergency(b);
+  if (aEmerg !== bEmerg) return aEmerg ? -1 : 1;
+
+  if (aEmerg) {
+    return (
+      (a.prioritySeq ?? NO_SEQ) - (b.prioritySeq ?? NO_SEQ) ||
+      a.enqueuedAt.getTime() - b.enqueuedAt.getTime() ||
+      a.tokenNumber - b.tokenNumber
+    );
+  }
 
   const aPriority = isPriority(a);
   const bPriority = isPriority(b);

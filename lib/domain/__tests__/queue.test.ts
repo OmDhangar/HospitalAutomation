@@ -132,6 +132,51 @@ describe('ordering and patients ahead', () => {
     expect(patientsAhead(withPriority, 'vip')).toBe(1);
   });
 
+  it('places an emergency patient ahead of standard priority and regular patients', () => {
+    const emergEntry: QueueEntry = {
+      ...entry('emerg', 10, 'WAITING', 45, 0),
+      isEmergency: true,
+    };
+    const withEmergency = [
+      ...queue,
+      entry('vip', 9, 'WAITING', 40, 10),
+      emergEntry,
+    ];
+    // Order: 'a' (in consultation), 'emerg' (emergency), 'vip' (priority), 'b', 'c', 'd'
+    expect(orderQueue(withEmergency).map((e) => e.appointmentId)).toEqual([
+      'a',
+      'emerg',
+      'vip',
+      'b',
+      'c',
+      'd',
+    ]);
+    expect(patientsAhead(withEmergency, 'emerg')).toBe(1);
+    expect(patientsAhead(withEmergency, 'vip')).toBe(2);
+  });
+
+  it('sequences multiple emergency patients FIFO by prioritySeq / arrival', () => {
+    const emerg1: QueueEntry = {
+      ...entry('emerg1', 11, 'WAITING', 45, 0),
+      isEmergency: true,
+      prioritySeq: 1,
+    };
+    const emerg2: QueueEntry = {
+      ...entry('emerg2', 12, 'WAITING', 46, 0),
+      isEmergency: true,
+      prioritySeq: 2,
+    };
+    const withMultipleEmerg = [...queue, emerg2, emerg1];
+    expect(orderQueue(withMultipleEmerg).map((e) => e.appointmentId)).toEqual([
+      'a',
+      'emerg1',
+      'emerg2',
+      'b',
+      'c',
+      'd',
+    ]);
+  });
+
   it('identifies who is currently with the doctor', () => {
     expect(currentlyServing(queue)?.appointmentId).toBe('a');
     expect(currentlyServing([entry('b', 2, 'WAITING', 10)])).toBeNull();

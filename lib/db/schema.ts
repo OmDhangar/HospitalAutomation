@@ -595,6 +595,8 @@ export const appointments = pgTable(
     status: appointmentStatus('status').notNull().default('CREATED'),
     /** Higher sorts earlier. Reception raises it for an explicit priority insert. */
     priority: smallint('priority').notNull().default(0),
+    /** Flagged when admitted as an emergency. Highest queue priority and red alert UI. */
+    isEmergency: boolean('is_emergency').notNull().default(false),
     source: appointmentSource('source').notNull(),
     /** Unguessable, never sequential; the patient's only credential. */
     publicToken: text('public_token').notNull().unique(),
