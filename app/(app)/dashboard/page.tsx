@@ -50,6 +50,7 @@ import {
   AddWalkInForm,
   CallNextButton,
   DoctorTabs,
+  EmergencyButton,
   PausePatientButton,
   PriorityButton,
   QueueActionButton,
@@ -280,33 +281,55 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
             <ConsultationGateProvider>
             <div className="space-y-5 lg:col-span-2">
               {/* NOW SERVING CARD */}
-              <Card>
+              <Card className={cn(serving?.isEmergency && 'border-2 border-red-500 ring-2 ring-red-300 shadow-lg shadow-red-100/50')}>
+                {serving?.isEmergency ? (
+                  <div className="flex items-center justify-between gap-3 bg-red-600 px-4 py-2.5 text-white sm:px-6 animate-pulse shadow-sm">
+                    <div className="flex items-center gap-2">
+                      <span className="flex size-2.5 rounded-full bg-white animate-ping" />
+                      <span className="text-xs sm:text-sm font-black tracking-wider uppercase">
+                        🚨 EMERGENCY ADMISSION — IMMEDIATE ATTENTION
+                      </span>
+                    </div>
+                    <span className="rounded bg-red-700/90 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide">
+                      High Priority Case
+                    </span>
+                  </div>
+                ) : null}
                 <CardHeader
                   title="Now Serving"
                   hint={serving ? servingHint(serving) : 'Room is ready'}
                 />
 
-                <div className="p-4 sm:p-6">
+                <div className={cn('p-4 sm:p-6', serving?.isEmergency && 'bg-red-50/20')}>
                   {serving ? (
                     <div className="flex flex-wrap items-center gap-4 sm:gap-6">
                       <div
                         className={cn(
                           'flex size-20 shrink-0 items-center justify-center rounded-2xl sm:size-28',
-                          'bg-brand-600 text-white shadow-sm',
+                          serving.isEmergency
+                            ? 'bg-red-600 text-white shadow-md ring-4 ring-red-300 animate-pulse'
+                            : 'bg-brand-600 text-white shadow-sm',
                           serving.status === 'CALLED' && 'pulse-ring',
                         )}
                       >
                         <ServingNumber row={serving} />
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-2xl font-bold text-ink-900">
-                          {serving.patientName}
-                          {serving.patientAge ? (
-                            <span className="ml-2 text-lg font-normal text-ink-500">
-                              ({serving.patientAge} yrs)
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="truncate text-2xl font-bold text-ink-900">
+                            {serving.patientName}
+                            {serving.patientAge ? (
+                              <span className="ml-2 text-lg font-normal text-ink-500">
+                                ({serving.patientAge} yrs)
+                              </span>
+                            ) : null}
+                          </p>
+                          {serving.isEmergency ? (
+                            <span className="inline-flex items-center gap-1 rounded-md bg-red-600 px-2.5 py-0.5 text-xs font-black text-white shadow-xs animate-pulse">
+                              <span>🚨</span> EMERGENCY
                             </span>
                           ) : null}
-                        </p>
+                        </div>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <StatusPill status={serving.status} />
                           <TokenChip token={serving.tokenNumber} />
@@ -390,7 +413,11 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
               </Card>
 
               {serving && showConsultation ? (
-                <ConsultationPanel key={serving.appointmentId} appointmentId={serving.appointmentId} />
+                <ConsultationPanel
+                  key={serving.appointmentId}
+                  appointmentId={serving.appointmentId}
+                  isEmergency={serving.isEmergency}
+                />
               ) : null}
 
               {/* WAITING QUEUE LIST */}
@@ -556,7 +583,17 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
             waitingCount={waiting.length}
             queueContent={
               <>
-                <Card>
+                <Card className={cn(serving?.isEmergency && 'border-2 border-red-500 ring-2 ring-red-300 shadow-md shadow-red-100/50')}>
+                  {serving?.isEmergency ? (
+                    <div className="flex items-center justify-between gap-3 bg-red-600 px-4 py-2 text-white sm:px-6 animate-pulse">
+                      <div className="flex items-center gap-2">
+                        <span className="flex size-2 rounded-full bg-white animate-ping" />
+                        <span className="text-xs font-black tracking-wider uppercase">
+                          🚨 Emergency Case In Consultation
+                        </span>
+                      </div>
+                    </div>
+                  ) : null}
                   <CardHeader
                     title="Now serving"
                     hint={serving ? `${snapshot?.doctorName} · ${servingHint(serving)}` : snapshot?.doctorName}
@@ -569,27 +606,36 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                     }
                   />
 
-                  <div className="p-4 sm:p-6">
+                  <div className={cn('p-4 sm:p-6', serving?.isEmergency && 'bg-red-50/20')}>
                     {serving ? (
                       <div className="flex flex-wrap items-center gap-4 sm:gap-6">
                         <div
                           className={cn(
                             'flex size-20 shrink-0 items-center justify-center rounded-2xl sm:size-28',
-                            'bg-brand-600 text-white',
+                            serving.isEmergency
+                              ? 'bg-red-600 text-white shadow-md ring-4 ring-red-300 animate-pulse'
+                              : 'bg-brand-600 text-white',
                             serving.status === 'CALLED' && 'pulse-ring',
                           )}
                         >
                           <ServingNumber row={serving} />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-2xl font-semibold text-ink-900">
-                            {serving.patientName}
-                            {serving.patientAge ? (
-                              <span className="ml-2 text-lg font-normal text-ink-500">
-                                ({serving.patientAge} yrs)
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="truncate text-2xl font-semibold text-ink-900">
+                              {serving.patientName}
+                              {serving.patientAge ? (
+                                <span className="ml-2 text-lg font-normal text-ink-500">
+                                  ({serving.patientAge} yrs)
+                                </span>
+                              ) : null}
+                            </p>
+                            {serving.isEmergency ? (
+                              <span className="inline-flex items-center gap-1 rounded-md bg-red-600 px-2 py-0.5 text-xs font-black text-white shadow-xs animate-pulse">
+                                <span>🚨</span> EMERGENCY
                               </span>
                             ) : null}
-                          </p>
+                          </div>
                           <div className="mt-2 flex flex-wrap items-center gap-2">
                             <StatusPill status={serving.status} />
                             <TokenChip token={serving.tokenNumber} />
@@ -837,21 +883,44 @@ function WaitingRow({
   payment: PaymentPillContext;
 }) {
   return (
-    <li className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 sm:px-5 sm:py-3.5 hover:bg-ink-50/50 transition-colors">
+    <li
+      className={cn(
+        'flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 sm:px-5 sm:py-3.5 transition-colors',
+        row.isEmergency
+          ? 'bg-red-50/70 border-l-4 border-l-red-600 border-y border-r border-red-200 shadow-2xs'
+          : 'hover:bg-ink-50/50',
+      )}
+    >
       <div className="flex items-start sm:items-center gap-3 min-w-0">
         {row.callNumber != null ? (
           /* The serving order: what this patient will be called as. */
           <span
-            className="shrink-0 flex flex-col items-center justify-center size-11 rounded-xl bg-brand-50 border border-brand-200 text-brand-800 leading-none"
-            title={`Will be called as number ${row.callNumber}`}
+            className={cn(
+              'shrink-0 flex flex-col items-center justify-center size-11 rounded-xl leading-none shadow-xs',
+              row.isEmergency
+                ? 'bg-red-600 border border-red-700 text-white animate-pulse'
+                : 'bg-brand-50 border border-brand-200 text-brand-800',
+            )}
+            title={row.isEmergency ? `EMERGENCY: Will be called as number ${row.callNumber}` : `Will be called as number ${row.callNumber}`}
           >
-            <span className="text-[9px] font-semibold uppercase tracking-wide text-brand-600">Call</span>
+            <span className={cn('text-[9px] font-semibold uppercase tracking-wide', row.isEmergency ? 'text-red-100' : 'text-brand-600')}>
+              Call
+            </span>
             <span className="numeric text-base font-bold">{row.callNumber}</span>
           </span>
         ) : (
           /* Not here yet: no place in the call order, only their token. */
-          <span className="shrink-0 flex flex-col items-center justify-center size-11 rounded-xl bg-ink-50 border border-ink-200 text-ink-600 leading-none">
-            <span className="text-[9px] font-semibold uppercase tracking-wide text-ink-500">Token</span>
+          <span
+            className={cn(
+              'shrink-0 flex flex-col items-center justify-center size-11 rounded-xl leading-none shadow-xs',
+              row.isEmergency
+                ? 'bg-red-600 border border-red-700 text-white animate-pulse'
+                : 'bg-ink-50 border border-ink-200 text-ink-600',
+            )}
+          >
+            <span className={cn('text-[9px] font-semibold uppercase tracking-wide', row.isEmergency ? 'text-red-100' : 'text-ink-500')}>
+              Token
+            </span>
             <span className="numeric text-base font-bold">{row.tokenNumber}</span>
           </span>
         )}
@@ -866,6 +935,11 @@ function WaitingRow({
                 </span>
               ) : null}
             </p>
+            {row.isEmergency ? (
+              <span className="inline-flex items-center gap-1 rounded-md bg-red-600 px-2 py-0.5 text-[11px] font-black text-white shadow-xs animate-pulse">
+                <span>🚨</span> EMERGENCY
+              </span>
+            ) : null}
             {row.scheduledSlotAt ? (
               <span className="inline-flex items-center gap-1 rounded bg-brand-100 px-1.5 py-0.5 text-[10px] font-bold text-brand-900">
                 <ClockIcon className="size-3 text-brand-800" />
@@ -891,13 +965,17 @@ function WaitingRow({
             {row.etaAt ? (
               <span>· expected ~{formatTimeIn(timezone, row.etaAt)}</span>
             ) : null}
-            {row.priority > 0 ? (
+            {row.isEmergency ? (
+              <span className="inline-flex items-center gap-0.5 text-red-700 font-bold ml-1">
+                · Top Emergency Priority
+              </span>
+            ) : row.priority > 0 ? (
               <span className="inline-flex items-center gap-0.5 text-amber-700 font-semibold ml-1">
                 · <ZapIcon className="size-3 text-amber-600 inline" /> Priority
                 {row.priorityRank ? ` #${row.priorityRank}` : ''}
               </span>
             ) : null}
-            {row.queueAfterToken != null && row.priority === 0 ? (
+            {row.queueAfterToken != null && row.priority === 0 && !row.isEmergency ? (
               <span className="text-ink-600">· returned late, after token {row.queueAfterToken}</span>
             ) : null}
             {row.quotaPool === 'extra' ? (
@@ -908,7 +986,8 @@ function WaitingRow({
       </div>
 
       <div className="flex items-center gap-1.5 self-end sm:self-auto shrink-0 pt-1 sm:pt-0">
-        {row.priority === 0 ? (
+        <EmergencyButton doctorId={doctorId} appointmentId={row.appointmentId} isEmergency={row.isEmergency} />
+        {row.priority === 0 && !row.isEmergency ? (
           <PriorityButton doctorId={doctorId} appointmentId={row.appointmentId} />
         ) : null}
         <PausePatientButton

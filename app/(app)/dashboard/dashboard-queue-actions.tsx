@@ -24,6 +24,7 @@ import {
   queueActionDynamic,
   releaseReservedDynamic,
   resumeAppointmentDynamic,
+  setEmergencyDynamic,
   setPriorityDynamic,
   startSessionDynamic,
   togglePauseDynamic,
@@ -134,6 +135,7 @@ export function AddWalkInForm({
   const [address, setAddress] = useState('');
   const [paid, setPaid] = useState(false);
   const [whatsappOptIn, setWhatsappOptIn] = useState(true);
+  const [isEmergency, setIsEmergency] = useState(false);
   const [isPending, startTransition] = useTransition();
   // Set when the server says the quota is full, as well as from the page.
   const [full, setFull] = useState(quotaReached);
@@ -164,13 +166,21 @@ export function AddWalkInForm({
         whatsappOptIn,
         paid: canCollect && feeKnown && paid,
         extraToken: offerExtra && extra,
+        isEmergency,
       });
 
       if (res.ok) {
-        toast.success(
-          `Token #${res.tokenNumber} Created!`,
-          `${name.trim()}${parsedAge ? ` (${parsedAge}y)` : ''} added to the queue successfully.`,
-        );
+        if (res.isEmergency) {
+          toast.success(
+            `🚨 Emergency Token #${res.tokenNumber} Created!`,
+            `${name.trim()}${parsedAge ? ` (${parsedAge}y)` : ''} admitted with Top Emergency Priority & Red Alert.`,
+          );
+        } else {
+          toast.success(
+            `Token #${res.tokenNumber} Created!`,
+            `${name.trim()}${parsedAge ? ` (${parsedAge}y)` : ''} added to the queue successfully.`,
+          );
+        }
         if (res.warning) toast.error('Payment not recorded', res.warning);
         setName('');
         setAge('');
@@ -178,6 +188,7 @@ export function AddWalkInForm({
         setAddress('');
         setPaid(false);
         setExtra(false);
+        setIsEmergency(false);
         // Ready for the next person in line without reaching for the mouse.
         nameRef.current?.focus();
       } else {
@@ -290,6 +301,30 @@ export function AddWalkInForm({
         </div>
       ) : null}
 
+      <div className="rounded-xl border border-red-200 bg-red-50/70 p-3.5 flex items-center justify-between gap-3 shadow-2xs">
+        <div className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5 text-sm font-bold text-red-950">
+            <span className="size-2.5 rounded-full bg-red-600 animate-ping shrink-0" />
+            Emergency Admission
+          </span>
+          <p className="text-xs text-red-900/80 mt-0.5">
+            Places patient at the top of the queue and triggers a Red Alert for the doctor.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setIsEmergency(!isEmergency)}
+          className={cn(
+            'shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer select-none',
+            isEmergency
+              ? 'bg-red-600 text-white ring-2 ring-red-600 shadow-red-200 animate-pulse'
+              : 'bg-white text-red-800 border border-red-300 hover:bg-red-100',
+          )}
+        >
+          {isEmergency ? '🚨 Emergency ON' : 'Mark Emergency'}
+        </button>
+      </div>
+
       <label className="flex items-start gap-2.5 text-sm text-ink-700 cursor-pointer select-none">
         <input
           type="checkbox"
@@ -332,13 +367,24 @@ export function AddWalkInForm({
 
       <Button
         type="submit"
-        variant="primary"
+        variant={isEmergency ? 'primary' : 'primary'}
         size="lg"
-        className="w-full"
+        className={cn(
+          'w-full font-bold transition-all',
+          isEmergency && 'bg-red-600 hover:bg-red-700 text-white ring-2 ring-red-600 shadow-md shadow-red-200',
+        )}
         isLoading={isPending}
       >
         <UserPlusIcon className="size-4 mr-1.5" />
-        {isPending ? 'Adding Walk-in...' : offerExtra && extra ? 'Issue extra token' : 'Add to queue'}
+        {isPending
+          ? isEmergency
+            ? 'Admitting Emergency Patient...'
+            : 'Adding Walk-in...'
+          : isEmergency
+            ? '🚨 Admit Emergency Patient'
+            : offerExtra && extra
+              ? 'Issue extra token'
+              : 'Add to queue'}
       </Button>
     </form>
   );
@@ -548,6 +594,54 @@ export function PriorityButton({
     >
       <ZapIcon className="size-3 text-amber-600" />
       Priority
+    </Button>
+  );
+}
+
+export function EmergencyButton({
+  doctorId,
+  appointmentId,
+  isEmergency = false,
+}: {
+  doctorId: string;
+  appointmentId: string;
+  isEmergency?: boolean;
+}) {
+  const toast = useToast();
+  const [isPending, startTransition] = useTransition();
+
+  const handleEmergency = () => {
+    startTransition(async () => {
+      const res = await setEmergencyDynamic({ doctorId, appointmentId, isEmergency: !isEmergency });
+      if (res.ok) {
+        toast.success(
+          res.isEmergency ? '🚨 Emergency Declared' : 'Emergency Cleared',
+          res.isEmergency
+            ? 'Patient moved to the top of the queue with Red Alert for doctor.'
+            : 'Patient returned to regular status.',
+        );
+      } else {
+        toast.error('Emergency update failed', res.error);
+      }
+    });
+  };
+
+  return (
+    <Button
+      type="button"
+      size="sm"
+      title={isEmergency ? 'Clear emergency status' : 'Escalate to Emergency (Top priority + Red Alert)'}
+      onClick={handleEmergency}
+      isLoading={isPending}
+      className={cn(
+        'inline-flex items-center gap-1 font-bold shadow-xs transition-all',
+        isEmergency
+          ? 'bg-red-600 text-white border border-red-700 hover:bg-red-700 animate-pulse'
+          : 'bg-red-50 text-red-700 border border-red-200 hover:bg-red-100',
+      )}
+    >
+      <span>🚨</span>
+      {isEmergency ? 'Emergency' : 'Emergency'}
     </Button>
   );
 }

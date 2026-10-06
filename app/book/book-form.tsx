@@ -247,10 +247,24 @@ export function BookSlotForm({
               </span>
             </div>
 
-            {details.slots.length === 0 ? (
+            {isToday && details.isOnlineOpen === false && details.onlineOpensAt ? (
+              <div className="mb-3 rounded-xl bg-amber-50 border border-amber-200 p-3.5 text-xs text-amber-800 flex items-start gap-2.5">
+                <ClockIcon className="size-4 text-amber-700 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold text-amber-900">Online Booking Not Open Yet</p>
+                  <p className="mt-0.5">
+                    Online appointments for today open at <strong>{details.onlineOpensAt}</strong>. You can book ahead for tomorrow or check other dates.
+                  </p>
+                </div>
+              </div>
+            ) : null}
+
+            {details.slots.length === 0 || availableSlotsCount === 0 ? (
               <div className="rounded-lg bg-ink-50 p-4 text-center border border-ink-200">
                 <p className="text-xs font-medium text-ink-600">
-                  No available slots for {formatTabLabel(details.serviceDate)}.
+                  {isToday && details.isOnlineOpen === false && details.onlineOpensAt
+                    ? `Online booking for today opens at ${details.onlineOpensAt}.`
+                    : `No available slots for ${formatTabLabel(details.serviceDate)}.`}
                 </p>
                 <button
                   type="button"

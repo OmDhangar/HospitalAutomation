@@ -10,6 +10,7 @@ import {
   getPublicQueueView,
   getQueueSnapshot,
   setDoctorPaused,
+  setEmergency,
   setPriority,
   startSession,
 } from '@/lib/services/queue';
@@ -527,6 +528,50 @@ describe.skipIf(!enabled)('queue engine', () => {
       expect(view.paused).toBe(true);
       expect(view.eta).toBeNull();
       expect(view.patientsAhead).toBe(0);
+    });
+  });
+
+  describe('emergency admissions', () => {
+    it('admits an emergency walk-in and places them at the top of the waiting line', async () => {
+      await walkIn(1);
+      await walkIn(2);
+
+      const emerg = await createWalkIn({
+        hospitalId,
+        branchId,
+        doctorId,
+        timezone: TZ,
+        patient: { phoneE164: '+919900000099', name: 'Emergency Case' },
+        isEmergency: true,
+      });
+
+      expect(emerg.appointment.isEmergency).toBe(true);
+      expect(emerg.appointment.priority).toBe(100);
+
+      const snapshot = (await getQueueSnapshot({ hospitalId, doctorId, timezone: TZ }))!;
+      expect(snapshot.rows[0].appointmentId).toBe(emerg.appointment.id);
+      expect(snapshot.rows[0].isEmergency).toBe(true);
+      expect(snapshot.rows[0].tokenNumber).toBe(emerg.tokenNumber);
+    });
+
+    it('escalates an existing waiting patient to emergency and gives them top priority', async () => {
+      const first = await walkIn(1);
+      const second = await walkIn(2);
+      await setPriority({ hospitalId, appointmentId: first.appointment.id, priority: 10 });
+
+      // Escalate patient 2 to Emergency
+      const res = await setEmergency({
+        hospitalId,
+        appointmentId: second.appointment.id,
+        isEmergency: true,
+      });
+      expect(res.isEmergency).toBe(true);
+
+      const snapshot = (await getQueueSnapshot({ hospitalId, doctorId, timezone: TZ }))!;
+      // Emergency patient 2 must come ahead of priority patient 1
+      expect(snapshot.rows[0].appointmentId).toBe(second.appointment.id);
+      expect(snapshot.rows[0].isEmergency).toBe(true);
+      expect(snapshot.rows[1].appointmentId).toBe(first.appointment.id);
     });
   });
 });

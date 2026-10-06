@@ -74,7 +74,13 @@ const formatDate = (iso: string) =>
     year: 'numeric',
   });
 
-export function ConsultationPanel({ appointmentId }: { appointmentId: string }) {
+export function ConsultationPanel({
+  appointmentId,
+  isEmergency = false,
+}: {
+  appointmentId: string;
+  isEmergency?: boolean;
+}) {
   const toast = useToast();
   const [view, setView] = useState<ConsultationView | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -323,6 +329,20 @@ export function ConsultationPanel({ appointmentId }: { appointmentId: string }) 
           </div>
         }
       />
+
+      {isEmergency ? (
+        <div className="flex items-center justify-between gap-3 border-y border-red-300 bg-red-600 px-4 py-3 text-white sm:px-6 shadow-inner animate-pulse">
+          <div className="flex items-center gap-2.5">
+            <span className="flex size-3 rounded-full bg-white shadow-sm" />
+            <span className="text-sm font-black tracking-wider uppercase">
+              🚨 EMERGENCY ADMISSION — PRIORITY CLINICAL ATTENTION
+            </span>
+          </div>
+          <span className="rounded-md bg-white/20 px-2 py-0.5 text-xs font-bold tracking-wide uppercase">
+            Emergency Case
+          </span>
+        </div>
+      ) : null}
 
       {historyOpen ? <HistoryList visits={history} loading={isFetching && !history} /> : null}
 

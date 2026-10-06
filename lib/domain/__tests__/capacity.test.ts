@@ -74,11 +74,20 @@ describe('reserved walk-in pool and shared pool', () => {
     expect(seen).toEqual([['online', 4], ['walk_in', 5], ['online', 6]]);
   });
 
-  it('online queue booking waits for the opening window; slots do not', () => {
+  it('online queue and same-day slot booking wait for the opening window; future days do not', () => {
     const d = decideAllocation(day(), 'online', at(-121));
     expect(d).toEqual({ ok: false, reason: 'online_not_open', opensAt: at(-120) });
     expect(decideAllocation(day(), 'online', at(-120)).ok).toBe(true);
-    expect(decideAllocation(day(), 'online_slot', at(-24 * 60)).ok).toBe(true);
+    // Same-day slot before opening window is refused
+    expect(decideAllocation(day(), 'online_slot', at(-121), { isSameDay: true })).toEqual({
+      ok: false,
+      reason: 'online_not_open',
+      opensAt: at(-120),
+    });
+    // Same-day slot once open succeeds
+    expect(decideAllocation(day(), 'online_slot', at(-120), { isSameDay: true }).ok).toBe(true);
+    // Future-day slot advance booking succeeds
+    expect(decideAllocation(day(), 'online_slot', at(-24 * 60), { isSameDay: false }).ok).toBe(true);
   });
 
   it('online is open at any time when no start time is configured', () => {

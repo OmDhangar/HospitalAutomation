@@ -45,6 +45,8 @@ export type DoctorBookingDetails = {
   };
   serviceDate: string;
   slots: TimeSlot[];
+  onlineOpensAt?: string | null;
+  isOnlineOpen?: boolean;
 };
 
 /** A booking refused for a reason the patient can be told. */
@@ -120,6 +122,7 @@ export async function getDoctorBookingDetails(args: {
   hospitalId: string;
   doctorId: string;
   serviceDate?: string;
+  now?: Date;
 }): Promise<DoctorBookingDetails | null> {
   return withTenant(args.hospitalId, async (tx) => {
     const [row] = await tx
@@ -143,7 +146,7 @@ export async function getDoctorBookingDetails(args: {
     if (!row) return null;
 
     const timezone = row.timezone ?? 'Asia/Kolkata';
-    const now = new Date();
+    const now = args.now ?? new Date();
     const serviceDate = args.serviceDate || serviceDateIn(timezone, now);
 
     // Slots as the scheduler computes them
@@ -151,6 +154,7 @@ export async function getDoctorBookingDetails(args: {
       hospitalId: args.hospitalId,
       doctorId: args.doctorId,
       serviceDate,
+      now,
     });
 
     const slots: TimeSlot[] = scheduleResult.slots.map((s) => ({
@@ -178,6 +182,10 @@ export async function getDoctorBookingDetails(args: {
       },
       serviceDate,
       slots,
+      onlineOpensAt: scheduleResult.onlineOpensAt
+        ? formatTimeIn(timezone, scheduleResult.onlineOpensAt)
+        : null,
+      isOnlineOpen: scheduleResult.isOnlineOpen ?? true,
     };
   });
 }
@@ -233,11 +241,18 @@ export async function bookScheduledSlot(args: {
    * windows, disabled slots, past times and existing bookings, so asking it
    * is the whole check. The slot generator works in IST, so the date is too.
    */
-  const { slots } = await getDoctorSlotsForDate({
+  const { slots, isOnlineOpen, onlineOpensAt } = await getDoctorSlotsForDate({
     hospitalId: args.hospitalId,
     doctorId: args.doctorId,
     serviceDate: serviceDateIn('Asia/Kolkata', slotDate),
+    now,
   });
+  if (isOnlineOpen === false && onlineOpensAt) {
+    throw new BookingError(
+      'SLOT_UNAVAILABLE',
+      `Online booking for today opens at ${formatTimeIn('Asia/Kolkata', onlineOpensAt)}.`,
+    );
+  }
   const offered = slots.some(
     (slot) => slot.available && new Date(slot.datetimeIso).getTime() === slotDate.getTime(),
   );

@@ -22,7 +22,8 @@
     "whatsapp:templates": "tsx scripts/whatsapp-templates.ts",
     "whatsapp:simulate": "tsx scripts/simulate-inbound.ts",
     "whatsapp:bootstrap": "tsx scripts/bootstrap-whatsapp.ts",
-    "whatsapp:diagnose": "tsx scripts/diagnose-whatsapp.ts"
+    "whatsapp:diagnose": "tsx scripts/diagnose-whatsapp.ts",
+    "booking:create": "tsx scripts/create-online-booking.ts"
   },
   "dependencies": {
     "date-fns": "^4.4.0",

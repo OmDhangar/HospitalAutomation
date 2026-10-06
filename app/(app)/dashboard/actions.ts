@@ -28,6 +28,7 @@ import {
   pauseAppointment,
   resumeAppointment,
   setDoctorPaused,
+  setEmergency,
   setPriority,
   startSession,
 } from '@/lib/services/queue';
@@ -93,7 +94,9 @@ export async function addWalkInDynamic(args: {
   paid?: boolean;
   /** Issue an EXTRA token past a full quota (owner only). */
   extraToken?: boolean;
-}): Promise<{ ok: boolean; tokenNumber?: number; error?: string; warning?: string; quotaReached?: boolean }> {
+  /** Admitted through emergency. Top queue priority and red alert display. */
+  isEmergency?: boolean;
+}): Promise<{ ok: boolean; tokenNumber?: number; isEmergency?: boolean; error?: string; warning?: string; quotaReached?: boolean }> {
   const tStart = performance.now();
   try {
     const t0 = performance.now();
@@ -134,6 +137,7 @@ export async function addWalkInDynamic(args: {
       source: 'walk_in',
       whatsappOptIn: args.whatsappOptIn,
       extraToken: args.extraToken,
+      isEmergency: args.isEmergency,
     });
     const tWalkIn = performance.now();
 
@@ -170,7 +174,7 @@ export async function addWalkInDynamic(args: {
       `totalAction: ${(tRevalidate - tStart).toFixed(1)}ms`
     );
 
-    return { ok: true, tokenNumber: appt.tokenNumber, warning };
+    return { ok: true, tokenNumber: appt.tokenNumber, isEmergency: Boolean(args.isEmergency), warning };
   } catch (err: unknown) {
     return {
       ok: false,
@@ -301,6 +305,28 @@ export async function setPriorityDynamic(args: {
     return { ok: true };
   } catch (err: unknown) {
     return { ok: false, error: err instanceof Error ? err.message : 'Failed to set priority' };
+  }
+}
+
+export async function setEmergencyDynamic(args: {
+  doctorId: string;
+  appointmentId: string;
+  isEmergency: boolean;
+}): Promise<{ ok: boolean; isEmergency?: boolean; error?: string }> {
+  try {
+    const session = await authorize();
+    const res = await setEmergency({
+      hospitalId: session.hospitalId,
+      appointmentId: args.appointmentId,
+      isEmergency: args.isEmergency,
+      actorUserId: session.userId,
+    });
+
+    notifyQueueMovement(session.hospitalId);
+    revalidatePath('/dashboard');
+    return { ok: true, isEmergency: res.isEmergency };
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to update emergency status' };
   }
 }
 

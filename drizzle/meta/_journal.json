@@ -260,6 +260,13 @@
       "when": 1790050000000,
       "tag": "0036_drop_arrived_at",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1790100000000,
+      "tag": "0037_emergency_admission",
+      "breakpoints": true
     }
   ]
 }

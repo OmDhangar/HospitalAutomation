@@ -74,6 +74,8 @@ export type QueueRow = {
   tokenNumber: number;
   status: AppointmentStatus;
   priority: number;
+  /** True if patient was admitted as an emergency. */
+  isEmergency?: boolean;
   patientName: string;
   patientAge?: number | null;
   patientPhone?: string | null;
@@ -137,6 +139,7 @@ const toQueueEntry = (row: {
   tokenNumber: number;
   status: AppointmentStatus;
   priority: number;
+  isEmergency?: boolean;
   enqueuedAt: Date | null;
   createdAt: Date;
   prioritySeq: number | null;
@@ -149,6 +152,7 @@ const toQueueEntry = (row: {
   tokenNumber: row.tokenNumber,
   status: row.status,
   priority: row.priority,
+  isEmergency: Boolean(row.isEmergency),
   // Falling back to createdAt keeps ordering total even for rows that were
   // never explicitly enqueued.
   enqueuedAt: row.enqueuedAt ?? row.createdAt,
@@ -257,6 +261,7 @@ async function loadDayAppointments(
       tokenNumber: appointments.tokenNumber,
       status: appointments.status,
       priority: appointments.priority,
+      isEmergency: appointments.isEmergency,
       enqueuedAt: appointments.enqueuedAt,
       calledAt: appointments.calledAt,
       createdAt: appointments.createdAt,
@@ -538,12 +543,16 @@ export async function createWalkIn(args: {
    * once the quota is genuinely full — the capacity rules refuse it otherwise.
    */
   extraToken?: boolean;
+  /** Admitted through emergency. Top queue priority and red alert display. */
+  isEmergency?: boolean;
   now?: Date;
 }) {
   const now = args.now ?? new Date();
   const serviceDate = serviceDateIn(args.timezone, now);
   const tStart = performance.now();
   const source = args.source ?? 'walk_in';
+  const isEmergency = Boolean(args.isEmergency);
+  const priority = isEmergency ? 100 : 0;
   const channel: CapacityChannel = args.extraToken
     ? 'extra'
     : source === 'whatsapp'
@@ -561,6 +570,7 @@ export async function createWalkIn(args: {
       channel,
       now,
     });
+    const prioritySeq = isEmergency ? await nextQueueSeq(tx, args.doctorId, serviceDate) : null;
     // A no-phone placeholder never opts in: nothing is ever sent to it.
     const optedIn = (args.whatsappOptIn ?? true) && !isMockPhone(args.patient.phoneE164);
     const queueLinkTemplate = !args.confirmationSentInChat;
@@ -582,6 +592,8 @@ export async function createWalkIn(args: {
       appt_token_number: number;
       appt_status: AppointmentStatus;
       appt_priority: number;
+      appt_is_emergency: boolean;
+      appt_priority_seq: number | null;
       appt_source: typeof appointments.$inferSelect['source'];
       appt_public_token: string;
       appt_public_token_expires_at: Date;
@@ -633,7 +645,7 @@ export async function createWalkIn(args: {
         inserted_appt as (
           insert into appointments (
             hospital_id, branch_id, doctor_id, patient_id, service_date,
-            token_number, status, source, public_token, public_token_expires_at, enqueued_at,
+            token_number, status, priority, is_emergency, priority_seq, source, public_token, public_token_expires_at, enqueued_at,
             quota_pool
           )
           select
@@ -644,6 +656,9 @@ export async function createWalkIn(args: {
             ${serviceDate},
             ${allocated.tokenNumber}::int,
             'WAITING',
+            ${priority}::smallint,
+            ${isEmergency},
+            ${prioritySeq ? sql`${prioritySeq}::int` : sql`NULL`},
             ${source},
             ${publicToken},
             ${publicTokenExpiresAtIso}::timestamptz,
@@ -708,6 +723,8 @@ export async function createWalkIn(args: {
         inserted_appt.token_number as appt_token_number,
         inserted_appt.status as appt_status,
         inserted_appt.priority as appt_priority,
+        inserted_appt.is_emergency as appt_is_emergency,
+        inserted_appt.priority_seq as appt_priority_seq,
         inserted_appt.source as appt_source,
         inserted_appt.public_token as appt_public_token,
         inserted_appt.public_token_expires_at as appt_public_token_expires_at,
@@ -752,6 +769,7 @@ export async function createWalkIn(args: {
       tokenNumber: Number(row.appt_token_number),
       status: row.appt_status,
       priority: Number(row.appt_priority),
+      isEmergency: Boolean(row.appt_is_emergency),
       source: row.appt_source,
       publicToken: row.appt_public_token,
       publicTokenExpiresAt: new Date(row.appt_public_token_expires_at),
@@ -762,7 +780,7 @@ export async function createWalkIn(args: {
       completedAt: row.appt_completed_at ? new Date(row.appt_completed_at) : null,
       pausedAt: null,
       resumeAt: null,
-      prioritySeq: null,
+      prioritySeq: row.appt_priority_seq ? Number(row.appt_priority_seq) : null,
       queueAfterToken: null,
       rejoinSeq: null,
       callNumber: null,
@@ -1126,6 +1144,92 @@ export async function setPriority(args: {
     const rows = await loadDayAppointments(tx, { doctorId: current.doctorId, serviceDate: current.serviceDate });
     return {
       priorityRank: priorityRank(rows.map(toQueueEntry), args.appointmentId),
+      prioritySeq,
+      changed,
+    };
+  });
+}
+
+/**
+ * Marks or unmarks a patient as an emergency case.
+ * Emergency patients are moved to the very front of the waiting line (ahead of standard priority).
+ */
+export async function setEmergency(args: {
+  hospitalId: string;
+  appointmentId: string;
+  isEmergency: boolean;
+  actorUserId?: string | null;
+  now?: Date;
+}): Promise<{ isEmergency: boolean; prioritySeq: number | null; changed: boolean }> {
+  const now = args.now ?? new Date();
+  return withTenant(args.hospitalId, async (tx) => {
+    const [current] = await tx
+      .select({ doctorId: appointments.doctorId, serviceDate: appointments.serviceDate })
+      .from(appointments)
+      .where(eq(appointments.id, args.appointmentId));
+    if (!current) throw new Error('Appointment not found');
+
+    await lockDoctorDay(tx, {
+      hospitalId: args.hospitalId,
+      doctorId: current.doctorId,
+      serviceDate: current.serviceDate,
+    });
+
+    const [row] = await tx
+      .select({
+        status: appointments.status,
+        isEmergency: appointments.isEmergency,
+        priority: appointments.priority,
+        prioritySeq: appointments.prioritySeq,
+      })
+      .from(appointments)
+      .where(eq(appointments.id, args.appointmentId));
+
+    const wantEmergency = args.isEmergency;
+    const hasEmergency = Boolean(row.isEmergency);
+    let prioritySeq = row.prioritySeq;
+    let changed = false;
+
+    if (wantEmergency && !hasEmergency) {
+      prioritySeq = await nextQueueSeq(tx, current.doctorId, current.serviceDate);
+      changed = true;
+    } else if (!wantEmergency && hasEmergency) {
+      if (row.priority <= 0) prioritySeq = null;
+      changed = true;
+    } else if (wantEmergency && hasEmergency && prioritySeq === null) {
+      prioritySeq = await nextQueueSeq(tx, current.doctorId, current.serviceDate);
+      changed = true;
+    }
+
+    if (changed) {
+      await tx
+        .update(appointments)
+        .set({
+          isEmergency: wantEmergency,
+          priority: wantEmergency ? Math.max(row.priority, 100) : (row.priority >= 100 ? 0 : row.priority),
+          prioritySeq,
+          updatedAt: now,
+        })
+        .where(eq(appointments.id, args.appointmentId));
+
+      await tx.insert(queueEvents).values({
+        hospitalId: args.hospitalId,
+        appointmentId: args.appointmentId,
+        doctorId: current.doctorId,
+        action: 'enqueue',
+        fromStatus: row.status,
+        toStatus: row.status,
+        actorUserId: args.actorUserId ?? null,
+        metadata: {
+          is_emergency: wantEmergency,
+          priority_seq: prioritySeq,
+          reason: wantEmergency ? 'emergency_escalation' : 'emergency_cleared',
+        },
+      });
+    }
+
+    return {
+      isEmergency: wantEmergency,
       prioritySeq,
       changed,
     };
@@ -1709,6 +1813,7 @@ const toQueueRow = (row: Awaited<ReturnType<typeof loadDayAppointments>>[number]
   tokenNumber: row.tokenNumber,
   status: row.status,
   priority: row.priority,
+  isEmergency: Boolean(row.isEmergency),
   patientName: row.patientName,
   patientAge: row.patientAge,
   patientPhone: row.patientPhone,

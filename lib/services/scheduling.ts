@@ -9,7 +9,7 @@ import {
   doctorSlotOverrides,
   hospitals,
 } from '@/lib/db/schema';
-import { zonedTimeToUtc } from '@/lib/domain/time';
+import { formatTimeIn, serviceDateIn, zonedTimeToUtc } from '@/lib/domain/time';
 
 export type GeneratedSlot = {
   timeStr: string; // e.g. "10:00 AM"
@@ -325,12 +325,15 @@ export async function getDoctorSlotsForDate(args: {
   hospitalId: string;
   doctorId: string;
   serviceDate: string; // "YYYY-MM-DD"
+  now?: Date;
 }): Promise<{
   config: DoctorScheduleSettings;
   slots: GeneratedSlot[];
   intervalBlocks: IntervalBlockItem[];
   overrides: SlotOverrideItem[];
   totalAvailable: number;
+  onlineOpensAt?: Date | null;
+  isOnlineOpen?: boolean;
 }> {
   return withTenant(args.hospitalId, async (tx) => {
     // 1. Fetch doctor & hospital info
@@ -340,6 +343,7 @@ export async function getDoctorSlotsForDate(args: {
         name: doctors.name,
         specialty: doctors.specialty,
         defaultConsultMinutes: doctors.defaultConsultMinutes,
+        onlineOpensMinutesBefore: doctors.onlineOpensMinutesBefore,
         timezone: hospitals.timezone,
       })
       .from(doctors)
@@ -450,7 +454,25 @@ export async function getDoctorSlotsForDate(args: {
     });
 
     const dateParts = args.serviceDate.split('-').map(Number); // YYYY, MM, DD
-    const now = new Date();
+    const now = args.now ?? new Date();
+    const isToday = args.serviceDate === serviceDateIn(timezone, now);
+
+    let onlineOpensAt: Date | null = null;
+    let isOnlineOpen = true;
+
+    if (isToday) {
+      const scheduledStartAt = await resolveScheduledStartInTx(tx, {
+        doctorId: args.doctorId,
+        serviceDate: args.serviceDate,
+        timezone,
+      });
+
+      if (scheduledStartAt) {
+        const opensMin = doc.onlineOpensMinutesBefore ?? 120;
+        onlineOpensAt = new Date(scheduledStartAt.getTime() - opensMin * 60_000);
+        isOnlineOpen = now.getTime() >= onlineOpensAt.getTime();
+      }
+    }
 
     const slots: GeneratedSlot[] = [];
 
@@ -507,9 +529,15 @@ export async function getDoctorSlotsForDate(args: {
       }
 
       // Check past time if for today
-      if (available && slotDate.getTime() < now.getTime()) {
+      if (available && isToday && slotDate.getTime() < now.getTime()) {
         available = false;
         reason = 'Past Time';
+      }
+
+      // Check if same-day online booking is not open yet
+      if (available && isToday && !isOnlineOpen && onlineOpensAt) {
+        available = false;
+        reason = `Online booking opens at ${formatTimeIn(timezone, onlineOpensAt)}`;
       }
 
       slots.push({
@@ -529,6 +557,8 @@ export async function getDoctorSlotsForDate(args: {
       intervalBlocks,
       overrides,
       totalAvailable,
+      onlineOpensAt,
+      isOnlineOpen,
     };
   });
 }
