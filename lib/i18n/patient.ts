@@ -62,6 +62,9 @@ type Strings = {
   notStartedHint: string;
   /** Appointment details and self-cancellation. */
   appointmentTime: string;
+  /** A booked evening slot, before its session starts. */
+  slotBooked: string;
+  slotBookedHint: string;
   cancelAction: string;
   cancelPrompt: string;
   cancelConfirm: string;
@@ -118,6 +121,8 @@ export const t: Record<Locale, Strings> = {
     notStarted: 'डॉक्टरांनी अजून OPD सुरू केलेली नाही',
     notStartedHint: 'OPD सुरू होताच अपेक्षित वेळ दाखवली जाईल. तुमचा टोकन आणि रांगेतील जागा कायम आहे.',
     appointmentTime: 'अपॉइंटमेंटची वेळ',
+    slotBooked: 'तुमची वेळ निश्चित आहे',
+    slotBookedHint: 'संध्याकाळचे सत्र सुरू झाल्यावर तुम्ही रांगेत सामील व्हाल आणि तुमच्या वेळेच्या क्रमाने बोलावले जाईल. कृपया वेळेच्या थोडे आधी या.',
     cancelAction: 'अपॉइंटमेंट रद्द करा',
     cancelPrompt: 'तुम्ही येऊ शकत नसाल, तर आत्ताच रद्द करा. ती वेळ दुसऱ्या रुग्णाला मिळेल.',
     cancelConfirm: 'होय, रद्द करा',
@@ -171,6 +176,8 @@ export const t: Record<Locale, Strings> = {
     notStarted: 'डॉक्टर ने अभी OPD शुरू नहीं की है',
     notStartedHint: 'OPD शुरू होते ही अनुमानित समय दिखाया जाएगा। आपका टोकन और कतार में जगह सुरक्षित है।',
     appointmentTime: 'अपॉइंटमेंट का समय',
+    slotBooked: 'आपका समय तय है',
+    slotBookedHint: 'शाम का सत्र शुरू होने पर आप कतार में जुड़ जाएंगे और अपने समय के क्रम में बुलाए जाएंगे। कृपया अपने समय से थोड़ा पहले आएं।',
     cancelAction: 'अपॉइंटमेंट रद्द करें',
     cancelPrompt: 'यदि आप नहीं आ पा रहे हैं, तो अभी रद्द कर दें। वह समय किसी और मरीज़ को मिल जाएगा।',
     cancelConfirm: 'हाँ, रद्द करें',
@@ -224,6 +231,8 @@ export const t: Record<Locale, Strings> = {
     notStarted: 'The doctor has not started OPD yet',
     notStartedHint: 'Your expected time will appear once OPD starts. Your token and place in line are kept.',
     appointmentTime: 'Appointment time',
+    slotBooked: 'Your appointment is booked',
+    slotBookedHint: 'You join the line when the evening session starts, and are called in order of appointment time. Please arrive a little before your time.',
     cancelAction: 'Cancel appointment',
     cancelPrompt:
       'If you cannot come, please cancel now. Your time can then be given to another patient.',

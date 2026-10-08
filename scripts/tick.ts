@@ -22,6 +22,7 @@ async function main() {
   console.log(
     `marked ${sweeps.appointmentsMarkedNoShow} appointment(s) no-show, ` +
       `resumed ${sweeps.appointmentsResumed} paused appointment(s), ` +
+      `moved ${sweeps.slotBookingsEnqueued} slot booking(s) into the line, ` +
       `${sweeps.subscriptionsExpired} subscription(s), ` +
       `${sweeps.paymentLinksExpired} payment link(s)`,
   );

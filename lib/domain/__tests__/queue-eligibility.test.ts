@@ -389,3 +389,41 @@ describe('call numbers', () => {
     }
   });
 });
+
+describe('slot-session patients', () => {
+  /** Slot entry: id `s3` is S3, booked into the evening slot session. */
+  const s = (n: number, opts: Opts = {}): QueueEntry => ({ ...e(n, opts), appointmentId: `s${n}`, sessionKind: 'slot' });
+
+  it('are seen after the live queue, in slot order, whatever their numbers', () => {
+    const queue = [s(2), e(40), s(1), e(41), e(3)];
+    expect(ids(orderQueue(queue))).toEqual(['t3', 't40', 't41', 's1', 's2']);
+    expect(simulateCalls(queue)).toEqual(['t3', 't40', 't41', 's1', 's2']);
+    expect(patientsAhead(queue, 's1')).toBe(3);
+  });
+
+  it('emergency and priority patients still go first', () => {
+    const queue = [s(1), e(40), { ...e(50), isEmergency: true }];
+    expect(ids(orderQueue(queue))[0]).toBe('t50');
+  });
+
+  it('keeps the late-return frontier within each number space', () => {
+    // S5 was called; live token 3 coming back is not late because of it.
+    const queue = [s(5, { called: true, status: 'COMPLETED' }), e(3, { away: true }), e(4)];
+    expect(lateFrontier(queue)).toBe(0);
+    expect(lateFrontier(queue, 'slot')).toBe(5);
+    expect(isLateReturn(queue, queue[1])).toBe(false);
+    const slotQueue = [s(5, { called: true, status: 'COMPLETED' }), s(2, { away: true })];
+    expect(isLateReturn(slotQueue, slotQueue[1])).toBe(true);
+  });
+
+  it('a late slot returner is anchored to a slot patient, not a live token', () => {
+    const queue = [
+      s(5, { called: true, status: 'COMPLETED' }),
+      s(2, { away: true }),
+      e(40),
+      s(6),
+      s(7),
+    ];
+    expect(lateReturnAnchor(queue, 's2', ctx(1))).toBe(6);
+  });
+});

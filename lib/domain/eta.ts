@@ -22,10 +22,15 @@ export const START_GRACE_MINUTES = 15;
 
 export type EtaInput = {
   patientsAhead: number;
-  /** Completed consultation durations in minutes, oldest first. */
-  consultDurations: number[];
-  /** Used until enough real durations have been observed. */
-  fallbackConsultMinutes?: number;
+  /**
+   * Observed minutes per patient today, measured call to call (see
+   * `paceSample`). Null before the first sample.
+   */
+  paceMinutes?: number | null;
+  /** How many intervals `paceMinutes` was built from. */
+  paceSamples?: number;
+  /** The doctor's configured consultation minutes: the prior the pace is blended with. */
+  configuredMinutes?: number;
   /** The doctor's scheduled start for the day, if one is configured. */
   scheduledStartAt?: Date | null;
   /** Set only by Start OPD. */
@@ -62,27 +67,102 @@ export type EtaEstimate = {
 
 export type EtaResult = EtaEstimate | { state: 'not_started'; basis: EtaBasis };
 
-const MAX_SAMPLES = 50;
 const DEFAULT_CONSULT_MINUTES = 10;
-const MIN_HALF_WIDTH_MINUTES = 10;
+const MIN_LATE_WIDTH_MINUTES = 10;
 const ROUND_TO_MINUTES = 5;
 /** A patient-facing window moving by less than this is not worth a message. */
 export const ETA_NOTIFY_THRESHOLD_MINUTES = 15;
 
-/** Widen the window when we have less evidence, rather than pretending precision. */
-const HALF_WIDTH_FRACTION: Record<EtaConfidence, number> = {
+/**
+ * How many samples the configured minutes are worth. Until the day has seen
+ * about this many patients, the doctor's own number dominates, so one quick
+ * consultation can no longer make every estimate in the room 70% shorter.
+ */
+const PRIOR_WEIGHT = 5;
+
+/**
+ * The late side of the window: wider when we have less evidence, rather than
+ * pretending precision. Queues run late far more often than early.
+ */
+const LATE_FRACTION: Record<EtaConfidence, number> = {
   low: 0.5,
   medium: 0.35,
   high: 0.25,
 };
 
-export function median(values: number[]): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? (sorted[mid - 1] + sorted[mid]) / 2
-    : sorted[mid];
+/**
+ * The early side is deliberately narrow. Patients read the start of the
+ * window as "my time" and arrive then; a symmetric window (it reached at least
+ * ten minutes early) told them to come 5-10 minutes before they could
+ * possibly be seen.
+ */
+const EARLY_FRACTION: Record<EtaConfidence, number> = {
+  low: 0.15,
+  medium: 0.1,
+  high: 0.05,
+};
+
+/* ------------------------------------------------------------------ pace */
+
+/** An interval longer than this is a break, idle time or the gap between sessions. */
+export const PACE_MAX_GAP_MINUTES = 60;
+/** Each sample is clipped to this band around the configured minutes. */
+const PACE_CLIP = { min: 0.3, max: 3 };
+/** A true mean for the first N samples, then an exponential average over about N. */
+const PACE_WINDOW = 20;
+
+/**
+ * Minutes per patient, blended with the configured value by how much evidence
+ * the day has. The single answer to "how long does each patient take",
+ * shared by every estimate.
+ */
+export function effectivePace(input: Pick<EtaInput, 'paceMinutes' | 'paceSamples' | 'configuredMinutes'>): number {
+  const configured =
+    input.configuredMinutes && input.configuredMinutes > 0 ? input.configuredMinutes : DEFAULT_CONSULT_MINUTES;
+  const n = input.paceSamples ?? 0;
+  if (input.paceMinutes == null || n <= 0) return configured;
+  return (PRIOR_WEIGHT * configured + n * input.paceMinutes) / (PRIOR_WEIGHT + n);
+}
+
+/**
+ * The interval a call contributes to the pace, or null when it is not a fair
+ * sample.
+ *
+ * Measured call to call, not consultation start to complete: what a patient
+ * really costs includes walking in, the notes after they leave, and the pause
+ * before Next. In-room time left all of that out, which is why estimates ran
+ * short of reality.
+ *
+ * Not a sample: the first call of the day or after a break (no previous
+ * call), a gap over an hour, a previous patient who was held or skipped rather
+ * than seen, or a doctor who sat idle until this patient joined the line.
+ */
+export function paceSample(args: {
+  lastCalledAt: Date | null;
+  now: Date;
+  previousWasSeen: boolean;
+  calledEnqueuedAt: Date | null;
+  configuredMinutes: number;
+}): number | null {
+  if (!args.lastCalledAt || !args.previousWasSeen) return null;
+  if (args.calledEnqueuedAt && args.calledEnqueuedAt.getTime() > args.lastCalledAt.getTime()) return null;
+  const minutes = minutesBetween(args.lastCalledAt, args.now);
+  if (!(minutes > 0) || minutes > PACE_MAX_GAP_MINUTES) return null;
+  const configured = args.configuredMinutes > 0 ? args.configuredMinutes : DEFAULT_CONSULT_MINUTES;
+  return Math.min(configured * PACE_CLIP.max, Math.max(configured * PACE_CLIP.min, minutes));
+}
+
+/** Folds one sample into the running pace. Pure; the caller stores the result. */
+export function foldPaceSample(
+  prev: { paceMinutes: number | null; paceSamples: number },
+  sample: number,
+): { paceMinutes: number; paceSamples: number } {
+  if (prev.paceMinutes == null || prev.paceSamples <= 0) return { paceMinutes: sample, paceSamples: 1 };
+  const weight = Math.min(prev.paceSamples + 1, PACE_WINDOW);
+  return {
+    paceMinutes: prev.paceMinutes + (sample - prev.paceMinutes) / weight,
+    paceSamples: prev.paceSamples + 1,
+  };
 }
 
 export function confidenceFor(sampleSize: number): EtaConfidence {
@@ -136,11 +216,8 @@ export function startDelayMinutes(input: Pick<EtaInput, 'scheduledStartAt' | 'se
  * function always returns a window.
  */
 export function estimateEta(input: EtaInput): EtaEstimate {
-  const samples = input.consultDurations.slice(-MAX_SAMPLES);
-  const consult =
-    median(samples) ??
-    input.fallbackConsultMinutes ??
-    DEFAULT_CONSULT_MINUTES;
+  const consult = effectivePace(input);
+  const sampleSize = input.paceSamples ?? 0;
 
   const planned =
     !input.sessionStartedAt &&
@@ -154,23 +231,21 @@ export function estimateEta(input: EtaInput): EtaEstimate {
   const centreMs = Math.max(input.now.getTime(), anchorAt.getTime() + queueMinutes * 60_000);
   const waitMinutes = (centreMs - input.now.getTime()) / 60_000;
 
-  const confidence = confidenceFor(samples.length);
+  const confidence = confidenceFor(sampleSize);
   // The uncertainty is in the consultations, not in the wait before OPD opens.
-  const halfWidth = Math.max(
-    MIN_HALF_WIDTH_MINUTES,
-    queueMinutes * HALF_WIDTH_FRACTION[confidence],
-  );
+  const earlyWidth = queueMinutes * EARLY_FRACTION[confidence];
+  const lateWidth = Math.max(MIN_LATE_WIDTH_MINUTES, queueMinutes * LATE_FRACTION[confidence]);
 
   const state = planned ? 'planned' : 'live';
   return {
     waitMinutes: Math.round(waitMinutes),
     windowStart: roundUpToInterval(
-      new Date(Math.max(input.now.getTime(), centreMs - halfWidth * 60_000)),
+      new Date(Math.max(input.now.getTime(), centreMs - earlyWidth * 60_000)),
     ),
-    windowEnd: roundUpToInterval(new Date(centreMs + halfWidth * 60_000)),
+    windowEnd: roundUpToInterval(new Date(centreMs + lateWidth * 60_000)),
     confidence,
     basisConsultMinutes: consult,
-    sampleSize: samples.length,
+    sampleSize,
     state,
     basis: {
       state,
@@ -178,7 +253,7 @@ export function estimateEta(input: EtaInput): EtaEstimate {
       anchorAt,
       patientsAhead: input.patientsAhead,
       consultMinutes: consult,
-      sampleSize: samples.length,
+      sampleSize,
       delayMinutes: startDelayMinutes(input),
     },
   };
@@ -187,8 +262,7 @@ export function estimateEta(input: EtaInput): EtaEstimate {
 /** The estimate a patient may be shown: none once the doctor is overdue to start. */
 export function resolveEta(input: EtaInput): EtaResult {
   if (etaState(input) !== 'not_started') return estimateEta(input);
-  const consult = median(input.consultDurations.slice(-MAX_SAMPLES)) ??
-    input.fallbackConsultMinutes ?? DEFAULT_CONSULT_MINUTES;
+  const consult = effectivePace(input);
   return {
     state: 'not_started',
     basis: {
@@ -197,7 +271,7 @@ export function resolveEta(input: EtaInput): EtaResult {
       anchorAt: input.scheduledStartAt!,
       patientsAhead: input.patientsAhead,
       consultMinutes: consult,
-      sampleSize: Math.min(input.consultDurations.length, MAX_SAMPLES),
+      sampleSize: input.paceSamples ?? 0,
       delayMinutes: startDelayMinutes(input),
     },
   };

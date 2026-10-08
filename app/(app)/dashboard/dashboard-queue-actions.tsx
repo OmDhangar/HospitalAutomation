@@ -12,14 +12,18 @@ import {
   ZapIcon,
   CheckIcon,
   XIcon,
+  PlusIcon,
 } from '@/components/icons';
 import { useConsultationGate } from '@/components/clinical/consultation-gate';
 import { useToast } from '@/components/toast';
 import { playChime } from '@/lib/utils/sound';
 import type { QueueAction } from '@/lib/domain/types';
 import {
+  addExtraCapacityAction,
   addWalkInDynamic,
   advanceQueueDynamic,
+  bookSlotWalkInDynamic,
+  type FreeSlot,
   pauseAppointmentDynamic,
   queueActionDynamic,
   releaseReservedDynamic,
@@ -141,6 +145,48 @@ export function AddWalkInForm({
   const [full, setFull] = useState(quotaReached);
   const [extra, setExtra] = useState(false);
   const offerExtra = (full || quotaReached) && canIssueExtra;
+  // Set when the live queue has closed for today (split day): book a slot instead.
+  const [freeSlots, setFreeSlots] = useState<FreeSlot[] | null>(null);
+
+  const resetPatient = () => {
+    setName('');
+    setAge('');
+    setPhone('');
+    setAddress('');
+    setPaid(false);
+    setExtra(false);
+    setIsEmergency(false);
+    // Ready for the next person in line without reaching for the mouse.
+    nameRef.current?.focus();
+  };
+
+  const bookSlot = (slot: FreeSlot) => {
+    if (!name.trim() || !phone.trim()) {
+      toast.error('Enter the patient name and phone number first');
+      return;
+    }
+    const parsedAge = age.trim() ? parseInt(age.trim(), 10) : null;
+    startTransition(async () => {
+      const res = await bookSlotWalkInDynamic({
+        doctorId,
+        branchId,
+        slotDatetimeIso: slot.datetimeIso,
+        name,
+        age: parsedAge,
+        phone,
+      });
+      if (res.ok) {
+        toast.success(
+          `Slot ${res.tokenLabel} booked for ${res.slotTime}`,
+          `${name.trim()} is checked in and will be called in slot order.`,
+        );
+        setFreeSlots((current) => current?.filter((x) => x.datetimeIso !== slot.datetimeIso) ?? null);
+        resetPatient();
+      } else {
+        toast.error('Could not book the slot', res.error);
+      }
+    });
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -182,17 +228,10 @@ export function AddWalkInForm({
           );
         }
         if (res.warning) toast.error('Payment not recorded', res.warning);
-        setName('');
-        setAge('');
-        setPhone('');
-        setAddress('');
-        setPaid(false);
-        setExtra(false);
-        setIsEmergency(false);
-        // Ready for the next person in line without reaching for the mouse.
-        nameRef.current?.focus();
+        resetPatient();
       } else {
         if (res.quotaReached) setFull(true);
+        if (res.freeSlots) setFreeSlots(res.freeSlots);
         toast.error('Could not add patient', res.error);
       }
     });
@@ -339,6 +378,33 @@ export function AddWalkInForm({
           </span>
         </span>
       </label>
+
+      {freeSlots ? (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950">
+          <p className="font-semibold">Today&apos;s live queue for {doctorName} has closed.</p>
+          <p className="mt-0.5 text-xs text-emerald-900">
+            Book this patient into a free slot. They are checked in at once and called in slot order.
+          </p>
+          {freeSlots.length > 0 ? (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {freeSlots.map((slot) => (
+                <button
+                  key={slot.datetimeIso}
+                  type="button"
+                  disabled={isPending}
+                  onClick={() => bookSlot(slot)}
+                  className="rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-emerald-900 ring-1 ring-emerald-300 hover:bg-emerald-100 disabled:opacity-50 cursor-pointer"
+                >
+                  {slot.timeStr}
+                  {slot.label ? <span className="ml-1 font-semibold text-emerald-700">{slot.label}</span> : null}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-xs font-semibold">No free slots are left today.</p>
+          )}
+        </div>
+      ) : null}
 
       {full || quotaReached ? (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
@@ -760,6 +826,153 @@ export function ReleaseReservedButton({ doctorId, count }: { doctorId: string; c
     </Button>
   );
 }
+
+/** Owner: add extra appointments to today's quota directly from the dashboard. */
+export function AddExtraCapacityButton({
+  doctorId,
+  doctorName,
+  currentQuota,
+}: {
+  doctorId: string;
+  doctorName?: string;
+  currentQuota: number;
+}) {
+  const toast = useToast();
+  const [isOpen, setIsOpen] = useState(false);
+  const [count, setCount] = useState<number>(10);
+  const [isPending, startTransition] = useTransition();
+
+  const handleAdd = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!count || count <= 0) {
+      toast.error('Invalid count', 'Please enter a valid number of appointments.');
+      return;
+    }
+    startTransition(async () => {
+      const res = await addExtraCapacityAction({ doctorId, count });
+      if (res.ok) {
+        toast.success(
+          'Extra appointments added!',
+          `Added ${count} extra appointments for today. New quota is ${res.newQuota}.`,
+        );
+        setIsOpen(false);
+        setCount(10);
+      } else {
+        toast.error('Could not add appointments', res.error);
+      }
+    });
+  };
+
+  return (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        onClick={() => setIsOpen(true)}
+        className="bg-emerald-50 text-emerald-900 ring-1 ring-inset ring-emerald-300 hover:bg-emerald-100 font-semibold inline-flex items-center gap-1.5 shadow-2xs"
+      >
+        <PlusIcon className="size-3.5 text-emerald-700" />
+        + Extra Appointments
+      </Button>
+
+      {isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl ring-1 ring-black/10">
+            <div className="flex items-center justify-between border-b border-ink-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="rounded-lg bg-emerald-100 p-1.5 text-emerald-800">
+                  <PlusIcon className="size-4" />
+                </div>
+                <h3 className="text-base font-bold text-ink-900">
+                  Add Extra Appointments
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsOpen(false)}
+                className="rounded-lg p-1 text-ink-400 hover:bg-ink-100 hover:text-ink-700 cursor-pointer"
+              >
+                <XIcon className="size-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAdd} className="mt-4 space-y-4">
+              <p className="text-xs text-ink-600">
+                Increase today&apos;s daily quota{doctorName ? ` for ${doctorName}` : ''}. This allows extra patients to book and be accepted into today&apos;s queue without altering standing settings in Settings.
+              </p>
+
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-3 text-xs text-emerald-950 flex items-center justify-between">
+                <div>
+                  <span className="font-semibold block">Today&apos;s Active Quota</span>
+                  <span className="text-ink-500">Currently: {currentQuota}</span>
+                </div>
+                <div className="text-right">
+                  <span className="font-semibold block text-emerald-800">New Quota</span>
+                  <span className="font-bold text-sm text-emerald-900">{currentQuota + (Number.isInteger(count) && count > 0 ? count : 0)}</span>
+                </div>
+              </div>
+
+              <div>
+                <span className="mb-1.5 block text-xs font-semibold text-ink-700">Quick Presets</span>
+                <div className="grid grid-cols-4 gap-2">
+                  {[5, 10, 15, 20].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setCount(preset)}
+                      className={cn(
+                        'rounded-lg py-2 px-2 text-xs font-bold ring-1 transition-all cursor-pointer select-none text-center',
+                        count === preset
+                          ? 'bg-emerald-600 text-white ring-emerald-600 shadow-xs'
+                          : 'bg-ink-50 text-ink-700 ring-ink-200 hover:bg-ink-100',
+                      )}
+                    >
+                      +{preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <Field label="Custom number of appointments" hint="Enter the number of extra appointments to add on top of today's quota.">
+                <Input
+                  type="number"
+                  min="1"
+                  max="500"
+                  value={count || ''}
+                  onChange={(e) => setCount(parseInt(e.target.value, 10) || 0)}
+                  placeholder="e.g. 10"
+                  required
+                />
+              </Field>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-ink-100">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setIsOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  isLoading={isPending}
+                  disabled={!count || count <= 0}
+                  className="bg-emerald-600 hover:bg-emerald-700"
+                >
+                  Add +{count || 0} Appointments
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 
 export function PausePatientButton({
   doctorId,

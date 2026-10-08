@@ -195,11 +195,11 @@ export default async function DisplayPage({
                       className="numeric font-black leading-none text-white tracking-tight drop-shadow-[0_0_35px_rgba(16,185,129,0.35)] mt-1"
                       style={{ fontSize: 'clamp(4.5rem, 11vw, 8.5rem)' }}
                     >
-                      {snapshot.currentCallNumber ?? snapshot.currentToken}
+                      {snapshot.currentCallNumber ?? snapshot.currentTokenLabel}
                     </p>
                     {snapshot.currentCallNumber !== null ? (
                       <p className="mt-1 text-lg sm:text-xl font-bold text-slate-300">
-                        {s.tokenWord} <span className="numeric">{snapshot.currentToken}</span>
+                        {s.tokenWord} <span className="numeric">{snapshot.currentTokenLabel}</span>
                       </p>
                     ) : null}
                     {snapshot.currentPatientName ? (
@@ -226,7 +226,7 @@ export default async function DisplayPage({
                   <span className="numeric font-black text-emerald-300 bg-emerald-500/20 px-2.5 py-0.5 rounded-lg text-sm shrink-0">
                     {snapshot.nextPatient.callNumber !== null
                       ? `${s.callWord} ${snapshot.nextPatient.callNumber}`
-                      : `#${snapshot.nextPatient.tokenNumber}`}
+                      : `#${snapshot.nextPatient.tokenLabel}`}
                   </span>
                 </div>
               ) : null}

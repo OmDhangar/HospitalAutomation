@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { Card, CardHeader, EmptyState } from '@/components/ui';
 import { requireSession } from '@/lib/auth/session';
 import { canConfigureHospital } from '@/lib/services/auth';
@@ -57,6 +58,12 @@ export default async function AuditPage() {
         <p className="mt-0.5 text-xs sm:text-sm text-ink-500">
           Queue history cannot be edited or rewritten, only appended to.
         </p>
+        <Link
+          href="/audit/trace"
+          className="mt-2 inline-flex text-sm font-semibold text-brand-700 hover:text-brand-900"
+        >
+          Booking trace: how each token was allocated →
+        </Link>
       </div>
 
       <div className="grid gap-5 lg:grid-cols-3">

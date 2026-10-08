@@ -19,13 +19,14 @@ import {
   type BookingContext,
   type ConversationState,
 } from '@/lib/domain/booking';
+import type { EtaResult } from '@/lib/domain/eta';
 import { normalizeIndianPhone } from '@/lib/domain/phone';
 import { formatTimeIn, serviceDateIn } from '@/lib/domain/time';
 import { LOCALE_NAMES, LOCALES, t, type Locale } from '@/lib/i18n/patient';
 import { getProvider, type InteractiveButton, type ListRow } from '@/lib/notify/provider';
 import { listDoctors } from './hospital';
 import { CapacityError } from './capacity';
-import { createWalkIn, getPublicQueueView, getQueueSnapshot } from './queue';
+import { createWalkIn, estimateForNewJoiner, getPublicQueueView, getQueueSnapshot } from './queue';
 import { getPlanAccess } from './subscriptions';
 import { getDoctorSlotsForDate } from './scheduling';
 import { bookScheduledSlot, BookingError } from './web-booking';
@@ -106,39 +107,39 @@ const QUEUE_BRANCH_PROMPTS: Record<
 const QUEUE_WAIT_TIME_PROMPTS: Record<
   Locale,
   {
-    body: (doctorName: string, serving: number | string, ahead: number, wait: number) => string;
+    body: (doctorName: string, serving: number | string, ahead: number, waitLine: string) => string;
     joinTitle: string;
   }
 > = {
   mr: {
-    body: (doctorName, serving, ahead, wait) =>
+    body: (doctorName, serving, ahead, waitLine) =>
       `${formatDoctorName(doctorName, 'mr')} — थेट रांग माहिती:
 
 सध्या तपासणी सुरू: ${serving}
 तुमच्या आधी रुग्ण: ${ahead}
-अंदाजे प्रतीक्षा: ~${wait} मिनिटे
+${waitLine}
 
 तुम्ही तयार असाल तेव्हा खालील बटण दाबून रांगेत सामील व्हा.`,
     joinTitle: 'रांगेत सामील व्हा',
   },
   hi: {
-    body: (doctorName, serving, ahead, wait) =>
+    body: (doctorName, serving, ahead, waitLine) =>
       `${formatDoctorName(doctorName, 'hi')} — लाइव कतार स्थिति:
 
 वर्तमान में सेवारत: ${serving}
 आपसे पहले मरीज़: ${ahead}
-अनुमानित प्रतीक्षा: ~${wait} मिनट
+${waitLine}
 
 जब आप तैयार हों, तब नीचे बटन दबाकर कतार में शामिल हों।`,
     joinTitle: 'कतार में शामिल हों',
   },
   en: {
-    body: (doctorName, serving, ahead, wait) =>
+    body: (doctorName, serving, ahead, waitLine) =>
       `${formatDoctorName(doctorName, 'en')} — Live Queue Status:
 
 Currently serving: ${serving}
 Patients ahead: ${ahead}
-Estimated wait: ~${wait} min
+${waitLine}
 
 Tap below to join the queue whenever you are ready.`,
     joinTitle: 'Join queue now',
@@ -227,62 +228,113 @@ const withBreakNote = (body: string, locale: Locale, onBreak: boolean): string =
 
 const QUEUE_CONFIRMATION: Record<
   Locale,
-  (token: number, doctor: string, patient: string, serving: number | string, wait: number, url: string) => string
+  (token: number, doctor: string, patient: string, serving: number | string, waitLine: string, url: string) => string
 > = {
-  mr: (token, doctor, patient, serving, wait, url) =>
+  mr: (token, doctor, patient, serving, waitLine, url) =>
     `तुम्ही ${formatDoctorName(doctor, 'mr')} यांच्या रांगेत सामील झाला आहात.
 
 रुग्ण: ${patient}
 तुमचा टोकन क्रमांक: ${token}
 सध्या तपासणी सुरू: ${serving}
-अंदाजे प्रतीक्षा: ~${wait} मिनिटे
+${waitLine}
 
 रांगेतील स्थिती पाहा: ${url}
 
 तुम्ही बाहेर थांबू शकता — तुमचा नंबर जवळ आल्यावर आम्ही कळवू.`,
-  hi: (token, doctor, patient, serving, wait, url) =>
+  hi: (token, doctor, patient, serving, waitLine, url) =>
     `आप ${formatDoctorName(doctor, 'hi')} की कतार में शामिल हो गए हैं।
 
 मरीज़: ${patient}
 आपका टोकन नंबर: ${token}
 वर्तमान में सेवारत: ${serving}
-अनुमानित प्रतीक्षा: ~${wait} मिनट
+${waitLine}
 
 कतार स्थिति देखें: ${url}
 
 आप बाहर इंतज़ार कर सकते हैं — आपकी बारी पास आने पर हम सूचित करेंगे।`,
-  en: (token, doctor, patient, serving, wait, url) =>
+  en: (token, doctor, patient, serving, waitLine, url) =>
     `You're in the queue for ${formatDoctorName(doctor, 'en')}.
 
 Patient: ${patient}
 Your token number: ${token}
 Currently serving: ${serving}
-Estimated wait: ~${wait} min
+${waitLine}
 
 Track position: ${url}
 
 You don't need to wait inside — we'll message you when your token is close.`,
 };
 
-/** Said instead of a token when the day's quota refuses an online queue booking. */
-const QUEUE_UNAVAILABLE: Record<Locale, (doctor: string, opensAt: string | null) => string> = {
-  mr: (doctor, opensAt) =>
-    opensAt
+/**
+ * What the patient is told about timing, in one line.
+ *
+ * Before OPD the estimate counts from the doctor's start, and says so; once
+ * the doctor is overdue no time is promised at all. It used to be a bare
+ * "~5 min" floor, which at 10am for a 12pm OPD sent patients in two hours early.
+ */
+type WaitInfo =
+  | { kind: 'planned'; startsAt: string; around: string }
+  | { kind: 'live'; minutes: number; around: string }
+  | { kind: 'not_started' };
+
+const WAIT_LINE: Record<Locale, (w: WaitInfo) => string> = {
+  mr: (w) =>
+    w.kind === 'planned'
+      ? `डॉक्टर ${w.startsAt} वाजता सुरू करतील\nतुमची अंदाजे वेळ: सुमारे ${w.around}`
+      : w.kind === 'live'
+        ? `अंदाजे प्रतीक्षा: ~${w.minutes} मिनिटे (सुमारे ${w.around})`
+        : 'डॉक्टरांनी अजून तपासणी सुरू केलेली नाही. तुमचा नंबर जवळ आल्यावर आम्ही कळवू.',
+  hi: (w) =>
+    w.kind === 'planned'
+      ? `डॉक्टर ${w.startsAt} बजे शुरू करेंगे\nआपका अनुमानित समय: लगभग ${w.around}`
+      : w.kind === 'live'
+        ? `अनुमानित प्रतीक्षा: ~${w.minutes} मिनट (लगभग ${w.around})`
+        : 'डॉक्टर ने अभी शुरू नहीं किया है। आपकी बारी पास आने पर हम सूचित करेंगे।',
+  en: (w) =>
+    w.kind === 'planned'
+      ? `Doctor starts at ${w.startsAt}\nYour expected time: around ${w.around}`
+      : w.kind === 'live'
+        ? `Estimated wait: ~${w.minutes} min (around ${w.around})`
+        : "The doctor hasn't started yet. We'll message you when your turn is close.",
+};
+
+function waitInfoFor(eta: EtaResult | null, timezone: string): WaitInfo {
+  if (!eta || eta.state === 'not_started') return { kind: 'not_started' };
+  const around = formatTimeIn(timezone, eta.windowStart);
+  return eta.state === 'planned'
+    ? { kind: 'planned', startsAt: formatTimeIn(timezone, eta.basis.anchorAt), around }
+    : { kind: 'live', minutes: eta.waitMinutes, around };
+}
+
+/**
+ * Said instead of a token when the day refuses an online queue booking: not
+ * open yet, fully booked, or (on a split day) the live queue has closed and
+ * only evening slots remain.
+ */
+const QUEUE_UNAVAILABLE: Record<Locale, (doctor: string, opensAt: string | null, closed: boolean) => string> = {
+  mr: (doctor, opensAt, closed) =>
+    closed
+      ? `${formatDoctorName(doctor, 'mr')} यांची आजची थेट रांग बंद झाली आहे. संध्याकाळच्या सत्रासाठी वेळ बुक करण्यासाठी "Hi" पाठवा.`
+      : opensAt
       ? `${formatDoctorName(doctor, 'mr')} यांच्या आजच्या रांगेसाठी ऑनलाइन नोंदणी ${opensAt} वाजता सुरू होईल. कृपया तेव्हा पुन्हा संदेश पाठवा.`
       : `${formatDoctorName(doctor, 'mr')} यांची आजची ऑनलाइन नोंदणी पूर्ण भरली आहे. कृपया रुग्णालयात संपर्क करा.`,
-  hi: (doctor, opensAt) =>
-    opensAt
+  hi: (doctor, opensAt, closed) =>
+    closed
+      ? `${formatDoctorName(doctor, 'hi')} की आज की लाइव कतार बंद हो गई है। शाम के सत्र का समय बुक करने के लिए "Hi" भेजें।`
+      : opensAt
       ? `${formatDoctorName(doctor, 'hi')} की आज की कतार के लिए ऑनलाइन बुकिंग ${opensAt} बजे शुरू होगी। कृपया तब दोबारा संदेश भेजें।`
       : `${formatDoctorName(doctor, 'hi')} की आज की ऑनलाइन बुकिंग पूरी भर चुकी है। कृपया अस्पताल से संपर्क करें।`,
-  en: (doctor, opensAt) =>
-    opensAt
+  en: (doctor, opensAt, closed) =>
+    closed
+      ? `${formatDoctorName(doctor, 'en')}'s live queue has closed for today. Send "Hi" to book a time in the evening session.`
+      : opensAt
       ? `Online booking for ${formatDoctorName(doctor, 'en')}'s queue today opens at ${opensAt}. Please message us again then.`
       : `${formatDoctorName(doctor, 'en')}'s queue is fully booked online for today. Please contact the hospital.`,
 };
 
 const SLOT_CONFIRMATION: Record<
   Locale,
-  (doctor: string, patient: string, datetime: string, token: number, url: string) => string
+  (doctor: string, patient: string, datetime: string, token: number | string, url: string) => string
 > = {
   mr: (doctor, patient, datetime, token, url) =>
     `तुमची अपॉइंटमेंट निश्चित झाली आहे.
@@ -885,14 +937,16 @@ export async function handleInboundMessage(
       });
 
       const currentServing = servingLabel(snapshot, locale);
-      const patientsAhead = snapshot?.waitingCount ?? 0;
-      const consultMin = snapshot?.medianConsultMinutes ?? doctor.defaultConsultMinutes;
-      const waitMinutes = Math.max(5, patientsAhead * consultMin);
+      // Everyone with the doctor or waiting is ahead of a patient joining now.
+      const patientsAhead = snapshot?.rows.length ?? 0;
+      const waitLine = WAIT_LINE[locale](
+        waitInfoFor(snapshot ? estimateForNewJoiner(snapshot) : null, 'Asia/Kolkata'),
+      );
 
       const p = QUEUE_WAIT_TIME_PROMPTS[locale];
       await sendButtons(
         withBreakNote(
-          p.body(doctor.name, currentServing, patientsAhead, waitMinutes),
+          p.body(doctor.name, currentServing, patientsAhead, waitLine),
           locale,
           snapshot?.paused ?? false,
         ),
@@ -938,7 +992,7 @@ export async function handleInboundMessage(
         const sent = await provider.sendText({
           phoneNumberId: inbound.phoneNumberId,
           toPhoneE164: phoneE164,
-          body: QUEUE_UNAVAILABLE[locale](doctor.name, opensAt),
+          body: QUEUE_UNAVAILABLE[locale](doctor.name, opensAt, error.code === 'QUEUE_CLOSED'),
         });
         await withTenant(hospitalId, (tx) =>
           tx.insert(notificationOutbox).values({
@@ -965,10 +1019,8 @@ export async function handleInboundMessage(
       const view = await getPublicQueueView(created.publicToken);
 
       const currentServing = servingLabel(snapshot, locale);
-      const consultMin = snapshot?.medianConsultMinutes ?? doctor.defaultConsultMinutes;
-      const waitMinutes = Math.max(
-        5,
-        view?.eta?.waitMinutes ?? (view?.patientsAhead ?? 0) * consultMin,
+      const waitLine = WAIT_LINE[locale](
+        waitInfoFor(view?.etaState === 'not_started' ? null : (view?.eta ?? null), 'Asia/Kolkata'),
       );
 
       const baseUrl = process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000';
@@ -982,7 +1034,7 @@ export async function handleInboundMessage(
             doctor.name,
             patientDisplay,
             currentServing,
-            waitMinutes,
+            waitLine,
             `${baseUrl}/q/${created.publicToken}`,
           ),
           locale,
@@ -1187,7 +1239,8 @@ export async function handleInboundMessage(
           doctor.name,
           patientDisplay,
           timeString,
-          booked.tokenNumber,
+          // "S3" for an evening slot-session booking.
+          booked.tokenLabel,
           `${baseUrl}/q/${booked.publicToken}`,
         ),
       });

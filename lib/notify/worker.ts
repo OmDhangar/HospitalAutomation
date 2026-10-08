@@ -9,6 +9,7 @@ import {
 } from '@/lib/db/schema';
 import { cleanDoctorName } from '@/lib/domain/booking';
 import { isMockPhone } from '@/lib/domain/phone';
+import { tokenLabel } from '@/lib/domain/queue';
 import { messageRatio, shouldSuppressNonCriticalMessages } from '@/lib/domain/pricing';
 import type { Locale } from '@/lib/i18n/patient';
 import { isTemplateUnderReview, ProviderError } from './errors';
@@ -116,6 +117,7 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
         phoneE164: patients.phoneE164,
         patientLocale: patients.locale,
         tokenNumber: appointments.tokenNumber,
+        sessionKind: appointments.sessionKind,
         publicToken: appointments.publicToken,
         phoneNumberId: whatsappNumbers.phoneNumberId,
         doctorName: doctors.name,
@@ -188,10 +190,15 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
     const locale = (row.locale ?? row.patientLocale ?? 'en') as Locale;
     const payload = (row.payload ?? {}) as Record<string, unknown>;
     const cleanDoc = cleanDoctorName(String(payload.doctorName ?? row.doctorName ?? ''));
+    // "S3" for an evening slot-session patient, the plain number otherwise.
+    const token =
+      row.tokenNumber != null
+        ? tokenLabel(row.sessionKind, row.tokenNumber)
+        : String(payload.tokenNumber ?? payload.token ?? '');
 
     let variables: string[];
     if (templateCode === 'queue_link') {
-      variables = [String(row.tokenNumber), cleanDoc];
+      variables = [token, cleanDoc];
     } else if (templateCode === 'slot_reminder') {
       variables = [cleanDoc, String(payload.appointmentTime ?? payload.slotTime ?? '')];
     } else if (templateCode === 'appointment_confirmed') {
@@ -199,7 +206,7 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
         cleanDoc,
         String(payload.appointmentDate ?? ''),
         String(payload.appointmentTime ?? ''),
-        String(row.tokenNumber ?? payload.tokenNumber ?? ''),
+        token,
       ];
     } else if (templateCode === 'slot_disrupted') {
       variables = [
@@ -208,7 +215,7 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
         String(payload.appointmentDate ?? ''),
       ];
     } else if (templateCode === 'queue_skipped') {
-      variables = [String(row.tokenNumber ?? payload.tokenNumber ?? ''), cleanDoc];
+      variables = [token, cleanDoc];
     } else if (templateCode === 'appointment_cancelled') {
       variables = [cleanDoc, String(payload.appointmentDate ?? '')];
     } else if (templateCode === 'doctor_delayed') {
@@ -227,7 +234,7 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
     } else {
       // queue_milestone
       variables = [
-        String(row.tokenNumber ?? payload.tokenNumber ?? payload.token ?? ''),
+        token,
         cleanDoc,
         String(payload.patientsAhead ?? ''),
         String(payload.waitMinutes ?? ''),

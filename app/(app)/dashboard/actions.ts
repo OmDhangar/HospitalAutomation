@@ -20,7 +20,7 @@ import {
   setConsultationPaid,
 } from '@/lib/services/patient-billing';
 import { notifyQueueMovement } from '@/lib/services/display-events';
-import { CapacityError, releaseReservedWalkIns } from '@/lib/services/capacity';
+import { CapacityError, addDoctorDayCapacity, releaseReservedWalkIns } from '@/lib/services/capacity';
 import {
   advanceQueue,
   applyQueueAction,
@@ -32,6 +32,9 @@ import {
   setPriority,
   startSession,
 } from '@/lib/services/queue';
+import { BookingError, bookSlotForWalkIn, freeSlotsForWalkIn } from '@/lib/services/web-booking';
+
+export type FreeSlot = { datetimeIso: string; timeStr: string; label: string | null };
 
 async function authorize() {
   // Writable, not merely signed in: a read-only support session must not move
@@ -96,11 +99,24 @@ export async function addWalkInDynamic(args: {
   extraToken?: boolean;
   /** Admitted through emergency. Top queue priority and red alert display. */
   isEmergency?: boolean;
-}): Promise<{ ok: boolean; tokenNumber?: number; isEmergency?: boolean; error?: string; warning?: string; quotaReached?: boolean }> {
+}): Promise<{
+  ok: boolean;
+  tokenNumber?: number;
+  isEmergency?: boolean;
+  error?: string;
+  warning?: string;
+  quotaReached?: boolean;
+  /** The live queue has closed for today: offer these slots instead. */
+  freeSlots?: FreeSlot[];
+}> {
   const tStart = performance.now();
+  let hospitalId: string | null = null;
+  let timezone = 'Asia/Kolkata';
   try {
     const t0 = performance.now();
     const session = await authorize();
+    hospitalId = session.hospitalId;
+    timezone = session.timezone;
     const tAuth = performance.now();
     const name = args.name.trim();
     const phoneE164 = normalizeStaffPhone(args.phone)?.phoneE164;
@@ -176,11 +192,54 @@ export async function addWalkInDynamic(args: {
 
     return { ok: true, tokenNumber: appt.tokenNumber, isEmergency: Boolean(args.isEmergency), warning };
   } catch (err: unknown) {
+    // After a split day's live queue closes, a walk-in takes a free evening slot.
+    const queueClosed = err instanceof CapacityError && err.code === 'QUEUE_CLOSED' && hospitalId !== null;
     return {
       ok: false,
       error: err instanceof Error ? err.message : 'Failed to add walk-in',
       // Lets the form offer the owner an extra token, and only then.
       quotaReached: err instanceof CapacityError && err.code === 'QUOTA_REACHED',
+      freeSlots: queueClosed
+        ? await freeSlotsForWalkIn({ hospitalId: hospitalId!, doctorId: args.doctorId, timezone }).catch(() => [])
+        : undefined,
+    };
+  }
+}
+
+/**
+ * Books a patient at the desk into a free slot and checks them in: how
+ * reception adds a walk-in once a split day's live queue has closed.
+ */
+export async function bookSlotWalkInDynamic(args: {
+  doctorId: string;
+  branchId: string;
+  slotDatetimeIso: string;
+  name: string;
+  age?: number | null;
+  phone: string;
+}): Promise<{ ok: true; tokenLabel: string; slotTime: string } | { ok: false; error: string }> {
+  try {
+    const session = await authorize();
+    const name = args.name.trim();
+    const phoneE164 = normalizeStaffPhone(args.phone)?.phoneE164;
+    if (!name) return { ok: false, error: 'Patient name is required' };
+    if (!phoneE164) return { ok: false, error: 'Enter a valid 10-digit mobile number, or 0000000000 for no phone' };
+
+    const booked = await bookSlotForWalkIn({
+      hospitalId: session.hospitalId,
+      doctorId: args.doctorId,
+      timezone: session.timezone,
+      slotDatetimeIso: args.slotDatetimeIso,
+      patient: { name, age: args.age ?? null, phoneE164 },
+      actorUserId: session.userId,
+    });
+    notifyQueueMovement(session.hospitalId, args.branchId);
+    revalidatePath('/dashboard');
+    return { ok: true, tokenLabel: booked.tokenLabel, slotTime: booked.slotTimeFormatted };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof BookingError || err instanceof Error ? err.message : 'Could not book the slot',
     };
   }
 }
@@ -527,3 +586,31 @@ export async function releaseReservedDynamic(args: {
     return { ok: false, error: err instanceof Error ? err.message : 'Failed to release reserved tokens' };
   }
 }
+
+/** Owner/Admin: add extra appointments to today's active quota. */
+export async function addExtraCapacityAction(args: {
+  doctorId: string;
+  count: number;
+}): Promise<{ ok: boolean; previousQuota?: number; newQuota?: number; error?: string }> {
+  try {
+    const session = await authorize();
+    if (!can(session.role, 'capacity.manage')) {
+      return { ok: false, error: 'Only the hospital admin can add extra appointments' };
+    }
+    const result = await addDoctorDayCapacity({
+      hospitalId: session.hospitalId,
+      doctorId: args.doctorId,
+      count: args.count,
+      timezone: session.timezone,
+      actorUserId: session.userId,
+    });
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    revalidatePath('/dashboard');
+    return { ok: true, previousQuota: result.previousQuota, newQuota: result.newQuota };
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to add extra appointments' };
+  }
+}
+

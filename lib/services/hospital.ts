@@ -9,6 +9,7 @@ import {
   staffMemberships,
 } from '@/lib/db/schema';
 import type { DoctorScheduleMode } from '@/lib/domain/booking';
+import { effectiveMode, toDaySessions, type SessionConfig } from '@/lib/domain/sessions';
 import { assertCanAdd } from './entitlements';
 
 export type DoctorListItem = {
@@ -68,6 +69,9 @@ export async function listDoctorsInTx(
     walk_in_reserved: number;
     online_opens_minutes_before: number;
     walk_in_release_minutes: number | null;
+    timezone: string | null;
+    day_mode: DoctorScheduleMode | null;
+    sessions: Array<{ mode: SessionConfig['mode']; start: string; end: string; slot: number }> | null;
   }>(sql`
     select 
       d.id,
@@ -82,23 +86,31 @@ export async function listDoctorsInTx(
       d.walk_in_reserved,
       d.online_opens_minutes_before,
       d.walk_in_release_minutes,
+      h.timezone,
+      dds.mode::text as day_mode,
+      ds.sessions,
       coalesce(
         dds.mode,
-        ds.mode,
+        ds.first_mode,
         'queue'
       )::text as mode
     from doctors d
     inner join branches b on b.id = d.branch_id
+    inner join hospitals h on h.id = d.hospital_id
     left join doctor_day_states dds on dds.doctor_id = d.id and dds.service_date = ${serviceDate}
     left join lateral (
-      select s.mode
+      -- Every session of the day: a split day (queue, then slots) answers
+      -- "queue or slot?" differently before and after its queue closes.
+      select
+        (array_agg(s.mode order by s.start_time))[1] as first_mode,
+        json_agg(json_build_object(
+          'mode', s.mode, 'start', s.start_time, 'end', s.end_time, 'slot', s.slot_minutes
+        ) order by s.start_time) as sessions
       from doctor_schedules s
       where s.doctor_id = d.id
         and s.weekday = extract(dow from ${serviceDate}::date)
         and s.effective_from <= ${serviceDate}::date
         and (s.effective_to is null or s.effective_to >= ${serviceDate}::date)
-      order by s.created_at desc
-      limit 1
     ) ds on true
     where 1=1 ${activeFilter} ${branchFilter}
     order by d.name asc
@@ -113,12 +125,36 @@ export async function listDoctorsInTx(
     userId: r.user_id ?? null,
     defaultConsultMinutes: r.default_consult_minutes,
     active: r.active,
-    mode: r.mode ?? 'queue',
+    mode: modeNow(r, serviceDate),
     dailyTokenQuota: r.daily_token_quota,
     walkInReserved: r.walk_in_reserved ?? 0,
     onlineOpensMinutesBefore: r.online_opens_minutes_before ?? 120,
     walkInReleaseMinutes: r.walk_in_release_minutes,
   }));
+}
+
+/**
+ * What a patient can book with this doctor right now. A single-session day is
+ * its mode, as it always was; a split day offers the queue and slots until its
+ * live queue closes, then slots only. A day-level override still wins.
+ */
+function modeNow(
+  r: {
+    mode: DoctorScheduleMode | null;
+    timezone: string | null;
+    day_mode: DoctorScheduleMode | null;
+    sessions: Array<{ mode: SessionConfig['mode']; start: string; end: string; slot: number }> | null;
+  },
+  serviceDate: string,
+): DoctorScheduleMode {
+  const fallback = r.mode ?? 'queue';
+  if (r.day_mode || !r.sessions || r.sessions.length < 2) return fallback;
+  const sessions = toDaySessions(
+    r.sessions.map((x) => ({ mode: x.mode, startTime: x.start, endTime: x.end, slotMinutes: x.slot })),
+    serviceDate,
+    r.timezone ?? 'Asia/Kolkata',
+  );
+  return effectiveMode(sessions, new Date()) ?? fallback;
 }
 
 export async function listDoctors(args: {

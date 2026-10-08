@@ -27,12 +27,14 @@ async function main() {
         if (
           sweeps.appointmentsMarkedNoShow > 0 ||
           sweeps.appointmentsResumed > 0 ||
+          sweeps.slotBookingsEnqueued > 0 ||
           sweeps.subscriptionsExpired > 0 ||
           sweeps.paymentLinksExpired > 0
         ) {
           console.log(
             `[sweeps] Marked no-show: ${sweeps.appointmentsMarkedNoShow}, ` +
               `Resumed: ${sweeps.appointmentsResumed}, ` +
+              `Slot bookings joined the line: ${sweeps.slotBookingsEnqueued}, ` +
               `Expired subscriptions: ${sweeps.subscriptionsExpired}, ` +
               `Expired payment links: ${sweeps.paymentLinksExpired}`,
           );
