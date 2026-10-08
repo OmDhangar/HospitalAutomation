@@ -20,7 +20,8 @@ const bookSlotSchema = z.object({
 export type BookSlotResult =
   | {
     ok: true;
-    tokenNumber: number;
+    /** "S3" for an evening slot-session booking, the plain number otherwise. */
+    tokenNumber: string;
     publicToken: string;
     slotTimeFormatted: string;
     doctorName: string;
@@ -90,7 +91,7 @@ export async function submitSlotBooking(formData: FormData): Promise<BookSlotRes
 
     return {
       ok: true,
-      tokenNumber: result.tokenNumber,
+      tokenNumber: result.tokenLabel,
       publicToken: result.publicToken,
       slotTimeFormatted: result.slotTimeFormatted,
       doctorName: result.doctorName,

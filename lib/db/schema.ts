@@ -10,6 +10,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  real,
   smallint,
   text,
   time,
@@ -618,6 +619,12 @@ export const appointments = pgTable(
     callNumber: integer('call_number'),
     /** Capacity pool that issued the token; null when no quota applied. */
     quotaPool: text('quota_pool').$type<'reserved' | 'shared' | 'extra'>(),
+    /**
+     * Which session the appointment belongs to (0038). `slot` appointments
+     * are numbered S1, S2… by slot time in their own number space and join
+     * the line only when their session starts.
+     */
+    sessionKind: text('session_kind').$type<'queue' | 'slot'>().notNull().default('queue'),
     /** When the doctor paused this appointment. Null unless status is HELD. */
     pausedAt: timestamp('paused_at', { withTimezone: true }),
     /** Earliest time the scheduled resume job should fire. Null unless status is HELD. */
@@ -626,7 +633,7 @@ export const appointments = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [
-    uniqueIndex('appointments_token_key').on(t.doctorId, t.serviceDate, t.tokenNumber),
+    uniqueIndex('appointments_token_key').on(t.doctorId, t.serviceDate, t.sessionKind, t.tokenNumber),
     /**
      * At most one live token per patient per doctor per day. Enforced by the
      * database rather than by a check-then-insert, so a double-tapped Book
@@ -641,6 +648,10 @@ export const appointments = pgTable(
     uniqueIndex('appointments_priority_seq_key')
       .on(t.doctorId, t.serviceDate, t.prioritySeq)
       .where(sql`priority_seq is not null`),
+    /** Booked evening slots awaiting their session: all the tick sweep reads (0038). */
+    index('appointments_slot_awaiting_session_idx')
+      .on(t.scheduledSlotAt)
+      .where(sql`status = 'CONFIRMED' and session_kind = 'slot'`),
   ],
 );
 
@@ -706,13 +717,24 @@ export const doctorDayStates = pgTable(
     /** Counter for priority_seq and rejoin_seq (0034). */
     lastQueueSeq: integer('last_queue_seq').notNull().default(0),
     /**
-     * Quota snapshot, copied from the doctor when the day's first token is
-     * issued. Null token_quota means the day runs without a quota.
+     * Deprecated (0038): the old per-day quota snapshot. Capacity now reads
+     * the doctor's standing settings live; these are dropped in a follow-up.
      */
     tokenQuota: integer('token_quota'),
     walkInReserved: integer('walk_in_reserved'),
     walkInReleaseMinutes: integer('walk_in_release_minutes'),
     onlineOpensMinutesBefore: integer('online_opens_minutes_before'),
+    /** Today's extra capacity on top of the doctor's standing quota (0038). */
+    extraCapacity: integer('extra_capacity').notNull().default(0),
+    /**
+     * Observed minutes per patient, call to call (0038). Updated by the same
+     * statement that issues each call number, so the ETA costs no extra write
+     * and no read of consultation history.
+     */
+    paceMinutes: real('pace_minutes'),
+    paceSamples: integer('pace_samples').notNull().default(0),
+    /** Last call today; cleared by a break so the break is never a sample. */
+    lastCalledAt: timestamp('last_called_at', { withTimezone: true }),
     lastReservedToken: integer('last_reserved_token').notNull().default(0),
     /** Owner released unused reserved walk-in capacity to the shared pool. */
     reservedReleasedAt: timestamp('reserved_released_at', { withTimezone: true }),

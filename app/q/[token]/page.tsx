@@ -50,7 +50,7 @@ export default async function PatientQueuePage({
           hint={justCancelled ? s.cancelDoneHint : s.expiredHint}
           tone="muted"
         />
-        <TokenCard label={s.yourToken} token={view.tokenNumber} muted />
+        <TokenCard label={s.yourToken} token={view.tokenLabel} muted />
       </Shell>
     );
   }
@@ -59,7 +59,7 @@ export default async function PatientQueuePage({
     return (
       <Shell locale={locale} token={token}>
         <Message title={s.completed} hint={s.completedHint} tone="done" />
-        <TokenCard label={s.yourToken} token={view.tokenNumber} muted />
+        <TokenCard label={s.yourToken} token={view.tokenLabel} muted />
       </Shell>
     );
   }
@@ -78,7 +78,10 @@ export default async function PatientQueuePage({
         <Message title={s.resumeDone} hint={s.resumeDoneHint} tone="done" />
       ) : null}
 
-      {isTurn ? (
+      {view.status === 'CONFIRMED' && view.sessionKind === 'slot' ? (
+        // A booked evening slot: a time, not a place in a line that has not formed yet.
+        <Message title={s.slotBooked} hint={s.slotBookedHint} tone="done" />
+      ) : isTurn ? (
         <Message title={s.yourTurn} hint={s.yourTurnHint} tone="call" />
       ) : isInConsult ? (
         <Message title={s.withDoctor} tone="done" />
@@ -146,7 +149,7 @@ export default async function PatientQueuePage({
             strings={s}
             doctorName={view.doctorName}
             eta={null}
-            currentToken={view.currentCallNumber !== null ? `${s.callWord} ${view.currentCallNumber}` : view.currentToken}
+            currentToken={view.currentCallNumber !== null ? `${s.callWord} ${view.currentCallNumber}` : view.currentTokenLabel}
           />
         </>
       ) : (
@@ -159,7 +162,7 @@ export default async function PatientQueuePage({
               ? formatWindowIn(view.timezone, view.eta.windowStart, view.eta.windowEnd)
               : null
           }
-          currentToken={view.currentCallNumber !== null ? `${s.callWord} ${view.currentCallNumber}` : view.currentToken}
+          currentToken={view.currentCallNumber !== null ? `${s.callWord} ${view.currentCallNumber}` : view.currentTokenLabel}
         />
       )}
 
@@ -176,7 +179,7 @@ export default async function PatientQueuePage({
             value={view.callNumber}
           />
         ) : null}
-        <TokenCard label={s.yourToken} token={view.tokenNumber} />
+        <TokenCard label={s.yourToken} token={view.tokenLabel} />
       </div>
       {view.callNumber !== null ? (
         <p className="-mt-2 px-2 text-center text-sm text-ink-500">{s.callNumberHint}</p>
@@ -460,7 +463,7 @@ function TokenCard({
   muted = false,
 }: {
   label: string;
-  token: number;
+  token: number | string;
   muted?: boolean;
 }) {
   return (

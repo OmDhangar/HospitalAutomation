@@ -5,6 +5,7 @@ import { appointments, auditLogs, doctorDayStates } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import {
   CapacityError,
+  addDoctorDayCapacity,
   getDayCapacity,
   releaseReservedWalkIns,
   saveDoctorCapacity,
@@ -301,16 +302,88 @@ describe.skipIf(!enabled)('arrival, priority and capacity', () => {
       expect(await configure(5, 6)).toMatchObject({ ok: false });
     });
 
-    it('changing the quota mid-day leaves the day in progress alone', async () => {
+    it('a saved change applies at once, today included; no per-day setup', async () => {
       await configure(3, 1);
-      await book('walk_in'); // 1 reserved, snapshot taken
+      await book('walk_in'); // 1 reserved
       await configure(10, 5);
-      const next = await book('whatsapp');
-      expect(next.tokenNumber).toBe(2); // still W=1 for today
+      // The new reserve fences 1..5 from online straight away.
+      expect((await book('whatsapp')).tokenNumber).toBe(6);
+      // Walk-ins carry on through the enlarged reserve.
+      const walkIn = await book('walk_in');
+      expect(walkIn.tokenNumber).toBe(2);
+      expect(walkIn.appointment.quotaPool).toBe('reserved');
+      expect((await getDayCapacity({ hospitalId, doctorId, timezone: TZ }))!.quota).toBe(10);
+    });
+
+    it('a day that issued tokens before the reserve was set still keeps online out of it', async () => {
+      // Regression: the day used to freeze its config at the first token, so
+      // online patients kept taking 2, 3, 4… from a reserve set afterwards.
+      const early = await book('whatsapp');
+      expect(early.tokenNumber).toBe(1);
+      await configure(70, 20);
+      expect((await book('whatsapp')).tokenNumber).toBe(21);
+      // Walk-ins get the reserve, skipping the number online already holds.
+      expect((await book('walk_in')).tokenNumber).toBe(2);
+    });
+
+    it('a walk-in reserve works without a daily quota', async () => {
+      expect(
+        await saveDoctorCapacity({
+          hospitalId,
+          doctorId,
+          config: { dailyQuota: null, walkInReserved: 5, onlineOpensMinutesBefore: 120, walkInReleaseMinutes: null },
+        }),
+      ).toMatchObject({ ok: true });
+      expect((await book('whatsapp')).tokenNumber).toBe(6);
+      expect((await book('walk_in')).tokenNumber).toBe(1);
+    });
+
+    it('adding extra appointments increases today quota without altering doctor base settings and unblocks booking', async () => {
+      await configure(2, 1);
+      await book('walk_in'); // 1 (reserved)
+      await book('walk_in'); // 2 (shared)
+      await expect(book('walk_in')).rejects.toMatchObject({ code: 'QUOTA_REACHED' });
+
+      // Admin adds +2 extra appointments for today
+      const addRes = await addDoctorDayCapacity({
+        hospitalId,
+        doctorId,
+        count: 2,
+        timezone: TZ,
+      });
+      expect(addRes).toEqual({ ok: true, previousQuota: 2, newQuota: 4 });
+
+      // Next 2 bookings succeed normally without needing extraToken flag
+      const b3 = await book('walk_in');
+      expect(b3.tokenNumber).toBe(3);
+      expect(b3.appointment.quotaPool).toBe('shared');
+
+      const b4 = await book('whatsapp');
+      expect(b4.tokenNumber).toBe(4);
+      expect(b4.appointment.quotaPool).toBe('shared');
+
+      // 5th booking reaches new quota limit
+      await expect(book('walk_in')).rejects.toMatchObject({ code: 'QUOTA_REACHED' });
+
+      // Verify audit log
+      const audits = await withTenant(hospitalId, (tx) =>
+        tx.select({ action: auditLogs.action, metadata: auditLogs.metadata }).from(auditLogs).where(eq(auditLogs.action, 'capacity.extra_quota.added')),
+      );
+      expect(audits).toHaveLength(1);
+      expect(audits[0].metadata).toMatchObject({
+        doctor_id: doctorId,
+        previous_quota: 2,
+        added_count: 2,
+        new_quota: 4,
+      });
+
+      // Verify doctor's base standing quota is unchanged; the extra is today's only.
+      const [doc] = await admin<{ daily_token_quota: number | null }[]>`select daily_token_quota from doctors where id = ${doctorId}`;
+      expect(doc.daily_token_quota).toBe(2);
       const [day] = await withTenant(hospitalId, (tx) =>
         tx.select().from(doctorDayStates).where(eq(doctorDayStates.doctorId, doctorId)),
       );
-      expect(day.tokenQuota).toBe(3);
+      expect(day.extraCapacity).toBe(2);
     });
 
     it('a doctor without a quota keeps the old unlimited behaviour', async () => {

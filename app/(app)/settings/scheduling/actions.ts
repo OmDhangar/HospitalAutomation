@@ -16,9 +16,18 @@ export async function fetchDoctorScheduleData(doctorId: string, serviceDate?: st
 
 export async function saveScheduleConfigApi(payload: {
   doctorId: string;
-  startTime: string;
-  endTime: string;
-  slotMinutes: number;
+  /** Every session of the day, e.g. a live queue then an evening slot session. */
+  sessions?: Array<{
+    mode: 'queue' | 'slot' | 'both';
+    startTime: string;
+    endTime: string;
+    slotMinutes: number;
+    breakStartTime?: string | null;
+    breakEndTime?: string | null;
+  }>;
+  startTime?: string;
+  endTime?: string;
+  slotMinutes?: number;
   breakStartTime?: string | null;
   breakEndTime?: string | null;
   mode?: 'queue' | 'slot' | 'both';

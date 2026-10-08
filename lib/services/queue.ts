@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { getDb, withTenant, type Tx } from '@/lib/db';
 import {
   appointments,
@@ -13,8 +13,11 @@ import {
 import type { CapacityChannel } from '@/lib/domain/capacity';
 import { isCancellableByPatient } from '@/lib/domain/disruption';
 import {
+  effectivePace,
   estimateEta,
+  foldPaceSample,
   isMeaningfulEtaShift,
+  paceSample,
   resolveEta,
   startDelayMinutes,
   type EtaEstimate,
@@ -34,6 +37,7 @@ import {
   patientsAhead,
   priorityRank,
   projectedCallNumber,
+  tokenLabel,
 } from '@/lib/domain/queue';
 import { isMockPhone } from '@/lib/domain/phone';
 import { formatTimeIn, serviceDateIn } from '@/lib/domain/time';
@@ -67,11 +71,13 @@ export const MILESTONE_WAIT_MINUTES = 10;
  */
 export const MILESTONE_AHEAD = 1;
 const MILESTONE_KIND = 'queue_approaching';
-const CONSULT_SAMPLE_SIZE = 50;
 
 export type QueueRow = {
   appointmentId: string;
   tokenNumber: number;
+  /** What to show as the token: "S3" for an evening slot-session patient. */
+  tokenLabel: string;
+  sessionKind: 'queue' | 'slot';
   status: AppointmentStatus;
   priority: number;
   /** True if patient was admitted as an emergency. */
@@ -109,21 +115,33 @@ export type QueueSnapshot = {
   /** When the doctor's current break began, or null when not on a break. */
   breakStartedAt: Date | null;
   currentToken: number | null;
+  currentTokenLabel: string | null;
   /** Call number of whoever is with the doctor: what the room and the TV announce. */
   currentCallNumber: number | null;
   currentPatientName?: string | null;
-  nextPatient?: { tokenNumber: number; patientName: string; callNumber: number | null } | null;
+  nextPatient?: { tokenNumber: number; tokenLabel: string; patientName: string; callNumber: number | null } | null;
   waitingCount: number;
   completedCount: number;
   rows: QueueRow[];
   /** Skipped and held patients: out of the line, but recoverable. */
   parked: QueueRow[];
   /**
+   * Evening slot-session bookings not in the line yet, in slot order. They
+   * join when their session starts, or when reception checks them in.
+   */
+  booked: QueueRow[];
+  /**
    * Seen today, most recent first. The queue is done with them; the desk
    * often is not, because many patients pay after the consultation.
    */
   completed: QueueRow[];
-  medianConsultMinutes: number | null;
+  /**
+   * Minutes per patient the estimates use: today's call-to-call pace blended
+   * with the configured consultation time.
+   */
+  paceMinutes: number;
+  /** How many of today's intervals the pace was measured from. */
+  paceSamples: number;
   delayMinutes: number;
   /** When OPD was meant to start today, from the doctor's schedule. */
   scheduledStartAt: Date | null;
@@ -147,6 +165,7 @@ const toQueueEntry = (row: {
   queueAfterToken: number | null;
   rejoinSeq: number | null;
   callNumber: number | null;
+  sessionKind?: 'queue' | 'slot';
 }): QueueEntry => ({
   appointmentId: row.id,
   tokenNumber: row.tokenNumber,
@@ -161,6 +180,20 @@ const toQueueEntry = (row: {
   queueAfterToken: row.queueAfterToken,
   rejoinSeq: row.rejoinSeq,
   callNumber: row.callNumber,
+  sessionKind: row.sessionKind ?? 'queue',
+});
+
+/**
+ * The ETA's pace inputs, read from the doctor-day row every caller already has.
+ * Nothing scans consultation history: the pace is kept up to date on each Next.
+ */
+const paceInputs = (
+  day: { paceMinutes: number | null; paceSamples: number } | null | undefined,
+  configuredMinutes: number,
+) => ({
+  paceMinutes: day?.paceMinutes ?? null,
+  paceSamples: day?.paceSamples ?? 0,
+  configuredMinutes,
 });
 
 /**
@@ -199,11 +232,27 @@ async function nextQueueSeq(tx: Tx, doctorId: string, serviceDate: string): Prom
   return row.seq;
 }
 
-/** Next call number for the doctor-day. Under the lock, so two Nexts never share one. */
-async function nextCallNumber(tx: Tx, doctorId: string, serviceDate: string): Promise<number> {
+/**
+ * Next call number for the doctor-day. Under the lock, so two Nexts never share one.
+ *
+ * The same statement records the call time and, when the interval since the
+ * previous call is a fair sample, folds it into the day's pace. The ETA is
+ * kept current at no cost beyond the write every Next already makes.
+ */
+async function nextCallNumber(
+  tx: Tx,
+  doctorId: string,
+  serviceDate: string,
+  now: Date,
+  pace: { paceMinutes: number; paceSamples: number } | null,
+): Promise<number> {
   const [row] = await tx
     .update(doctorDayStates)
-    .set({ lastCallNumber: sql`${doctorDayStates.lastCallNumber} + 1` })
+    .set({
+      lastCallNumber: sql`${doctorDayStates.lastCallNumber} + 1`,
+      lastCalledAt: now,
+      ...(pace ?? {}),
+    })
     .where(and(eq(doctorDayStates.doctorId, doctorId), eq(doctorDayStates.serviceDate, serviceDate)))
     .returning({ n: doctorDayStates.lastCallNumber });
   return row.n;
@@ -229,7 +278,7 @@ async function placeReturningPatient(
   ]);
   const entries = rows.map(toQueueEntry);
   const self = entries.find((entry) => entry.appointmentId === args.appointmentId);
-  const frontier = lateFrontier(entries);
+  const frontier = lateFrontier(entries, self?.sessionKind);
   if (!self) return { late: false, frontier, queueAfterToken: null, n: settings.ctx.lateRejoinAfter };
 
   const late = isLateReturn(entries, self);
@@ -280,6 +329,7 @@ async function loadDayAppointments(
       rejoinSeq: appointments.rejoinSeq,
       callNumber: appointments.callNumber,
       quotaPool: appointments.quotaPool,
+      sessionKind: appointments.sessionKind,
     })
     .from(appointments)
     .innerJoin(patients, eq(patients.id, appointments.patientId))
@@ -289,71 +339,6 @@ async function loadDayAppointments(
         eq(appointments.serviceDate, args.serviceDate),
       ),
     );
-}
-
-/** Observed consultation lengths, most recent last, for the ETA model. */
-async function loadConsultDurations(tx: Tx, doctorId: string): Promise<number[]> {
-  const rows = await tx
-    .select({
-      minutes: sql<number>`
-        extract(epoch from (${appointments.completedAt} - ${appointments.consultStartedAt})) / 60
-      `,
-    })
-    .from(appointments)
-    .where(
-      and(
-        eq(appointments.doctorId, doctorId),
-        eq(appointments.status, 'COMPLETED'),
-        isNotNull(appointments.consultStartedAt),
-        isNotNull(appointments.completedAt),
-      ),
-    )
-    .orderBy(desc(appointments.completedAt))
-    .limit(CONSULT_SAMPLE_SIZE);
-
-  return rows
-    .map((row) => Number(row.minutes))
-    // A consultation cannot take zero minutes or three hours; clock skew and
-    // forgotten Complete clicks would otherwise poison the median.
-    .filter((minutes) => Number.isFinite(minutes) && minutes > 0 && minutes < 180)
-    .reverse();
-}
-
-/**
- * Dashboard-optimized variant: scoped to a single service date.
- *
- * On the dashboard, the queue resets daily and all patients are handled
- * within the day, so we only need today's durations for the ETA model.
- * This avoids scanning the entire appointment history.
- */
-async function loadConsultDurationsForDate(
-  tx: Tx,
-  doctorId: string,
-  serviceDate: string,
-): Promise<number[]> {
-  const rows = await tx
-    .select({
-      minutes: sql<number>`
-        extract(epoch from (${appointments.completedAt} - ${appointments.consultStartedAt})) / 60
-      `,
-    })
-    .from(appointments)
-    .where(
-      and(
-        eq(appointments.doctorId, doctorId),
-        eq(appointments.serviceDate, serviceDate),
-        eq(appointments.status, 'COMPLETED'),
-        isNotNull(appointments.consultStartedAt),
-        isNotNull(appointments.completedAt),
-      ),
-    )
-    .orderBy(desc(appointments.completedAt))
-    .limit(CONSULT_SAMPLE_SIZE);
-
-  return rows
-    .map((row) => Number(row.minutes))
-    .filter((minutes) => Number.isFinite(minutes) && minutes > 0 && minutes < 180)
-    .reverse();
 }
 
 /**
@@ -439,8 +424,7 @@ async function enqueueMilestones(
     entries: QueueEntry[];
     rows: Awaited<ReturnType<typeof loadDayAppointments>>;
     doctorName: string;
-    consultDurations: number[];
-    fallbackConsultMinutes?: number;
+    pace: ReturnType<typeof paceInputs>;
     ctx: QueueContext;
     scheduledStartAt: Date | null;
     sessionStartedAt: Date | null;
@@ -465,8 +449,7 @@ async function enqueueMilestones(
 
     const eta = resolveEta({
       patientsAhead: index,
-      consultDurations: args.consultDurations,
-      fallbackConsultMinutes: args.fallbackConsultMinutes,
+      ...args.pace,
       scheduledStartAt: args.scheduledStartAt,
       sessionStartedAt: args.sessionStartedAt,
       now: args.now,
@@ -496,7 +479,7 @@ async function enqueueMilestones(
           // The template's fourth variable. Omitting it rendered "Estimated
           // wait: ~ min." — and an empty parameter is a send Meta can reject
           // outright.
-          waitMinutes: waitMinutes ?? index * (eta.basis.consultMinutes || 10),
+          waitMinutes: waitMinutes ?? Math.round(index * eta.basis.consultMinutes),
         },
       })
       .onConflictDoNothing();
@@ -785,6 +768,7 @@ export async function createWalkIn(args: {
       rejoinSeq: null,
       callNumber: null,
       quotaPool: row.appt_quota_pool,
+      sessionKind: 'queue',
       createdAt: new Date(row.appt_created_at),
       updatedAt: new Date(row.appt_updated_at),
     };
@@ -842,14 +826,40 @@ export async function advanceQueue(args: {
       serviceDate,
     });
 
-    const rows = await loadDayAppointments(tx, { doctorId: args.doctorId, serviceDate });
+    const [rows, settings] = await Promise.all([
+      loadDayAppointments(tx, { doctorId: args.doctorId, serviceDate }),
+      loadQueueSettings(tx, args.doctorId),
+    ]);
     const entries = rows.map(toQueueEntry);
     const transitions = callNext(entries);
+    const completing = new Set(transitions.filter((t) => t.action === 'complete').map((t) => t.appointmentId));
+
+    // The previous call: was that patient actually seen (completed now or
+    // earlier), or held/skipped? Only a seen patient makes a fair pace sample.
+    const previous = rows.reduce<(typeof rows)[number] | null>(
+      (latest, row) =>
+        row.calledAt && (!latest?.calledAt || row.calledAt > latest.calledAt) ? row : latest,
+      null,
+    );
+    const previousWasSeen =
+      !!previous && (completing.has(previous.id) || previous.status === 'COMPLETED');
 
     for (const transition of transitions) {
       const row = rows.find((r) => r.id === transition.appointmentId)!;
-      // The day's serving sequence: the next number, whatever the token.
-      const callNumber = transition.action === 'call' ? await nextCallNumber(tx, args.doctorId, serviceDate) : null;
+      let callNumber: number | null = null;
+      if (transition.action === 'call') {
+        const sample = paceSample({
+          lastCalledAt: day.lastCalledAt,
+          now,
+          previousWasSeen,
+          calledEnqueuedAt: row.enqueuedAt,
+          configuredMinutes: settings.defaultConsultMinutes,
+        });
+        const pace = sample === null ? null : foldPaceSample(day, sample);
+        // The day's serving sequence: the next number, whatever the token.
+        callNumber = await nextCallNumber(tx, args.doctorId, serviceDate, now, pace);
+        if (pace) Object.assign(day, pace);
+      }
       await writeTransition(tx, {
         hospitalId: args.hospitalId,
         doctorId: args.doctorId,
@@ -866,8 +876,6 @@ export async function advanceQueue(args: {
     }
 
     if (transitions.length > 0) {
-      const settings = await loadQueueSettings(tx, args.doctorId);
-
       const updated = rows.map((row) => {
         const transition = transitions.find((t) => t.appointmentId === row.id);
         return transition
@@ -875,18 +883,14 @@ export async function advanceQueue(args: {
           : row;
       });
 
-      // The nudge is now time-based, so it needs the same evidence the
-      // patient-facing ETA uses: what this doctor's consultations have
-      // actually taken today, and how far behind the session is running.
-      const durations = await loadConsultDurationsForDate(tx, args.doctorId, serviceDate);
-
+      // The nudge is time-based, so it uses the same pace the patient-facing
+      // ETA does, just updated above, and how far behind the session is running.
       await enqueueMilestones(tx, {
         hospitalId: args.hospitalId,
         entries: updated.map(toQueueEntry),
         rows: updated,
         doctorName: settings.doctorName,
-        consultDurations: durations,
-        fallbackConsultMinutes: settings.defaultConsultMinutes,
+        pace: paceInputs(day, settings.defaultConsultMinutes),
         ctx: settings.ctx,
         scheduledStartAt: await resolveScheduledStartInTx(tx, {
           doctorId: args.doctorId,
@@ -942,9 +946,9 @@ export async function applyQueueAction(args: {
 
     const to = applyAction(fresh.status, args.action);
 
-    // Coming back into the line: if their turn passed while they were away,
-    // they go behind the next N waiting patients.
-    const returning = args.action === 'recall' || args.action === 'resume';
+    // Coming back into the line, or checking in to it: if their turn passed
+    // while they were away, they go behind the next N waiting patients.
+    const returning = args.action === 'recall' || args.action === 'resume' || args.action === 'enqueue';
     const placement = returning
       ? await placeReturningPatient(tx, {
           doctorId: current.doctorId,
@@ -1311,6 +1315,7 @@ export async function startSession(args: {
       scheduledStartAt,
       startedAt: now,
       delayMinutes,
+      day,
     });
 
     return { sessionStartedAt: now, alreadyStarted: false, delayMinutes };
@@ -1337,17 +1342,17 @@ async function notifyLateStart(
     scheduledStartAt: Date | null;
     startedAt: Date;
     delayMinutes: number;
+    day: { paceMinutes: number | null; paceSamples: number };
   },
 ) {
   if (!args.scheduledStartAt || args.delayMinutes <= 0) return;
 
-  const [rows, settings, durations] = await Promise.all([
+  const [rows, settings] = await Promise.all([
     loadDayAppointments(tx, { doctorId: args.doctorId, serviceDate: args.serviceDate }),
     loadQueueSettings(tx, args.doctorId),
-    loadConsultDurationsForDate(tx, args.doctorId, args.serviceDate),
   ]);
   const entries = rows.map(toQueueEntry);
-  const base = { consultDurations: durations, fallbackConsultMinutes: settings.defaultConsultMinutes };
+  const base = paceInputs(args.day, settings.defaultConsultMinutes);
 
   for (const row of rows) {
     if (row.status !== 'WAITING' || !row.whatsappOptInAt) continue;
@@ -1476,6 +1481,9 @@ export async function setDoctorPaused(args: {
         pausedReason: args.paused ? (args.reason ?? null) : null,
         // Pressing "Start break" twice must not move the start of the break.
         pausedAt: args.paused ? (day.paused ? (day.pausedAt ?? now) : now) : null,
+        // The first call after a break is not a pace sample: the interval
+        // would be the break, not a patient.
+        ...(args.paused ? {} : { lastCalledAt: null }),
         updatedAt: now,
       })
       .where(eq(doctorDayStates.id, day.id));
@@ -1644,10 +1652,9 @@ export async function resumeAppointment(args: {
 /**
  * Queue snapshot that runs inside an already-open transaction.
  *
- * By default uses the date-scoped `loadConsultDurationsForDate` which is
- * much faster on the dashboard (the queue resets daily). Pass
- * `fullHistoryDurations: true` to scan across all time instead — useful
- * for reports or the public patient view.
+ * Polled by the dashboard and the TV every few seconds, so it reads only the
+ * day: the pace for estimates lives on the doctor-day row, and no
+ * consultation history is scanned.
  */
 export async function getQueueSnapshotInTx(
   tx: Tx,
@@ -1655,16 +1662,14 @@ export async function getQueueSnapshotInTx(
     doctorId: string;
     serviceDate: string;
     now?: Date;
-    fullHistoryDurations?: boolean;
   },
 ): Promise<QueueSnapshot | null> {
   const t0 = performance.now();
-  // All 4 queries run concurrently over the transaction connection
+  // All 3 queries run concurrently over the transaction connection
   const [
     { data: doctorRows, duration: tDoc },
     { data: dayRows, duration: tDay },
     { data: rows, duration: tAppts },
-    { data: durations, duration: tDurs },
   ] = await Promise.all([
     (async () => {
       const s = performance.now();
@@ -1692,19 +1697,12 @@ export async function getQueueSnapshotInTx(
       const res = await loadDayAppointments(tx, { doctorId: args.doctorId, serviceDate: args.serviceDate });
       return { data: res, duration: performance.now() - s };
     })(),
-    (async () => {
-      const s = performance.now();
-      const res = await (args.fullHistoryDurations
-        ? loadConsultDurations(tx, args.doctorId)
-        : loadConsultDurationsForDate(tx, args.doctorId, args.serviceDate));
-      return { data: res, duration: performance.now() - s };
-    })(),
   ]);
 
   const tSnapshot = performance.now() - t0;
   console.log(
     `[PERF:queue:snapshot] doctor: ${tDoc.toFixed(1)}ms | dayState: ${tDay.toFixed(1)}ms | ` +
-    `appts: ${tAppts.toFixed(1)}ms | durations: ${tDurs.toFixed(1)}ms | total: ${tSnapshot.toFixed(1)}ms`
+    `appts: ${tAppts.toFixed(1)}ms | total: ${tSnapshot.toFixed(1)}ms`
   );
 
   const doctor = doctorRows[0];
@@ -1720,6 +1718,7 @@ export async function getQueueSnapshotInTx(
     dayOverride: day?.scheduledStartAt ?? null,
   });
   const sessionStartedAt = day?.sessionStartedAt ?? null;
+  const pace = paceInputs(day, settings.defaultConsultMinutes);
 
   const entries = rows.map(toQueueEntry);
   const ordered = orderQueue(entries);
@@ -1744,8 +1743,7 @@ export async function getQueueSnapshotInTx(
     if (ahead === null || day?.paused) return { ahead, etaAt: null };
     const eta = resolveEta({
       patientsAhead: ahead,
-      consultDurations: durations,
-      fallbackConsultMinutes: settings.defaultConsultMinutes,
+      ...pace,
       scheduledStartAt,
       sessionStartedAt,
       now,
@@ -1764,24 +1762,27 @@ export async function getQueueSnapshotInTx(
     pausedReason: day?.pausedReason ?? null,
     breakStartedAt: day?.paused ? (day.pausedAt ?? null) : null,
     currentToken: serving?.tokenNumber ?? null,
+    currentTokenLabel: servingRow ? tokenLabel(servingRow.sessionKind, servingRow.tokenNumber) : null,
     currentCallNumber: serving?.callNumber ?? null,
     currentPatientName: servingRow ? servingRow.patientName : null,
     nextPatient: nextWaitingRow
       ? {
           tokenNumber: nextWaitingRow.tokenNumber,
+          tokenLabel: tokenLabel(nextWaitingRow.sessionKind, nextWaitingRow.tokenNumber),
           patientName: nextWaitingRow.patientName,
           callNumber: nextWaiting ? callNumberFor(nextWaiting) : null,
         }
       : null,
     waitingCount: ordered.filter((e) => e.status === 'WAITING').length,
     completedCount: rows.filter((r) => r.status === 'COMPLETED').length,
-    medianConsultMinutes: durations.length > 0 ? durations[Math.floor(durations.length / 2)] : null,
+    paceMinutes: effectivePace(pace),
+    paceSamples: pace.paceSamples,
     delayMinutes: startDelayMinutes({ scheduledStartAt, sessionStartedAt, now }),
     scheduledStartAt,
     sessionStartedAt,
     etaState: resolveEta({
       patientsAhead: 0,
-      consultDurations: durations,
+      ...pace,
       scheduledStartAt,
       sessionStartedAt,
       now,
@@ -1805,12 +1806,18 @@ export async function getQueueSnapshotInTx(
       .filter((row) => row.status === 'COMPLETED')
       .sort((a, b) => b.tokenNumber - a.tokenNumber)
       .map(toQueueRow),
+    booked: rows
+      .filter((row) => row.status === 'CONFIRMED' && row.sessionKind === 'slot')
+      .sort((a, b) => a.tokenNumber - b.tokenNumber)
+      .map(toQueueRow),
   };
 }
 
 const toQueueRow = (row: Awaited<ReturnType<typeof loadDayAppointments>>[number]): QueueRow => ({
   appointmentId: row.id,
   tokenNumber: row.tokenNumber,
+  tokenLabel: tokenLabel(row.sessionKind, row.tokenNumber),
+  sessionKind: row.sessionKind,
   status: row.status,
   priority: row.priority,
   isEmergency: Boolean(row.isEmergency),
@@ -1841,15 +1848,38 @@ export async function getQueueSnapshot(args: {
       doctorId: args.doctorId,
       serviceDate,
       now,
-      fullHistoryDurations: true,
     }),
   );
+}
+
+/**
+ * The estimate a patient joining now would get: behind everyone with the
+ * doctor or waiting, on the same pace and schedule as every other estimate.
+ *
+ * Replaces "waiting count × a sample from the middle of an unsorted list,
+ * floored at five minutes", which ignored the scheduled start (a 12pm OPD
+ * read "~5 min" at 10am) and the patient already with the doctor.
+ */
+export function estimateForNewJoiner(snapshot: QueueSnapshot, now: Date = new Date()): EtaResult {
+  return resolveEta({
+    patientsAhead: snapshot.rows.length,
+    // Already blended; passing it as its own prior keeps it unchanged.
+    paceMinutes: snapshot.paceMinutes,
+    paceSamples: snapshot.paceSamples,
+    configuredMinutes: snapshot.paceMinutes,
+    scheduledStartAt: snapshot.scheduledStartAt,
+    sessionStartedAt: snapshot.sessionStartedAt,
+    now,
+  });
 }
 
 export type PublicQueueView = {
   status: AppointmentStatus;
   /** The token issued at booking. Never changes, whatever the serving order does. */
   tokenNumber: number;
+  /** The token as shown: "S3" for an evening slot-session booking. */
+  tokenLabel: string;
+  sessionKind: 'queue' | 'slot';
   doctorName: string;
   /** Set for a booked slot, null for a walk-in who simply joined the queue. */
   scheduledSlotAt: Date | null;
@@ -1857,6 +1887,7 @@ export type PublicQueueView = {
   cancellable: boolean;
   patientFirstName: string;
   currentToken: number | null;
+  currentTokenLabel: string | null;
   /** Call number now with the doctor: the serving order, not a token. */
   currentCallNumber: number | null;
   /**
@@ -1907,6 +1938,7 @@ export async function getPublicQueueView(
         id: appointments.id,
         status: appointments.status,
         tokenNumber: appointments.tokenNumber,
+        sessionKind: appointments.sessionKind,
         doctorId: appointments.doctorId,
         serviceDate: appointments.serviceDate,
         scheduledSlotAt: appointments.scheduledSlotAt,
@@ -1935,10 +1967,9 @@ export async function getPublicQueueView(
         ),
       );
 
-    const [rows, settings, durations] = await Promise.all([
+    const [rows, settings] = await Promise.all([
       loadDayAppointments(tx, { doctorId: appointment.doctorId, serviceDate: appointment.serviceDate }),
       loadQueueSettings(tx, appointment.doctorId),
-      loadConsultDurations(tx, appointment.doctorId),
     ]);
     const entries = rows.map(toQueueEntry);
     const ordered = orderQueue(entries);
@@ -1954,13 +1985,18 @@ export async function getPublicQueueView(
     });
 
     const expired = appointment.expiresAt.getTime() < now.getTime();
+    // A booked evening slot not in the line yet has a time, not a queue estimate.
+    const awaitingSession = appointment.status === 'CONFIRMED' && appointment.sessionKind === 'slot';
     const showEta =
-      ahead !== null && !expired && !(day?.paused ?? false) && appointment.status !== 'HELD';
+      ahead !== null &&
+      !expired &&
+      !awaitingSession &&
+      !(day?.paused ?? false) &&
+      appointment.status !== 'HELD';
     const resolvedEta: EtaResult | null = showEta
       ? resolveEta({
           patientsAhead: ahead,
-          consultDurations: durations,
-          fallbackConsultMinutes: appointment.defaultConsultMinutes,
+          ...paceInputs(day, appointment.defaultConsultMinutes),
           scheduledStartAt,
           sessionStartedAt: day?.sessionStartedAt ?? null,
           now,
@@ -1970,18 +2006,21 @@ export async function getPublicQueueView(
     return {
       status: appointment.status,
       tokenNumber: appointment.tokenNumber,
+      tokenLabel: tokenLabel(appointment.sessionKind, appointment.tokenNumber),
+      sessionKind: appointment.sessionKind,
       doctorName: appointment.doctorName,
       scheduledSlotAt: appointment.scheduledSlotAt,
       cancellable: !expired && isCancellableByPatient(appointment.status),
       // First name only: a forwarded link should not expose a full identity.
       patientFirstName: appointment.patientName.split(' ')[0] ?? '',
       currentToken: serving?.tokenNumber ?? null,
+      currentTokenLabel: serving ? tokenLabel(serving.sessionKind, serving.tokenNumber) : null,
       currentCallNumber: serving?.callNumber ?? null,
       callNumber:
-        appointment.status === 'HELD' || appointment.status === 'SKIPPED'
+        appointment.status === 'HELD' || appointment.status === 'SKIPPED' || awaitingSession
           ? null
           : projectedCallNumber(entries, appointment.id, day?.lastCallNumber ?? 0, settings.ctx),
-      patientsAhead: ahead,
+      patientsAhead: awaitingSession ? null : ahead,
       paused: day?.paused ?? false,
       breakStartedAt: day?.paused ? (day.pausedAt ?? null) : null,
       isAppointmentPaused: appointment.status === 'HELD',

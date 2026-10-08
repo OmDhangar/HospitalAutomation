@@ -1,5 +1,5 @@
 import { and, asc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
-import { withTenant } from '@/lib/db';
+import { withTenant, type Tx } from '@/lib/db';
 import { getAdminDb } from '@/lib/db/admin';
 import {
   appointments,
@@ -12,18 +12,22 @@ import {
 } from '@/lib/db/schema';
 import { generatePublicToken } from '@/lib/security/tokens';
 import { formatDoctorName } from '@/lib/domain/booking';
+import { tokenLabel } from '@/lib/domain/queue';
+import { sessionForSlot, type DaySession } from '@/lib/domain/sessions';
 import { formatTimeIn, serviceDateIn } from '@/lib/domain/time';
 import type { Locale } from '@/lib/i18n/patient';
 import { getProvider } from '@/lib/notify/provider';
 import { allocateTokenInTx, CapacityError } from './capacity';
 import { lockDoctorDay } from './doctor-day';
-import { getDoctorSlotsForDate } from './scheduling';
+import { getDoctorSlotsForDate, type GeneratedSlot } from './scheduling';
 import { getPlanAccess } from './subscriptions';
 
 export type TimeSlot = {
   timeStr: string;
   datetimeIso: string;
   available: boolean;
+  /** "S3" for a slot in an evening slot session; null for a classic slot. */
+  slotLabel: string | null;
 };
 
 export type DoctorBookingDetails = {
@@ -161,6 +165,7 @@ export async function getDoctorBookingDetails(args: {
       timeStr: s.timeStr,
       datetimeIso: s.datetimeIso,
       available: s.available,
+      slotLabel: s.slotNumber !== null ? tokenLabel('slot', s.slotNumber) : null,
     }));
 
     return {
@@ -263,94 +268,245 @@ export async function bookScheduledSlot(args: {
     );
   }
 
-  return withTenant(args.hospitalId, async (tx) => {
-    const [doctor] = await tx
-      .select({
-        id: doctors.id,
-        name: doctors.name,
-        branchId: doctors.branchId,
-        hospitalId: doctors.hospitalId,
-      })
-      .from(doctors)
-      .where(and(eq(doctors.id, args.doctorId), eq(doctors.active, true)));
-
-    if (!doctor) {
-      throw new Error('Doctor not found or inactive');
-    }
-
-    const [hospital] = await tx
-      .select({
-        id: hospitals.id,
-        name: hospitals.name,
-        timezone: hospitals.timezone,
-        ownerPhoneE164: hospitals.ownerPhoneE164,
-      })
-      .from(hospitals)
-      .where(eq(hospitals.id, args.hospitalId));
-
-    const timezone = hospital?.timezone ?? 'Asia/Kolkata';
-    const serviceDate = serviceDateIn(timezone, slotDate);
-
-    // Upsert patient
-    const [patient] = await tx
-      .insert(patients)
-      .values({
-        hospitalId: args.hospitalId,
+  const slot = slots.find((x) => x.available && new Date(x.datetimeIso).getTime() === slotDate.getTime())!;
+  return withTenant(args.hospitalId, (tx) =>
+    bookSlotInTx(tx, {
+      hospitalId: args.hospitalId,
+      doctorId: args.doctorId,
+      slotDate,
+      slotNumber: slot.slotNumber,
+      patient: {
+        name: args.patientName,
+        age: args.patientAge,
+        gender: args.gender,
         phoneE164: args.phoneE164,
-        name: args.patientName.trim(),
-        age: args.patientAge ?? null,
-        gender: args.gender ?? null,
-        locale: args.locale ?? 'en',
-        whatsappOptInAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [patients.hospitalId, patients.phoneE164, patients.name],
-        set: {
-          name: args.patientName.trim(),
-          age: args.patientAge !== undefined ? args.patientAge : patients.age,
-          gender: args.gender !== undefined ? args.gender : patients.gender,
-          updatedAt: now,
-          whatsappOptInAt: sql`coalesce(${patients.whatsappOptInAt}, excluded.whatsapp_opt_in_at)`,
-        },
-      })
-      .returning();
+        locale: args.locale,
+      },
+      source: 'whatsapp',
+      checkIn: false,
+      confirmationSentInChat: args.confirmationSentInChat,
+      now,
+    }),
+  );
+}
 
-    /**
-     * Lock the doctor's day, creating it first if needed, so the lock is
-     * always taken. It used to be taken only when the row already existed,
-     * which left the first bookings of a day unserialised — two of them could
-     * share a token number, or a slot.
-     */
-    await lockDoctorDay(tx, { hospitalId: args.hospitalId, doctorId: doctor.id, serviceDate });
+/**
+ * Reception books a patient who is at the desk into a free slot, and checks
+ * them in at once.
+ *
+ * The only way to add a walk-in during an evening slot session: the live
+ * queue has closed, so the patient takes a slot like everyone else and is
+ * called in slot order. Staff may use a slot whose time has just passed —
+ * the patient is standing there — but never one that is booked, disabled,
+ * blocked or in a break.
+ */
+export async function bookSlotForWalkIn(args: {
+  hospitalId: string;
+  doctorId: string;
+  timezone: string;
+  slotDatetimeIso: string;
+  patient: { name: string; age?: number | null; gender?: string | null; phoneE164: string };
+  actorUserId?: string | null;
+  now?: Date;
+}) {
+  const now = args.now ?? new Date();
+  const slotDate = new Date(args.slotDatetimeIso);
+  if (isNaN(slotDate.getTime())) throw new BookingError('INVALID_SLOT', 'That appointment time is not valid.');
 
-    // Re-checked under the lock: two people can pick the same free slot in
-    // the same second, and the check above ran before either was booked.
-    const [taken] = await tx
-      .select({ id: appointments.id })
-      .from(appointments)
-      .where(
-        and(
-          eq(appointments.doctorId, doctor.id),
-          eq(appointments.scheduledSlotAt, slotDate),
-          inArray(appointments.status, [...SLOT_HOLDING_STATUSES]),
-        ),
-      )
-      .limit(1);
-    if (taken) {
-      throw new BookingError(
-        'SLOT_UNAVAILABLE',
-        'That time was just taken. Please choose another slot.',
-      );
-    }
+  const { slots, sessions } = await getDoctorSlotsForDate({
+    hospitalId: args.hospitalId,
+    doctorId: args.doctorId,
+    serviceDate: serviceDateIn(args.timezone, slotDate),
+    now,
+  });
+  const slot = slots.find((x) => new Date(x.datetimeIso).getTime() === slotDate.getTime());
+  if (!slot || !bookableByStaff(slot, sessions, now)) {
+    throw new BookingError('SLOT_UNAVAILABLE', 'That time is not free. Please choose another slot.');
+  }
 
-    /**
-     * The day's quota applies to slot bookings too: they come out of the
-     * shared pool. They are not held to the same-day opening window — a slot
-     * booked days ahead already says when the patient will come.
-     */
-    let allocated;
+  return withTenant(args.hospitalId, (tx) =>
+    bookSlotInTx(tx, {
+      hospitalId: args.hospitalId,
+      doctorId: args.doctorId,
+      slotDate,
+      slotNumber: slot.slotNumber,
+      patient: args.patient,
+      source: 'reception',
+      checkIn: true,
+      actorUserId: args.actorUserId,
+      confirmationSentInChat: true,
+      now,
+    }),
+  );
+}
+
+/**
+ * Free for a patient at the desk: open, or closed only by the online window,
+ * or the slot running right now. Never one that has already ended — booking a
+ * walk-in into 8:10 at 8:40 would put them ahead of the 8:20 and 8:30 patients
+ * who are already waiting.
+ */
+function bookableByStaff(slot: GeneratedSlot, sessions: DaySession[], now: Date): boolean {
+  if (slot.available || (slot.reason?.startsWith('Online booking opens') ?? false)) return true;
+  if (slot.reason !== 'Past Time') return false;
+  const at = new Date(slot.datetimeIso);
+  const session = sessionForSlot(sessions, at) ?? sessions[0];
+  return !!session && at.getTime() + session.slotMinutes * 60_000 > now.getTime();
+}
+
+/** Today's slots reception can book a patient at the desk into, earliest first. */
+export async function freeSlotsForWalkIn(args: {
+  hospitalId: string;
+  doctorId: string;
+  timezone: string;
+  now?: Date;
+}): Promise<Array<{ datetimeIso: string; timeStr: string; label: string | null }>> {
+  const now = args.now ?? new Date();
+  const { slots, sessions } = await getDoctorSlotsForDate({
+    hospitalId: args.hospitalId,
+    doctorId: args.doctorId,
+    serviceDate: serviceDateIn(args.timezone, now),
+    now,
+  });
+  return slots
+    .filter((slot) => bookableByStaff(slot, sessions, now))
+    .map((slot) => ({
+      datetimeIso: slot.datetimeIso,
+      timeStr: slot.timeStr,
+      label: slot.slotNumber !== null ? tokenLabel('slot', slot.slotNumber) : null,
+    }));
+}
+
+/**
+ * Books one slot inside the caller's transaction — the single place a slot
+ * appointment is created, for patients online and for reception.
+ *
+ * A slot in a session that runs its own list (the evening of a split day)
+ * gets its S-number, takes no live-queue token and no quota, and waits as
+ * CONFIRMED until its session starts or reception checks the patient in. Any
+ * other slot is booked exactly as before: a token from the day's shared pool,
+ * straight into the waiting line.
+ */
+async function bookSlotInTx(
+  tx: Tx,
+  args: {
+    hospitalId: string;
+    doctorId: string;
+    slotDate: Date;
+    slotNumber: number | null;
+    patient: {
+      name: string;
+      age?: number | null;
+      gender?: string | null;
+      phoneE164: string;
+      locale?: Locale;
+    };
+    source: 'whatsapp' | 'reception';
+    /** The patient is here: put them straight into the waiting line. */
+    checkIn: boolean;
+    actorUserId?: string | null;
+    confirmationSentInChat?: boolean;
+    now: Date;
+  },
+) {
+  const { slotDate, now } = args;
+  const ownList = args.slotNumber !== null;
+  const [doctor] = await tx
+    .select({
+      id: doctors.id,
+      name: doctors.name,
+      branchId: doctors.branchId,
+      hospitalId: doctors.hospitalId,
+    })
+    .from(doctors)
+    .where(and(eq(doctors.id, args.doctorId), eq(doctors.active, true)));
+
+  if (!doctor) {
+    throw new Error('Doctor not found or inactive');
+  }
+
+  const [hospital] = await tx
+    .select({
+      id: hospitals.id,
+      name: hospitals.name,
+      timezone: hospitals.timezone,
+      ownerPhoneE164: hospitals.ownerPhoneE164,
+    })
+    .from(hospitals)
+    .where(eq(hospitals.id, args.hospitalId));
+
+  const timezone = hospital?.timezone ?? 'Asia/Kolkata';
+  const serviceDate = serviceDateIn(timezone, slotDate);
+
+  // Upsert patient
+  const [patient] = await tx
+    .insert(patients)
+    .values({
+      hospitalId: args.hospitalId,
+      phoneE164: args.patient.phoneE164,
+      name: args.patient.name.trim(),
+      age: args.patient.age ?? null,
+      gender: args.patient.gender ?? null,
+      locale: args.patient.locale ?? 'en',
+      whatsappOptInAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [patients.hospitalId, patients.phoneE164, patients.name],
+      set: {
+        name: args.patient.name.trim(),
+        age: args.patient.age !== undefined ? args.patient.age : patients.age,
+        gender: args.patient.gender !== undefined ? args.patient.gender : patients.gender,
+        updatedAt: now,
+        whatsappOptInAt: sql`coalesce(${patients.whatsappOptInAt}, excluded.whatsapp_opt_in_at)`,
+      },
+    })
+    .returning();
+
+  /**
+   * Lock the doctor's day, creating it first if needed, so the lock is
+   * always taken. It used to be taken only when the row already existed,
+   * which left the first bookings of a day unserialised — two of them could
+   * share a token number, or a slot.
+   */
+  await lockDoctorDay(tx, { hospitalId: args.hospitalId, doctorId: doctor.id, serviceDate });
+
+  // Re-checked under the lock: two people can pick the same free slot in
+  // the same second, and the check above ran before either was booked.
+  const [taken] = await tx
+    .select({ id: appointments.id })
+    .from(appointments)
+    .where(
+      and(
+        eq(appointments.doctorId, doctor.id),
+        eq(appointments.scheduledSlotAt, slotDate),
+        inArray(appointments.status, [...SLOT_HOLDING_STATUSES]),
+      ),
+    )
+    .limit(1);
+  if (taken) {
+    throw new BookingError(
+      'SLOT_UNAVAILABLE',
+      'That time was just taken. Please choose another slot.',
+    );
+  }
+
+  /**
+   * A classic slot comes out of the day's shared pool, so the quota applies.
+   * It is not held to the same-day opening window: a slot booked days ahead
+   * already says when the patient will come.
+   *
+   * A slot in its own list is its own capacity: the S-number is fixed by the
+   * slot time and the slot can be held once, so it touches neither the token
+   * counter nor the quota — and an evening booking made weeks ahead leaves
+   * that day's live queue entirely alone.
+   */
+  let tokenNumber: number;
+  let quotaPool: 'reserved' | 'shared' | 'extra' | null = null;
+  if (ownList) {
+    tokenNumber = args.slotNumber!;
+  } else {
     try {
-      allocated = await allocateTokenInTx(tx, {
+      const allocated = await allocateTokenInTx(tx, {
         hospitalId: args.hospitalId,
         doctorId: doctor.id,
         serviceDate,
@@ -358,125 +514,135 @@ export async function bookScheduledSlot(args: {
         channel: 'online_slot',
         now,
       });
+      tokenNumber = allocated.tokenNumber;
+      quotaPool = allocated.pool;
     } catch (err) {
       if (err instanceof CapacityError) throw new BookingError('FULLY_BOOKED', err.message);
       throw err;
     }
-    const tokenNumber = allocated.tokenNumber;
+  }
+  const sessionKind = ownList ? ('slot' as const) : ('queue' as const);
+  // Own-list bookings wait outside the line until their session starts.
+  const status = ownList && !args.checkIn ? ('CONFIRMED' as const) : ('WAITING' as const);
 
-    const publicToken = generatePublicToken();
-    const publicTokenExpiresAt = new Date(slotDate.getTime() + 24 * 60 * 60 * 1000);
+  const publicToken = generatePublicToken();
+  const publicTokenExpiresAt = new Date(slotDate.getTime() + 24 * 60 * 60 * 1000);
 
-    const [appointment] = await tx
-      .insert(appointments)
-      .values({
-        hospitalId: args.hospitalId,
-        branchId: doctor.branchId,
-        doctorId: doctor.id,
-        patientId: patient.id,
-        serviceDate,
-        tokenNumber,
-        status: 'WAITING',
-        source: 'whatsapp',
-        quotaPool: allocated.pool,
-        publicToken,
-        publicTokenExpiresAt,
-        scheduledSlotAt: slotDate,
-        enqueuedAt: now,
-      })
-      .returning();
+  const [appointment] = await tx
+    .insert(appointments)
+    .values({
+      hospitalId: args.hospitalId,
+      branchId: doctor.branchId,
+      doctorId: doctor.id,
+      patientId: patient.id,
+      serviceDate,
+      tokenNumber,
+      status,
+      source: args.source,
+      quotaPool,
+      sessionKind,
+      publicToken,
+      publicTokenExpiresAt,
+      scheduledSlotAt: slotDate,
+      enqueuedAt: status === 'WAITING' ? now : null,
+    })
+    .returning();
 
-    const slotTimeFormatted = formatTimeIn(timezone, slotDate);
+  const slotTimeFormatted = formatTimeIn(timezone, slotDate);
 
-    // Record queue event
-    await tx.insert(queueEvents).values({
+  // Record queue event
+  await tx.insert(queueEvents).values({
+    hospitalId: args.hospitalId,
+    appointmentId: appointment.id,
+    doctorId: doctor.id,
+    action: status === 'WAITING' ? 'enqueue' : 'confirm',
+    fromStatus: 'CREATED',
+    toStatus: status,
+    actorUserId: args.actorUserId ?? null,
+    metadata: {
+      scheduledSlotAt: slotDate.toISOString(),
+      slotTime: slotTimeFormatted,
+      source: args.source === 'reception' ? 'reception_slot_booking' : 'web_slot_booking',
+      ...(ownList ? { slot_number: tokenNumber } : {}),
+    },
+  });
+
+  const label = tokenLabel(sessionKind, tokenNumber);
+
+  // Notify doctor / hospital owner if a phone number is configured. Staff
+  // booking at the desk need no message about what they just did.
+  const provider = getProvider();
+  if (hospital?.ownerPhoneE164 && args.source !== 'reception') {
+    try {
+      await provider.sendText({
+        phoneNumberId: 'system',
+        toPhoneE164: hospital.ownerPhoneE164,
+        body: `📅 New appointment scheduled: ${patient.name} (${patient.phoneE164}) with ${formatDoctorName(doctor.name, 'en')} today at ${slotTimeFormatted}.`,
+      });
+    } catch (err) {
+      console.warn('Failed to send doctor notification:', err);
+    }
+  }
+
+  // Queue confirmation link for patient, unless the booking chat sent it.
+  if (!args.confirmationSentInChat) await tx
+    .insert(notificationOutbox)
+    .values({
       hospitalId: args.hospitalId,
       appointmentId: appointment.id,
-      doctorId: doctor.id,
-      action: 'enqueue',
-      fromStatus: 'CREATED',
-      toStatus: 'WAITING',
-      actorUserId: null,
-      metadata: {
-        scheduledSlotAt: slotDate.toISOString(),
-        slotTime: slotTimeFormatted,
-        source: 'web_slot_booking',
+      patientId: patient.id,
+      milestone: 'queue_link',
+      /**
+       * A booked time is not a queue position.
+       *
+       * queue_link says "we will notify you when your turn is close" and
+       * never states a time — so a patient booking 3pm tomorrow was left
+       * without the one fact they needed. slotTime was already in this
+       * payload and simply unused by that template.
+       */
+      templateCode: 'appointment_confirmed',
+      locale: patient.locale ?? 'en',
+      payload: {
+        tokenNumber: label,
+        publicToken,
+        doctorName: doctor.name,
+        appointmentTime: slotTimeFormatted,
+        appointmentDate: new Intl.DateTimeFormat('en-IN', {
+          timeZone: timezone,
+          day: 'numeric',
+          month: 'short',
+        }).format(slotDate),
       },
-    });
+    })
+    .onConflictDoNothing();
 
-    // Notify doctor / hospital owner if a phone number is configured
-    const provider = getProvider();
-    if (hospital?.ownerPhoneE164) {
-      try {
-        await provider.sendText({
-          phoneNumberId: 'system',
-          toPhoneE164: hospital.ownerPhoneE164,
-          body: `📅 New appointment scheduled: ${patient.name} (${patient.phoneE164}) with ${formatDoctorName(doctor.name, 'en')} today at ${slotTimeFormatted}.`,
-        });
-      } catch (err) {
-        console.warn('Failed to send doctor notification:', err);
-      }
-    }
+  // Queue 15-minute slot reminder, for a patient who is not here yet.
+  const reminderTime = new Date(Math.max(now.getTime(), slotDate.getTime() - 15 * 60 * 1000));
+  if (!args.checkIn) await tx
+    .insert(notificationOutbox)
+    .values({
+      hospitalId: args.hospitalId,
+      appointmentId: appointment.id,
+      patientId: patient.id,
+      milestone: 'slot_reminder_15m',
+      templateCode: 'slot_reminder',
+      locale: patient.locale ?? 'en',
+      scheduledFor: reminderTime,
+      payload: {
+        doctorName: doctor.name,
+        appointmentTime: slotTimeFormatted,
+      },
+    })
+    .onConflictDoNothing();
 
-    // Queue confirmation link for patient, unless the booking chat sent it.
-    if (!args.confirmationSentInChat) await tx
-      .insert(notificationOutbox)
-      .values({
-        hospitalId: args.hospitalId,
-        appointmentId: appointment.id,
-        patientId: patient.id,
-        milestone: 'queue_link',
-        /**
-         * A booked time is not a queue position.
-         *
-         * queue_link says "we will notify you when your turn is close" and
-         * never states a time — so a patient booking 3pm tomorrow was left
-         * without the one fact they needed. slotTime was already in this
-         * payload and simply unused by that template.
-         */
-        templateCode: 'appointment_confirmed',
-        locale: patient.locale ?? 'en',
-        payload: {
-          tokenNumber,
-          publicToken,
-          doctorName: doctor.name,
-          appointmentTime: slotTimeFormatted,
-          appointmentDate: new Intl.DateTimeFormat('en-IN', {
-            timeZone: timezone,
-            day: 'numeric',
-            month: 'short',
-          }).format(slotDate),
-        },
-      })
-      .onConflictDoNothing();
-
-    // Queue 15-minute slot reminder
-    const reminderTime = new Date(Math.max(now.getTime(), slotDate.getTime() - 15 * 60 * 1000));
-    await tx
-      .insert(notificationOutbox)
-      .values({
-        hospitalId: args.hospitalId,
-        appointmentId: appointment.id,
-        patientId: patient.id,
-        milestone: 'slot_reminder_15m',
-        templateCode: 'slot_reminder',
-        locale: patient.locale ?? 'en',
-        scheduledFor: reminderTime,
-        payload: {
-          doctorName: doctor.name,
-          appointmentTime: slotTimeFormatted,
-        },
-      })
-      .onConflictDoNothing();
-
-    return {
-      appointment,
-      tokenNumber,
-      publicToken,
-      slotTimeFormatted,
-      doctorName: doctor.name,
-      patientName: patient.name,
-      patientAge: patient.age,
-    };
-  });
+  return {
+    appointment,
+    tokenNumber,
+    tokenLabel: label,
+    publicToken,
+    slotTimeFormatted,
+    doctorName: doctor.name,
+    patientName: patient.name,
+    patientAge: patient.age,
+  };
 }

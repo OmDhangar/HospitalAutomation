@@ -441,9 +441,10 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
                     </div>
                     <p className="text-xs text-ink-500">
                       Tokens 1–{doctor.walkInReserved || 'N'} are kept for walk-ins who arrive early; online
-                      bookings and further walk-ins share the rest. Walk-in places not used by the time OPD
-                      starts go to online bookings automatically. Once the quota is full, only the owner can
-                      issue an extra token.
+                      bookings and further walk-ins share the rest. The reserve works with or without a daily
+                      quota. Walk-in places not used by the time OPD starts go to online bookings
+                      automatically. Once the quota is full, only the owner can issue an extra token. Saved
+                      settings apply every day, starting today, until you change them.
                     </p>
                   </SaveForm>
 

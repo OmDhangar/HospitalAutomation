@@ -15,6 +15,12 @@
  * pure: the service locks the doctor-day row, reads the counts, asks this
  * function, and writes what it says.
  *
+ * The configuration is the doctor's standing one, read live on every
+ * allocation — never a per-day copy. An owner who raises the reserve at 9am
+ * changes today, not just tomorrow. That makes a mid-day change routine, so
+ * the numbering below is written to stay collision-free when W moves under a
+ * day that has already issued tokens.
+ *
  * Token numbers are never reused or renumbered. Unused reserved capacity can be
  * released into the shared pool, but that releases *count*, not numbers — a
  * remote booker is never handed a low reserved number like 25 that would put
@@ -54,9 +60,10 @@ export type CapacityConfig = {
   walkInReleaseMinutes: number | null;
 };
 
-/** One doctor-day's snapshot of the config, plus what has been issued so far. */
+/** The doctor's live config for one day, plus what that day has issued so far. */
 export type DayCapacityState = {
-  quota: number;
+  /** Standing quota plus today's extra capacity. Null: no limit, only the reserve applies. */
+  quota: number | null;
   walkInReserved: number;
   onlineOpensMinutesBefore: number;
   walkInReleaseMinutes: number | null;
@@ -66,8 +73,14 @@ export type DayCapacityState = {
   sessionStartedAt: Date | null;
   /** Highest reserved token issued (1..W). */
   lastReservedToken: number;
-  /** Highest shared/extra token issued; seeded to W. */
+  /** Highest shared/extra token issued. */
   lastToken: number;
+  /**
+   * Token numbers already issued inside (lastReservedToken, W]. Only non-empty
+   * when the reserve was raised after shared tokens were handed out; walk-ins
+   * then skip those numbers instead of colliding with them.
+   */
+  reservedRangeTaken?: readonly number[];
   /** Appointments that still count against the quota (not cancelled/expired/no-show). */
   reservedActive: number;
   sharedActive: number;
@@ -91,6 +104,8 @@ export function validateCapacityConfig(config: CapacityConfig): string[] {
   }
   if (!isInt(config.walkInReserved) || config.walkInReserved < 0) {
     errors.push('Reserved walk-in tokens must be zero or more.');
+  } else if (config.walkInReserved > MAX_QUOTA) {
+    errors.push(`Reserved walk-in tokens cannot be more than ${MAX_QUOTA}.`);
   } else if (config.dailyQuota !== null && config.walkInReserved > config.dailyQuota) {
     errors.push('Reserved walk-in tokens cannot be more than the daily quota.');
   }
@@ -149,15 +164,34 @@ export function isReleased(
 
 const totalActive = (day: DayCapacityState) => day.reservedActive + day.sharedActive + day.extraActive;
 
+const underQuota = (day: DayCapacityState, total: number) => day.quota === null || total < day.quota;
+
 /**
  * How many shared tokens online bookings may hold. Until release, reserved
  * capacity is fenced off whether used or not; after it, only what walk-ins
- * actually hold is.
+ * actually hold is. Unlimited without a quota.
  */
-const onlineSharedCap = (day: DayCapacityState, now: Date) =>
-  isReleased(day, now) ? day.quota - day.reservedActive : day.quota - day.walkInReserved;
+const onlineSharedCap = (day: DayCapacityState, now: Date) => {
+  if (day.quota === null) return Infinity;
+  return isReleased(day, now) ? day.quota - day.reservedActive : day.quota - day.walkInReserved;
+};
 
-const nextShared = (day: DayCapacityState) => Math.max(day.lastToken, day.walkInReserved) + 1;
+/**
+ * Shared numbers always sit above the reserved range as it stands now, and
+ * above any reserved number already issued — a reserve lowered from 20 to 5
+ * after walk-ins took 1..8 must not hand out 6 again.
+ */
+const nextShared = (day: DayCapacityState) =>
+  Math.max(day.lastToken, day.walkInReserved, day.lastReservedToken) + 1;
+
+/** The next free reserved number, or null when the reserved range is used up. */
+function nextReserved(day: DayCapacityState): number | null {
+  const taken = new Set(day.reservedRangeTaken ?? []);
+  for (let n = day.lastReservedToken + 1; n <= day.walkInReserved; n += 1) {
+    if (!taken.has(n)) return n;
+  }
+  return null;
+}
 
 /**
  * Who gets which token, or why not. Invariant on every path: appointments
@@ -173,12 +207,13 @@ export function decideAllocation(
 
   switch (channel) {
     case 'walk_in': {
-      if (!isReleased(day, now) && day.lastReservedToken < day.walkInReserved) {
-        return { ok: true, pool: 'reserved', tokenNumber: day.lastReservedToken + 1 };
+      const reserved = isReleased(day, now) ? null : nextReserved(day);
+      if (reserved !== null && underQuota(day, total)) {
+        return { ok: true, pool: 'reserved', tokenNumber: reserved };
       }
       // Walk-ins may use any capacity left under Q, including reserved capacity
       // a cancellation freed — the reservation exists for them.
-      if (total < day.quota) return { ok: true, pool: 'shared', tokenNumber: nextShared(day) };
+      if (underQuota(day, total)) return { ok: true, pool: 'shared', tokenNumber: nextShared(day) };
       return { ok: false, reason: 'quota_reached' };
     }
     case 'online':
@@ -190,7 +225,7 @@ export function decideAllocation(
           return { ok: false, reason: 'online_not_open', opensAt: opens };
         }
       }
-      if (day.sharedActive < onlineSharedCap(day, now) && total < day.quota) {
+      if (day.sharedActive < onlineSharedCap(day, now) && underQuota(day, total)) {
         return { ok: true, pool: 'shared', tokenNumber: nextShared(day) };
       }
       return { ok: false, reason: 'fully_booked', reservedUnused: reservedUnused(day, now) };
@@ -198,7 +233,7 @@ export function decideAllocation(
     case 'extra': {
       // Extra is for when the day is genuinely full — not for when online is
       // full while walk-in capacity sits unused (release that first).
-      if (total < day.quota) return { ok: false, reason: 'extra_not_needed' };
+      if (underQuota(day, total)) return { ok: false, reason: 'extra_not_needed' };
       return { ok: true, pool: 'extra', tokenNumber: nextShared(day) };
     }
   }
@@ -211,7 +246,8 @@ export function reservedUnused(day: DayCapacityState, now: Date): number {
 }
 
 export type DayCapacitySummary = {
-  quota: number;
+  /** Null: no daily limit, only the walk-in reserve applies. */
+  quota: number | null;
   walkInReserved: number;
   reservedActive: number;
   sharedActive: number;
@@ -242,7 +278,7 @@ export function dayCapacitySummary(day: DayCapacityState, now: Date): DayCapacit
     released: isReleased(day, now),
     reservedUnused: unused,
     onlineOpensAt: onlineOpensAt(day),
-    onlineBlockedByReserve: day.sharedActive >= cap && total < day.quota && unused > 0,
-    quotaReached: total >= day.quota,
+    onlineBlockedByReserve: day.sharedActive >= cap && underQuota(day, total) && unused > 0,
+    quotaReached: !underQuota(day, total),
   };
 }

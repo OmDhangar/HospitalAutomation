@@ -161,6 +161,53 @@ describe('reserved walk-in pool and shared pool', () => {
   });
 });
 
+describe('live configuration (no per-day snapshot)', () => {
+  it('a day that issued tokens before the reserve was set still fences 1..W from online', () => {
+    // Two online tokens went out with no reserve configured; the admin then set W = 20.
+    const s = day({ quota: 70, walkInReserved: 20, lastToken: 2, sharedActive: 2 });
+    expect(decideAllocation(s, 'online', at(-60))).toEqual({ ok: true, pool: 'shared', tokenNumber: 21 });
+    // Walk-ins get the reserve, skipping the numbers online already holds.
+    const walkIn = decideAllocation({ ...s, reservedRangeTaken: [1, 2] }, 'walk_in', at(-60));
+    expect(walkIn).toEqual({ ok: true, pool: 'reserved', tokenNumber: 3 });
+  });
+
+  it('a reserve raised mid-day never collides with shared numbers already issued', () => {
+    // W was 5; walk-ins took 1..5, online took 6..8; now W = 20.
+    let s: DayCapacityState = day({
+      quota: 100, walkInReserved: 20, lastReservedToken: 5, reservedActive: 5,
+      lastToken: 8, sharedActive: 3, reservedRangeTaken: [6, 7, 8],
+    });
+    expect(decideAllocation(s, 'online', at(-60))).toEqual({ ok: true, pool: 'shared', tokenNumber: 21 });
+    const walkIns: number[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const r = issue(s, 'walk_in', at(-60));
+      if (r.decision.ok) walkIns.push(r.decision.tokenNumber);
+      s = r.state;
+    }
+    expect(walkIns).toEqual([9, 10, 11]);
+  });
+
+  it('a reserve lowered mid-day does not reissue reserved numbers as shared', () => {
+    // W was 20 and walk-ins reached 8; now W = 5 and no shared token has gone out yet.
+    const s = day({ quota: 100, walkInReserved: 5, lastReservedToken: 8, reservedActive: 8, lastToken: 0 });
+    expect(decideAllocation(s, 'online', at(-60))).toEqual({ ok: true, pool: 'shared', tokenNumber: 9 });
+    expect(decideAllocation(s, 'walk_in', at(-60))).toEqual({ ok: true, pool: 'shared', tokenNumber: 9 });
+  });
+
+  it('a reserve works without a daily quota', () => {
+    const s = day({ quota: null, walkInReserved: 20, lastToken: 0 });
+    expect(decideAllocation(s, 'online', at(-60))).toEqual({ ok: true, pool: 'shared', tokenNumber: 21 });
+    expect(decideAllocation(s, 'walk_in', at(-60))).toEqual({ ok: true, pool: 'reserved', tokenNumber: 1 });
+    expect(decideAllocation(s, 'extra', at(-60))).toEqual({ ok: false, reason: 'extra_not_needed' });
+    expect(dayCapacitySummary(s, at(-60)).quotaReached).toBe(false);
+  });
+
+  it('after release, online still never gets a number inside the reserve', () => {
+    const s = day({ quota: 100, walkInReserved: 20, lastReservedToken: 4, reservedActive: 4, lastToken: 0, reservedReleasedAt: at(0) });
+    expect(decideAllocation(s, 'online', at(1))).toEqual({ ok: true, pool: 'shared', tokenNumber: 21 });
+  });
+});
+
 describe('quota and extra tokens', () => {
   it('stops normal booking at Q', () => {
     const full = day({ quota: 4, walkInReserved: 2, lastReservedToken: 2, reservedActive: 2, sharedActive: 2, lastToken: 4 });
@@ -211,6 +258,8 @@ describe('configuration', () => {
     expect(validateCapacityConfig({ ...base, dailyQuota: 50, walkInReserved: 50 })).toEqual([]);
     expect(validateCapacityConfig({ ...base, dailyQuota: null, walkInReserved: 0 })).toEqual([]);
     expect(validateCapacityConfig({ ...base, dailyQuota: 0, walkInReserved: 0 })).toHaveLength(1);
+    // A reserve without a quota is valid on its own.
+    expect(validateCapacityConfig({ ...base, dailyQuota: null, walkInReserved: 20 })).toEqual([]);
   });
 
   it('allows a quota above the plan while trial mode is on', () => {

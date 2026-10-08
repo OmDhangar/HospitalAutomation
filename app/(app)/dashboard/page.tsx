@@ -47,6 +47,7 @@ import {
 import { ConsultationPanel } from './consultation-panel';
 import { IpdBadge, ShiftToIpdButton } from './shift-to-ipd-button';
 import {
+  AddExtraCapacityButton,
   AddWalkInForm,
   CallNextButton,
   DoctorTabs,
@@ -142,7 +143,11 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
     (row) => row.status === 'CALLED' || row.status === 'IN_CONSULTATION',
   );
   const waiting = snapshot?.rows.filter((row) => row.status === 'WAITING') ?? [];
-  const scheduledToday = snapshot?.rows.filter((row) => Boolean(row.scheduledSlotAt)) ?? [];
+  // Booked slots in the line, then evening slot-session bookings still to check in.
+  const scheduledToday = [
+    ...(snapshot?.rows.filter((row) => Boolean(row.scheduledSlotAt)) ?? []),
+    ...(snapshot?.booked ?? []),
+  ];
   const seenToday = snapshot?.completed ?? [];
 
   // The day's quota for this doctor; null when no quota is configured.
@@ -332,7 +337,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                         </div>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <StatusPill status={serving.status} />
-                          <TokenChip token={serving.tokenNumber} />
+                          <TokenChip token={serving.tokenLabel} />
                           {serving.patientPhone && !isMockPhone(serving.patientPhone) ? (
                             <a
                               href={`tel:${serving.patientPhone}`}
@@ -452,13 +457,9 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                   <Stat label="Waiting" value={snapshot?.waitingCount ?? 0} tone="brand" />
                   <Stat label="Completed" value={snapshot?.completedCount ?? 0} />
                   <Stat
-                    label="Avg Consult"
-                    value={
-                      snapshot?.medianConsultMinutes
-                        ? `${Math.round(snapshot.medianConsultMinutes)}m`
-                        : '—'
-                    }
-                    hint="median duration"
+                    label="Per patient"
+                    value={snapshot ? `${Math.round(snapshot.paceMinutes)}m` : '—'}
+                    hint={snapshot?.paceSamples ? "today's pace" : 'configured'}
                   />
                   <Stat
                     label="Queue Delay"
@@ -492,8 +493,18 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                           <p className="font-semibold text-ink-900 truncate">
                             {s.patientName}
                           </p>
-                          <p className="text-ink-500">Token #{s.tokenNumber}</p>
+                          <p className="text-ink-500">Token {s.tokenLabel}</p>
                         </div>
+                        {s.status === 'CONFIRMED' ? (
+                          // Not in the line until their session starts; check in a patient who is here early.
+                          <QueueActionButton
+                            doctorId={selectedId!}
+                            appointmentId={s.appointmentId}
+                            action="enqueue"
+                            label="Check in"
+                            size="sm"
+                          />
+                        ) : null}
                         <span className="inline-flex items-center gap-1 rounded-md bg-brand-50 border border-brand-200 px-2 py-1 font-bold text-brand-900">
                           <ClockIcon className="size-3 text-brand-700" />
                           <span>{formatTimeIn(session.timezone, s.scheduledSlotAt!)}</span>
@@ -567,7 +578,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                   {scheduledToday
                     .map(
                       (s) =>
-                        `${s.patientName} (Token ${s.tokenNumber} at ${formatTimeIn(session.timezone, s.scheduledSlotAt!)})`,
+                        `${s.patientName} (Token ${s.tokenLabel} at ${formatTimeIn(session.timezone, s.scheduledSlotAt!)})`,
                     )
                     .join(' · ')}
                 </span>
@@ -638,7 +649,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                           </div>
                           <div className="mt-2 flex flex-wrap items-center gap-2">
                             <StatusPill status={serving.status} />
-                            <TokenChip token={serving.tokenNumber} />
+                            <TokenChip token={serving.tokenLabel} />
                             {serving.patientPhone && !isMockPhone(serving.patientPhone) ? (
                               <a
                                 href={`tel:${serving.patientPhone}`}
@@ -746,13 +757,9 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                     <Stat label="Waiting" value={snapshot?.waitingCount ?? 0} tone="brand" />
                     <Stat label="Completed" value={snapshot?.completedCount ?? 0} />
                     <Stat
-                      label="Avg consult"
-                      value={
-                        snapshot?.medianConsultMinutes
-                          ? `${Math.round(snapshot.medianConsultMinutes)}m`
-                          : '—'
-                      }
-                      hint="median today"
+                      label="Per patient"
+                      value={snapshot ? `${Math.round(snapshot.paceMinutes)}m` : '—'}
+                      hint={snapshot?.paceSamples ? "today's pace" : 'configured'}
                     />
                     <Stat
                       label="Running late"
@@ -810,7 +817,7 @@ function ParkedPatientsCard({
             <li key={row.appointmentId} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 sm:px-5 sm:py-3">
               <div className="flex items-center gap-3 min-w-0">
                 <span className="numeric w-9 shrink-0 text-lg font-bold text-ink-600 bg-ink-100 rounded-lg size-9 flex items-center justify-center">
-                  {row.tokenNumber}
+                  {row.tokenLabel}
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-bold text-ink-900">
@@ -921,7 +928,7 @@ function WaitingRow({
             <span className={cn('text-[9px] font-semibold uppercase tracking-wide', row.isEmergency ? 'text-red-100' : 'text-ink-500')}>
               Token
             </span>
-            <span className="numeric text-base font-bold">{row.tokenNumber}</span>
+            <span className="numeric text-base font-bold">{row.tokenLabel}</span>
           </span>
         )}
 
@@ -960,7 +967,7 @@ function WaitingRow({
           </div>
           <p className="text-xs text-ink-500 mt-0.5 flex flex-wrap items-center gap-1">
             <span>
-              Token {row.tokenNumber} · waiting {waitedFor(row.enqueuedAt, now)}
+              Token {row.tokenLabel} · waiting {waitedFor(row.enqueuedAt, now)}
             </span>
             {row.etaAt ? (
               <span>· expected ~{formatTimeIn(timezone, row.etaAt)}</span>
@@ -1057,7 +1064,7 @@ function SeenTodayCard({
           <li key={row.appointmentId} className="flex items-center justify-between gap-3 px-4 py-2.5 sm:px-5">
             <div className="flex min-w-0 items-center gap-3">
               <span className="numeric flex size-8 shrink-0 items-center justify-center rounded-lg bg-ink-100 text-sm font-bold text-ink-600">
-                {row.tokenNumber}
+                {row.tokenLabel}
               </span>
               <p className="truncate text-sm font-semibold text-ink-900">{row.patientName}</p>
             </div>
@@ -1095,7 +1102,7 @@ function DoctorSeenTodayCard({ rows, ipd }: { rows: QueueRow[]; ipd: IpdRowConte
           <li key={row.appointmentId} className="flex items-center justify-between gap-3 px-4 py-2.5">
             <div className="flex min-w-0 items-center gap-3">
               <span className="numeric flex size-8 shrink-0 items-center justify-center rounded-lg bg-ink-100 text-sm font-bold text-ink-600">
-                {row.tokenNumber}
+                {row.tokenLabel}
               </span>
               <p className="truncate text-sm font-semibold text-ink-900">{row.patientName}</p>
             </div>
@@ -1160,13 +1167,16 @@ function CapacityStrip({
   timezone: string;
   canManage: boolean;
 }) {
-  const sharedTotal = capacity.quota - capacity.walkInReserved;
+  // Without a daily quota only the walk-in reserve applies; nothing is capped.
+  const sharedTotal = capacity.quota === null ? null : capacity.quota - capacity.walkInReserved;
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-ink-200 bg-white px-4 py-3 text-sm text-ink-700">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         <span>
           <strong className="text-ink-900">Quota</strong>{' '}
-          <span className="numeric">{capacity.totalActive}/{capacity.quota}</span>
+          <span className="numeric">
+            {capacity.quota === null ? `${capacity.totalActive} (no limit)` : `${capacity.totalActive}/${capacity.quota}`}
+          </span>
         </span>
         {capacity.walkInReserved > 0 ? (
           <span>
@@ -1175,9 +1185,11 @@ function CapacityStrip({
             {capacity.released ? ' (unused released to online)' : ''}
           </span>
         ) : null}
-        <span>
-          Shared <span className="numeric">{capacity.sharedActive}/{capacity.released ? capacity.sharedCap : sharedTotal}</span>
-        </span>
+        {sharedTotal !== null ? (
+          <span>
+            Shared <span className="numeric">{capacity.sharedActive}/{capacity.released ? capacity.sharedCap : sharedTotal}</span>
+          </span>
+        ) : null}
         {capacity.extraActive > 0 ? (
           <span className="font-semibold text-amber-700">
             Extra <span className="numeric">{capacity.extraActive}</span>
@@ -1195,9 +1207,17 @@ function CapacityStrip({
           </span>
         ) : null}
       </div>
-      {canManage && !capacity.released && capacity.reservedUnused > 0 ? (
-        <ReleaseReservedButton doctorId={doctorId} count={capacity.reservedUnused} />
-      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        {canManage && !capacity.released && capacity.reservedUnused > 0 ? (
+          <ReleaseReservedButton doctorId={doctorId} count={capacity.reservedUnused} />
+        ) : null}
+        {canManage && capacity.quota !== null ? (
+          <AddExtraCapacityButton
+            doctorId={doctorId}
+            currentQuota={capacity.quota}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -1238,7 +1258,7 @@ function WaitingList({
 
 /** "Call 3 · Token 31": the serving number first, the booking token beside it. */
 function servingHint(row: QueueRow): string {
-  return row.callNumber != null ? `Call ${row.callNumber} · Token #${row.tokenNumber}` : `Token #${row.tokenNumber}`;
+  return row.callNumber != null ? `Call ${row.callNumber} · Token #${row.tokenLabel}` : `Token #${row.tokenLabel}`;
 }
 
 /**
@@ -1247,7 +1267,7 @@ function servingHint(row: QueueRow): string {
  */
 function ServingNumber({ row }: { row: QueueRow }) {
   if (row.callNumber == null) {
-    return <span className="numeric text-4xl font-bold sm:text-5xl">{row.tokenNumber}</span>;
+    return <span className="numeric text-4xl font-bold sm:text-5xl">{row.tokenLabel}</span>;
   }
   return (
     <span className="flex flex-col items-center leading-none">
@@ -1258,7 +1278,7 @@ function ServingNumber({ row }: { row: QueueRow }) {
 }
 
 /** The booking token, shown beside the call number; it never changes. */
-function TokenChip({ token }: { token: number }) {
+function TokenChip({ token }: { token: string }) {
   return (
     <span className="inline-flex items-center rounded-md bg-ink-100 px-2 py-0.5 text-xs font-semibold text-ink-700">
       Token {token}

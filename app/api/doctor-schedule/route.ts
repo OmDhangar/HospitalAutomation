@@ -7,8 +7,10 @@ import {
   getDoctorSlotsForDate,
   removeIntervalBlock,
   saveDoctorScheduleConfig,
+  ScheduleValidationError,
   toggleSlotOverride,
 } from '@/lib/services/scheduling';
+import type { SessionConfig } from '@/lib/domain/sessions';
 
 /**
  * Doctor schedules are hospital configuration, so this endpoint is the owner's,
@@ -71,16 +73,36 @@ export async function POST(request: Request) {
 
     if (action === 'save_config') {
       const { startTime, endTime, slotMinutes, breakStartTime, breakEndTime, mode } = body;
-      await saveDoctorScheduleConfig({
-        hospitalId: session.hospitalId,
-        doctorId,
-        startTime,
-        endTime,
-        slotMinutes: Number(slotMinutes) || 15,
-        breakStartTime: breakStartTime || null,
-        breakEndTime: breakEndTime || null,
-        mode: mode || 'slot',
-      });
+      // A split day (e.g. live queue 12-7, booked slots 8-10) arrives as a list
+      // of sessions; a single-session day may still use the flat fields.
+      const sessions: SessionConfig[] | undefined = Array.isArray(body.sessions)
+        ? body.sessions.map((x: Record<string, unknown>) => ({
+            mode: x.mode === 'queue' || x.mode === 'both' ? x.mode : 'slot',
+            startTime: String(x.startTime ?? ''),
+            endTime: String(x.endTime ?? ''),
+            slotMinutes: Number(x.slotMinutes) || 15,
+            breakStartTime: x.breakStartTime ? String(x.breakStartTime) : null,
+            breakEndTime: x.breakEndTime ? String(x.breakEndTime) : null,
+          }))
+        : undefined;
+      try {
+        await saveDoctorScheduleConfig({
+          hospitalId: session.hospitalId,
+          doctorId,
+          sessions,
+          startTime,
+          endTime,
+          slotMinutes: Number(slotMinutes) || 15,
+          breakStartTime: breakStartTime || null,
+          breakEndTime: breakEndTime || null,
+          mode: mode || 'slot',
+        });
+      } catch (err) {
+        if (err instanceof ScheduleValidationError) {
+          return NextResponse.json({ error: err.message }, { status: 400 });
+        }
+        throw err;
+      }
       return NextResponse.json({ ok: true, message: 'Schedule configuration saved successfully' });
     }
 

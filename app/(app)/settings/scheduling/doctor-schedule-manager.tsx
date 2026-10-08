@@ -81,6 +81,12 @@ export function DoctorScheduleManager({
   const [slotMinutes, setSlotMinutes] = useState(15);
   const [breakStart, setBreakStart] = useState('13:00');
   const [breakEnd, setBreakEnd] = useState('14:00');
+  // Optional second, slot-only session after the main one: the split day of a
+  // live queue (e.g. 12-7pm) and then booked slots only (e.g. 8-10pm).
+  const [eveningEnabled, setEveningEnabled] = useState(false);
+  const [eveningStart, setEveningStart] = useState('20:00');
+  const [eveningEnd, setEveningEnd] = useState('22:00');
+  const [eveningSlotMinutes, setEveningSlotMinutes] = useState(10);
   const [isSavingConfig, startSaveConfigTransition] = useTransition();
 
   // Form states for Temporary Interval Block
@@ -96,12 +102,24 @@ export function DoctorScheduleManager({
       const data = await fetchDoctorScheduleData(docId, dateStr);
       setScheduleData(data);
       if (data?.config) {
-        setScheduleMode(data.config.mode);
-        setStartTime(data.config.startTime);
-        setEndTime(data.config.endTime);
-        setSlotMinutes(data.config.slotMinutes);
-        setBreakStart(data.config.breakStartTime || '13:00');
-        setBreakEnd(data.config.breakEndTime || '14:00');
+        const sessions: DoctorScheduleSettings['sessions'] = data.config.sessions ?? [];
+        // The main session is the live queue when there is one; a slot-only
+        // session after it is the evening session.
+        const main = sessions.find((x) => x.mode !== 'slot') ?? sessions[0] ?? data.config;
+        const evening = sessions.find((x) => x !== main && x.mode === 'slot');
+        setScheduleMode(main.mode);
+        setStartTime(main.startTime);
+        setEndTime(main.endTime);
+        setSlotMinutes(main.slotMinutes);
+        // A cleared break stays cleared rather than reappearing as 1-2pm.
+        setBreakStart(main.breakStartTime ?? '');
+        setBreakEnd(main.breakEndTime ?? '');
+        setEveningEnabled(Boolean(evening));
+        if (evening) {
+          setEveningStart(evening.startTime);
+          setEveningEnd(evening.endTime);
+          setEveningSlotMinutes(evening.slotMinutes);
+        }
       }
     } catch (e: unknown) {
       toast.error('Failed to load doctor schedule', (e as Error).message);
@@ -122,12 +140,19 @@ export function DoctorScheduleManager({
       try {
         await saveScheduleConfigApi({
           doctorId: selectedDoctorId,
-          mode: scheduleMode,
-          startTime,
-          endTime,
-          slotMinutes,
-          breakStartTime: breakStart || null,
-          breakEndTime: breakEnd || null,
+          sessions: [
+            {
+              mode: scheduleMode,
+              startTime,
+              endTime,
+              slotMinutes,
+              breakStartTime: breakStart || null,
+              breakEndTime: breakEnd || null,
+            },
+            ...(eveningEnabled
+              ? [{ mode: 'slot' as const, startTime: eveningStart, endTime: eveningEnd, slotMinutes: eveningSlotMinutes }]
+              : []),
+          ],
         });
         toast.success('Schedule Updated', 'Doctor availability configuration saved.');
         loadSchedule(selectedDoctorId, selectedDate);
@@ -135,6 +160,19 @@ export function DoctorScheduleManager({
         toast.error('Could not save schedule', (err as Error).message);
       }
     });
+  };
+
+  /** The split day doctors asked for: live queue 12-7pm, then booked slots from 8pm. */
+  const applySplitDayPreset = () => {
+    setScheduleMode('queue');
+    setStartTime('12:00');
+    setEndTime('19:00');
+    setBreakStart('');
+    setBreakEnd('');
+    setEveningEnabled(true);
+    setEveningStart('20:00');
+    setEveningEnd('22:00');
+    setEveningSlotMinutes(slotMinutes || 10);
   };
 
   const handleAddIntervalBlock = (e: React.FormEvent) => {
@@ -378,6 +416,58 @@ export function DoctorScheduleManager({
                 </select>
               </Field>
 
+              <div className="border-t border-ink-100 pt-3 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="flex items-center gap-2 text-xs font-semibold text-ink-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={eveningEnabled}
+                      onChange={(e) => setEveningEnabled(e.target.checked)}
+                      className="size-4 rounded border-ink-300 text-brand-600 focus:ring-brand-600"
+                    />
+                    <span>Evening slot session (booked slots only)</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={applySplitDayPreset}
+                    className="text-xs font-semibold text-brand-700 hover:text-brand-900 underline underline-offset-2 cursor-pointer"
+                  >
+                    Use: queue 12–7 PM, slots 8–10 PM
+                  </button>
+                </div>
+                {eveningEnabled ? (
+                  <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 space-y-3">
+                    <p className="text-xs text-emerald-950 leading-relaxed">
+                      After the session above ends, the live queue closes for the day. From the evening start,
+                      patients can only book a slot; they are numbered S1, S2… by time, join the line when the
+                      session starts, and are called in slot order. Switch individual slots on or off in the
+                      grid to choose which ones patients may book.
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <Field label="Evening Start">
+                        <Input type="time" value={eveningStart} onChange={(e) => setEveningStart(e.target.value)} required />
+                      </Field>
+                      <Field label="Evening End">
+                        <Input type="time" value={eveningEnd} onChange={(e) => setEveningEnd(e.target.value)} required />
+                      </Field>
+                      <Field label="Slot Length">
+                        <select
+                          value={eveningSlotMinutes}
+                          onChange={(e) => setEveningSlotMinutes(Number(e.target.value))}
+                          className="w-full rounded-lg border-0 bg-white px-3 py-2.5 text-sm text-ink-900 ring-1 ring-inset ring-ink-300 focus:ring-2 focus:ring-brand-600 cursor-pointer"
+                        >
+                          {[5, 10, 15, 20, 30, 45, 60].map((m) => (
+                            <option key={m} value={m}>
+                              {m} minutes
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
               <div className="border-t border-ink-100 pt-3">
                 <p className="text-xs font-semibold text-ink-700 mb-2">Default Lunch / Break</p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -499,7 +589,7 @@ export function DoctorScheduleManager({
 
         {/* Right 2 Columns: Interactive Slot Grid or Live Queue Info */}
         <div className="lg:col-span-2">
-          {scheduleMode === 'queue' ? (
+          {scheduleMode === 'queue' && !eveningEnabled ? (
             <Card className="p-4 sm:p-6 bg-gradient-to-br from-blue-50/50 via-white to-indigo-50/30 border-blue-200">
               <div className="flex flex-col sm:flex-row items-start gap-4">
                 <div className="size-12 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-xs shrink-0">
@@ -594,7 +684,12 @@ export function DoctorScheduleManager({
                               : 'bg-rose-50 border-rose-200 text-rose-800 opacity-80'
                           }`}
                         >
-                          <p className="text-sm font-bold tracking-tight">{slot.timeStr || slot.time24}</p>
+                          <p className="text-sm font-bold tracking-tight">
+                            {slot.timeStr || slot.time24}
+                            {slot.slotNumber !== null ? (
+                              <span className="ml-1 text-[10px] font-semibold text-ink-500">S{slot.slotNumber}</span>
+                            ) : null}
+                          </p>
                           <span
                             className={`text-[10px] font-bold uppercase tracking-wider block mt-0.5 ${
                               isAvailable ? 'text-emerald-700' : 'text-rose-700'

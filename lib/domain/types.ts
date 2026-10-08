@@ -65,6 +65,11 @@ export type QueueEntry = {
    * never looks like it jumped the line.
    */
   callNumber?: number | null;
+  /**
+   * `slot`: booked into a slot-only session, numbered S1, S2… by slot time
+   * in a number space of its own. Seen after the live queue, in slot order.
+   */
+  sessionKind?: 'queue' | 'slot';
 };
 
 /**

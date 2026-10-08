@@ -9,7 +9,18 @@ import {
   doctorSlotOverrides,
   hospitals,
 } from '@/lib/db/schema';
+import {
+  dayStartAt,
+  runsOwnList,
+  slotNumber,
+  takesSlots,
+  toDaySessions,
+  validateSessions,
+  type DaySession,
+  type SessionConfig,
+} from '@/lib/domain/sessions';
 import { formatTimeIn, serviceDateIn, zonedTimeToUtc } from '@/lib/domain/time';
+import { clearDoctorCache } from './hospital';
 
 export type GeneratedSlot = {
   timeStr: string; // e.g. "10:00 AM"
@@ -17,6 +28,12 @@ export type GeneratedSlot = {
   datetimeIso: string; // UTC ISO string for booking
   available: boolean;
   reason?: string | null; // e.g. "Booked", "Lunch", "Emergency", "Personal", "Disabled"
+  /**
+   * S-number when the slot belongs to a session that runs its own list (a
+   * slot-only session on a split day). Null: booking it issues a live-queue
+   * token, as single-session days always have.
+   */
+  slotNumber: number | null;
 };
 
 export type DoctorScheduleSettings = {
@@ -29,7 +46,132 @@ export type DoctorScheduleSettings = {
   breakStartTime: string | null; // "13:00"
   breakEndTime: string | null; // "14:00"
   mode: 'queue' | 'slot' | 'both';
+  /**
+   * Every session of the day, earliest first. The flat fields above mirror
+   * the first session, for callers that only know about one.
+   */
+  sessions: SessionConfig[];
 };
+
+/** Hours a doctor with no schedule at all is offered at, as before sessions existed. */
+const DEFAULT_SESSION: Omit<SessionConfig, 'slotMinutes'> = {
+  mode: 'both',
+  startTime: '10:00',
+  endTime: '17:00',
+  breakStartTime: '13:00',
+  breakEndTime: '14:00',
+};
+
+const hhmm = (t: string | null | undefined) => (t ? t.slice(0, 5) : null);
+
+type ScheduleRow = {
+  weekday: number;
+  mode: 'queue' | 'slot' | 'both';
+  startTime: string;
+  endTime: string;
+  slotMinutes: number;
+  breakStartTime: string | null;
+  breakEndTime: string | null;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+};
+
+const toSessionConfig = (row: ScheduleRow): SessionConfig => ({
+  mode: row.mode,
+  startTime: hhmm(row.startTime)!,
+  endTime: hhmm(row.endTime)!,
+  slotMinutes: row.slotMinutes,
+  // A cleared break stays cleared. It used to come back as 13:00-14:00.
+  breakStartTime: hhmm(row.breakStartTime),
+  breakEndTime: hhmm(row.breakEndTime),
+});
+
+const byStart = (a: SessionConfig, b: SessionConfig) => a.startTime.localeCompare(b.startTime);
+
+async function loadScheduleRows(tx: Tx, doctorId: string): Promise<ScheduleRow[]> {
+  return tx
+    .select({
+      weekday: doctorSchedules.weekday,
+      mode: doctorSchedules.mode,
+      startTime: doctorSchedules.startTime,
+      endTime: doctorSchedules.endTime,
+      slotMinutes: doctorSchedules.slotMinutes,
+      breakStartTime: doctorSchedules.breakStartTime,
+      breakEndTime: doctorSchedules.breakEndTime,
+      effectiveFrom: doctorSchedules.effectiveFrom,
+      effectiveTo: doctorSchedules.effectiveTo,
+    })
+    .from(doctorSchedules)
+    .where(eq(doctorSchedules.doctorId, doctorId))
+    .orderBy(asc(doctorSchedules.createdAt));
+}
+
+/**
+ * The rows that make up one service date, in order of authority: those in
+ * effect for that weekday, then any for that weekday, then whichever weekday
+ * was written first (the settings screen writes the same hours to all seven).
+ */
+function rowsForDate(rows: ScheduleRow[], serviceDate: string): ScheduleRow[] {
+  if (rows.length === 0) return [];
+  const weekday = new Date(`${serviceDate}T12:00:00Z`).getUTCDay();
+  const inEffect = rows.filter(
+    (row) => row.effectiveFrom <= serviceDate && (row.effectiveTo === null || row.effectiveTo >= serviceDate),
+  );
+  const forWeekday = inEffect.filter((row) => row.weekday === weekday);
+  if (forWeekday.length > 0) return forWeekday;
+  const anyForWeekday = rows.filter((row) => row.weekday === weekday);
+  if (anyForWeekday.length > 0) return anyForWeekday;
+  return rows.filter((row) => row.weekday === rows[0].weekday);
+}
+
+/**
+ * The doctor's sessions on one service date, earliest first; empty when the
+ * doctor is closed that day or has no schedule.
+ *
+ * A one-off exception wins over the weekly schedule: `closed` empties the day,
+ * and changed hours move the live-queue session (or the only one).
+ */
+export async function loadDaySessionsInTx(
+  tx: Tx,
+  args: { doctorId: string; serviceDate: string; timezone: string },
+): Promise<DaySession[]> {
+  const [[exception], rows] = await Promise.all([
+    tx
+      .select({
+        closed: doctorScheduleExceptions.closed,
+        startTime: doctorScheduleExceptions.startTime,
+        endTime: doctorScheduleExceptions.endTime,
+      })
+      .from(doctorScheduleExceptions)
+      .where(
+        and(
+          eq(doctorScheduleExceptions.doctorId, args.doctorId),
+          eq(doctorScheduleExceptions.serviceDate, args.serviceDate),
+        ),
+      )
+      .limit(1),
+    loadScheduleRows(tx, args.doctorId),
+  ]);
+  if (exception?.closed) return [];
+
+  const configs = rowsForDate(rows, args.serviceDate).map(toSessionConfig).sort(byStart);
+  if (exception?.startTime) {
+    const target = configs.find((c) => c.mode !== 'slot') ?? configs[0];
+    if (target) {
+      target.startTime = hhmm(exception.startTime)!;
+      if (exception.endTime) target.endTime = hhmm(exception.endTime)!;
+    } else {
+      // Hours given for a doctor with no weekly schedule: that is the day.
+      configs.push({
+        mode: 'queue',
+        startTime: hhmm(exception.startTime)!,
+        endTime: hhmm(exception.endTime) ?? '23:59',
+        slotMinutes: 10,
+      });
+    }
+  }
+  return toDaySessions(configs, args.serviceDate, args.timezone);
+}
 
 export type IntervalBlockItem = {
   id: string;
@@ -118,6 +260,31 @@ export function generateRawSlots(args: {
   return slots;
 }
 
+/** The doctor's weekly session template, as the settings screen edits it. */
+function scheduleSettings(
+  doc: { id: string; name: string; specialty: string | null; defaultConsultMinutes: number | null },
+  rows: ScheduleRow[],
+): DoctorScheduleSettings {
+  const template = rows.length > 0 ? rows.filter((r) => r.weekday === rows[0].weekday) : [];
+  const sessions = template.map(toSessionConfig).sort(byStart);
+  const first: SessionConfig = sessions[0] ?? {
+    ...DEFAULT_SESSION,
+    slotMinutes: doc.defaultConsultMinutes ?? 15,
+  };
+  return {
+    doctorId: doc.id,
+    doctorName: doc.name,
+    specialty: doc.specialty,
+    startTime: first.startTime,
+    endTime: first.endTime,
+    slotMinutes: first.slotMinutes,
+    breakStartTime: first.breakStartTime ?? null,
+    breakEndTime: first.breakEndTime ?? null,
+    mode: first.mode,
+    sessions: sessions.length > 0 ? sessions : [first],
+  };
+}
+
 /**
  * Retrieves doctor schedule settings for a given hospital & doctor.
  */
@@ -137,74 +304,83 @@ export async function getDoctorScheduleConfig(args: {
       .where(and(eq(doctors.id, args.doctorId), eq(doctors.active, true)));
 
     if (!doc) return null;
-
-    const [sched] = await tx
-      .select({
-        startTime: doctorSchedules.startTime,
-        endTime: doctorSchedules.endTime,
-        slotMinutes: doctorSchedules.slotMinutes,
-        breakStartTime: doctorSchedules.breakStartTime,
-        breakEndTime: doctorSchedules.breakEndTime,
-        mode: doctorSchedules.mode,
-      })
-      .from(doctorSchedules)
-      .where(eq(doctorSchedules.doctorId, args.doctorId))
-      .orderBy(asc(doctorSchedules.createdAt))
-      .limit(1);
-
-    return {
-      doctorId: doc.id,
-      doctorName: doc.name,
-      specialty: doc.specialty,
-      startTime: sched?.startTime ? sched.startTime.slice(0, 5) : '10:00',
-      endTime: sched?.endTime ? sched.endTime.slice(0, 5) : '17:00',
-      slotMinutes: sched?.slotMinutes ?? doc.defaultConsultMinutes ?? 15,
-      breakStartTime: sched?.breakStartTime ? sched.breakStartTime.slice(0, 5) : '13:00',
-      breakEndTime: sched?.breakEndTime ? sched.breakEndTime.slice(0, 5) : '14:00',
-      mode: (sched?.mode as 'queue' | 'slot' | 'both') ?? 'slot',
-    };
+    return scheduleSettings(doc, await loadScheduleRows(tx, args.doctorId));
   });
 }
 
+/** Refused schedule input; the message is safe to show the owner. */
+export class ScheduleValidationError extends Error {
+  constructor(readonly errors: string[]) {
+    super(errors.join(' '));
+    this.name = 'ScheduleValidationError';
+  }
+}
+
 /**
- * Updates or creates doctor weekly schedule configuration.
+ * Saves the doctor's weekly sessions, the same for every weekday.
+ *
+ * Pass `sessions` for a split day, e.g. a live queue 12:00-19:00 and booked
+ * slots 20:00-22:00. The single-session fields remain for older callers and
+ * describe a one-session day.
  */
 export async function saveDoctorScheduleConfig(args: {
   hospitalId: string;
   doctorId: string;
-  startTime: string;
-  endTime: string;
-  slotMinutes: number;
+  sessions?: SessionConfig[];
+  startTime?: string;
+  endTime?: string;
+  slotMinutes?: number;
   breakStartTime?: string | null;
   breakEndTime?: string | null;
   mode?: 'queue' | 'slot' | 'both';
 }) {
+  const sessions: SessionConfig[] = (
+    args.sessions ?? [
+      {
+        mode: args.mode ?? 'slot',
+        startTime: args.startTime ?? '',
+        endTime: args.endTime ?? '',
+        slotMinutes: args.slotMinutes ?? 15,
+        breakStartTime: args.breakStartTime || null,
+        breakEndTime: args.breakEndTime || null,
+      },
+    ]
+  ).map((x) => ({ ...x, breakStartTime: x.breakStartTime || null, breakEndTime: x.breakEndTime || null }));
+
+  const errors = validateSessions(sessions);
+  if (errors.length > 0) throw new ScheduleValidationError(errors);
+
   const today = new Date().toISOString().slice(0, 10);
   return withTenant(args.hospitalId, async (tx) => {
     // Delete existing weekly schedule for doctor and re-insert
     await tx.delete(doctorSchedules).where(eq(doctorSchedules.doctorId, args.doctorId));
 
-    // Insert for all weekdays (0 to 6)
-    const values = [0, 1, 2, 3, 4, 5, 6].map((dow) => ({
-      hospitalId: args.hospitalId,
-      doctorId: args.doctorId,
-      weekday: dow,
-      mode: args.mode ?? 'slot',
-      startTime: args.startTime,
-      endTime: args.endTime,
-      slotMinutes: args.slotMinutes,
-      breakStartTime: args.breakStartTime || null,
-      breakEndTime: args.breakEndTime || null,
-      effectiveFrom: today,
-    }));
+    // One row per session per weekday (0 to 6).
+    const values = [0, 1, 2, 3, 4, 5, 6].flatMap((dow) =>
+      sessions.map((session) => ({
+        hospitalId: args.hospitalId,
+        doctorId: args.doctorId,
+        weekday: dow,
+        mode: session.mode,
+        startTime: session.startTime,
+        endTime: session.endTime,
+        slotMinutes: session.slotMinutes,
+        breakStartTime: session.breakStartTime ?? null,
+        breakEndTime: session.breakEndTime ?? null,
+        effectiveFrom: today,
+      })),
+    );
 
     await tx.insert(doctorSchedules).values(values);
 
-    // Also update doctors.defaultConsultMinutes
+    // The consultation time estimates fall back on: the live queue's slot length.
+    const consult = (sessions.find((x) => x.mode !== 'slot') ?? sessions[0]).slotMinutes;
     await tx
       .update(doctors)
-      .set({ defaultConsultMinutes: args.slotMinutes })
+      .set({ defaultConsultMinutes: consult })
       .where(eq(doctors.id, args.doctorId));
+    // The doctor list carries each doctor's booking mode; it must not lag the new sessions.
+    clearDoctorCache(args.hospitalId);
   });
 }
 
@@ -328,6 +504,8 @@ export async function getDoctorSlotsForDate(args: {
   now?: Date;
 }): Promise<{
   config: DoctorScheduleSettings;
+  /** The day's sessions, earliest first. */
+  sessions: DaySession[];
   slots: GeneratedSlot[];
   intervalBlocks: IntervalBlockItem[];
   overrides: SlotOverrideItem[];
@@ -356,32 +534,13 @@ export async function getDoctorSlotsForDate(args: {
 
     const timezone = doc.timezone ?? 'Asia/Kolkata';
 
-    // 2. Fetch weekly schedule or defaults
-    const [sched] = await tx
-      .select({
-        startTime: doctorSchedules.startTime,
-        endTime: doctorSchedules.endTime,
-        slotMinutes: doctorSchedules.slotMinutes,
-        breakStartTime: doctorSchedules.breakStartTime,
-        breakEndTime: doctorSchedules.breakEndTime,
-        mode: doctorSchedules.mode,
-      })
-      .from(doctorSchedules)
-      .where(eq(doctorSchedules.doctorId, args.doctorId))
-      .orderBy(asc(doctorSchedules.createdAt))
-      .limit(1);
-
-    const config: DoctorScheduleSettings = {
-      doctorId: doc.id,
-      doctorName: doc.name,
-      specialty: doc.specialty,
-      startTime: sched?.startTime ? sched.startTime.slice(0, 5) : '10:00',
-      endTime: sched?.endTime ? sched.endTime.slice(0, 5) : '17:00',
-      slotMinutes: sched?.slotMinutes ?? doc.defaultConsultMinutes ?? 15,
-      breakStartTime: sched?.breakStartTime ? sched.breakStartTime.slice(0, 5) : '13:00',
-      breakEndTime: sched?.breakEndTime ? sched.breakEndTime.slice(0, 5) : '14:00',
-      mode: (sched?.mode as 'queue' | 'slot' | 'both') ?? 'slot',
-    };
+    // 2. The day's sessions, or the classic default for a doctor with no schedule
+    const rows = await loadScheduleRows(tx, args.doctorId);
+    const config = scheduleSettings(doc, rows);
+    const daySessions =
+      rows.length > 0
+        ? await loadDaySessionsInTx(tx, { doctorId: args.doctorId, serviceDate: args.serviceDate, timezone })
+        : toDaySessions([config.sessions[0]], args.serviceDate, timezone);
 
     // 3. Fetch active interval blocks for date
     const rawBlocks = await tx
@@ -444,16 +603,20 @@ export async function getDoctorSlotsForDate(args: {
         .filter((iso): iso is string => Boolean(iso)),
     );
 
-    // 6. Generate base raw slots
-    const rawSlots = generateRawSlots({
-      startTime: config.startTime,
-      endTime: config.endTime,
-      slotMinutes: config.slotMinutes,
-      breakStartTime: config.breakStartTime,
-      breakEndTime: config.breakEndTime,
-    });
+    // 6. Generate raw slots. A split day offers slots only from the sessions
+    // that take bookings; a single-session day keeps generating them from its
+    // hours whatever the mode, as it always has.
+    const bookable = daySessions.length > 1 ? daySessions.filter(takesSlots) : daySessions;
+    const rawSlots = bookable.flatMap((session) =>
+      generateRawSlots({
+        startTime: session.startTime,
+        endTime: session.endTime,
+        slotMinutes: session.slotMinutes,
+        breakStartTime: session.breakStartTime,
+        breakEndTime: session.breakEndTime,
+      }).map((slot) => ({ ...slot, ownList: runsOwnList(daySessions, session) })),
+    );
 
-    const dateParts = args.serviceDate.split('-').map(Number); // YYYY, MM, DD
     const now = args.now ?? new Date();
     const isToday = args.serviceDate === serviceDateIn(timezone, now);
 
@@ -461,11 +624,8 @@ export async function getDoctorSlotsForDate(args: {
     let isOnlineOpen = true;
 
     if (isToday) {
-      const scheduledStartAt = await resolveScheduledStartInTx(tx, {
-        doctorId: args.doctorId,
-        serviceDate: args.serviceDate,
-        timezone,
-      });
+      // A doctor with no schedule has no start time, so online is always open.
+      const scheduledStartAt = rows.length > 0 ? dayStartAt(daySessions) : null;
 
       if (scheduledStartAt) {
         const opensMin = doc.onlineOpensMinutesBefore ?? 120;
@@ -478,13 +638,8 @@ export async function getDoctorSlotsForDate(args: {
 
     for (const s of rawSlots) {
       const slotMinutes = s.startMinutes;
-      const h = Math.floor(slotMinutes / 60);
-      const m = slotMinutes % 60;
-
-      // Construct UTC date matching local timezone offset (Asia/Kolkata is +05:30)
-      const slotDate = new Date(
-        Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2], h - 5, m - 30),
-      );
+      // In the hospital's timezone; this used to hard-code +05:30.
+      const slotDate = zonedTimeToUtc(args.serviceDate, s.time24, timezone);
       const datetimeIso = slotDate.toISOString();
 
       let available = true;
@@ -546,6 +701,7 @@ export async function getDoctorSlotsForDate(args: {
         datetimeIso,
         available,
         reason,
+        slotNumber: s.ownList ? slotNumber(daySessions, slotDate) : null,
       });
     }
 
@@ -553,6 +709,7 @@ export async function getDoctorSlotsForDate(args: {
 
     return {
       config,
+      sessions: daySessions,
       slots,
       intervalBlocks,
       overrides,
@@ -568,11 +725,11 @@ export async function getDoctorSlotsForDate(args: {
  * "when was OPD meant to begin?", used by the ETA and the online booking
  * window.
  *
- * In order of authority: an explicit start on the doctor-day row, a one-off
- * exception for that date, the weekly schedule for that weekday, then any
- * weekly row (the settings screen writes the same hours to all seven). Null
- * when the doctor has no schedule at all, or is closed that day — callers then
- * behave as they did before start times existed.
+ * An explicit start on the doctor-day row wins; otherwise the start of the
+ * day's live-queue session (or its first session, on a slot-only day), with
+ * one-off exceptions applied. Null when the doctor has no schedule at all, or
+ * is closed that day — callers then behave as they did before start times
+ * existed.
  */
 export async function resolveScheduledStartInTx(
   tx: Tx,
@@ -584,41 +741,5 @@ export async function resolveScheduledStartInTx(
   },
 ): Promise<Date | null> {
   if (args.dayOverride) return args.dayOverride;
-
-  const [exception] = await tx
-    .select({ closed: doctorScheduleExceptions.closed, startTime: doctorScheduleExceptions.startTime })
-    .from(doctorScheduleExceptions)
-    .where(
-      and(
-        eq(doctorScheduleExceptions.doctorId, args.doctorId),
-        eq(doctorScheduleExceptions.serviceDate, args.serviceDate),
-      ),
-    )
-    .limit(1);
-  if (exception?.closed) return null;
-  if (exception?.startTime) return zonedTimeToUtc(args.serviceDate, exception.startTime, args.timezone);
-
-  const weekday = new Date(`${args.serviceDate}T12:00:00Z`).getUTCDay();
-  const rows = await tx
-    .select({
-      weekday: doctorSchedules.weekday,
-      startTime: doctorSchedules.startTime,
-      effectiveFrom: doctorSchedules.effectiveFrom,
-      effectiveTo: doctorSchedules.effectiveTo,
-    })
-    .from(doctorSchedules)
-    .where(eq(doctorSchedules.doctorId, args.doctorId))
-    .orderBy(asc(doctorSchedules.createdAt));
-  if (rows.length === 0) return null;
-
-  const inEffect = rows.filter(
-    (row) =>
-      row.effectiveFrom <= args.serviceDate &&
-      (row.effectiveTo === null || row.effectiveTo >= args.serviceDate),
-  );
-  const chosen =
-    inEffect.find((row) => row.weekday === weekday) ??
-    rows.find((row) => row.weekday === weekday) ??
-    rows[0];
-  return zonedTimeToUtc(args.serviceDate, chosen.startTime, args.timezone);
+  return dayStartAt(await loadDaySessionsInTx(tx, args));
 }

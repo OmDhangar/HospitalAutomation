@@ -170,6 +170,12 @@ export const isEligible = (entry: QueueEntry): boolean => entry.status === 'WAIT
 const isServing = (entry: QueueEntry): boolean =>
   entry.status === 'CALLED' || entry.status === 'IN_CONSULTATION';
 
+const kindOf = (entry: QueueEntry): 'queue' | 'slot' => entry.sessionKind ?? 'queue';
+
+/** What a patient and the desk see as the token: "S3" for a booked evening slot, "12" otherwise. */
+export const tokenLabel = (sessionKind: 'queue' | 'slot' | null | undefined, tokenNumber: number): string =>
+  sessionKind === 'slot' ? `S${tokenNumber}` : String(tokenNumber);
+
 /**
  * Where a normal (non-priority) patient sits in line.
  *
@@ -193,6 +199,9 @@ const NO_SEQ = Number.MAX_SAFE_INTEGER;
  * 4. Everyone else by token — the token is a stable place in line, so an early
  *    arrival with a later token waits for earlier tokens who are present, but
  *    not for those who are not (that part is eligibility, not order).
+ *    Live-queue tokens come before slot-session ones: the evening's booked
+ *    slots follow whoever is left from the afternoon queue, and their S-numbers
+ *    already run in slot-time order.
  */
 function compare(a: QueueEntry, b: QueueEntry): number {
   const weight = STATUS_WEIGHT[a.status]! - STATUS_WEIGHT[b.status]!;
@@ -222,7 +231,9 @@ function compare(a: QueueEntry, b: QueueEntry): number {
     );
   }
 
+  const kind = kindOf(a) === kindOf(b) ? 0 : kindOf(a) === 'queue' ? -1 : 1;
   return (
+    kind ||
     normalKey(a) - normalKey(b) ||
     (a.rejoinSeq ?? 0) - (b.rejoinSeq ?? 0) ||
     a.tokenNumber - b.tokenNumber
@@ -239,19 +250,22 @@ export function orderQueue(entries: QueueEntry[]): QueueEntry[] {
  * been called today. A patient below it has had their turn pass them by.
  *
  * Priority patients are excluded — calling a priority token 90 early does not
- * mean tokens 41 to 89 have been passed.
+ * mean tokens 41 to 89 have been passed. Measured within one number space:
+ * calling S5 in the evening says nothing about live-queue token 3.
  */
-export function lateFrontier(entries: QueueEntry[]): number {
+export function lateFrontier(entries: QueueEntry[], sessionKind: 'queue' | 'slot' = 'queue'): number {
   return entries.reduce(
     (max, entry) =>
-      entry.calledAt && !isPriority(entry) ? Math.max(max, entry.tokenNumber) : max,
+      entry.calledAt && !isPriority(entry) && kindOf(entry) === sessionKind
+        ? Math.max(max, entry.tokenNumber)
+        : max,
     0,
   );
 }
 
 /** Whether this patient, on becoming eligible again, came back after their turn passed. */
 export const isLateReturn = (entries: QueueEntry[], entry: QueueEntry): boolean =>
-  entry.tokenNumber < lateFrontier(entries);
+  entry.tokenNumber < lateFrontier(entries, kindOf(entry));
 
 /**
  * Where a late returner goes: behind the next N eligible normal patients.
@@ -270,8 +284,14 @@ export function lateReturnAnchor(
   ctx: QueueContext = DEFAULT_CONTEXT,
 ): number | null {
   if (ctx.lateRejoinAfter <= 0) return null;
+  const self = entries.find((entry) => entry.appointmentId === selfId);
+  // The anchor is a token in the returner's own number space.
   const line = orderQueue(entries).filter(
-    (entry) => entry.appointmentId !== selfId && isEligible(entry) && !isPriority(entry),
+    (entry) =>
+      entry.appointmentId !== selfId &&
+      isEligible(entry) &&
+      !isPriority(entry) &&
+      (!self || kindOf(entry) === kindOf(self)),
   );
   if (line.length === 0) return null;
   const anchor = line[Math.min(ctx.lateRejoinAfter, line.length) - 1];

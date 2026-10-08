@@ -267,6 +267,13 @@
       "when": 1790100000000,
       "tag": "0037_emergency_admission",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1790150000000,
+      "tag": "0038_live_capacity_pace_sessions",
+      "breakpoints": true
     }
   ]
 }

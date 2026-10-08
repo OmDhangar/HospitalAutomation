@@ -1,10 +1,13 @@
 import { and, eq, lt, lte, sql } from 'drizzle-orm';
+import { withTenant } from '@/lib/db';
 import { getAdminDb } from '@/lib/db/admin';
 import { appointments, hospitals, queueEvents, rateLimitEvents } from '@/lib/db/schema';
+import { sessionForSlot } from '@/lib/domain/sessions';
 import type { AppointmentStatus } from '@/lib/domain/types';
 import { postBedDayCharges } from './bed-days';
 import { expireStalePaymentLinks } from './payments';
-import { resumeAppointment } from './queue';
+import { applyQueueAction, resumeAppointment } from './queue';
+import { loadDaySessionsInTx } from './scheduling';
 import { expireLapsedSubscriptions } from './subscriptions';
 
 /**
@@ -152,9 +155,91 @@ export async function resumePausedAppointments(now: Date = new Date()): Promise<
   return resumed;
 }
 
+/**
+ * Look-ahead for booked evening slots. A booking is a candidate once its slot
+ * is this close, which covers any session up to this long from its start; the
+ * session itself is then checked exactly.
+ */
+const SLOT_SESSION_LOOKAHEAD_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * Moves booked evening slot-session patients into the waiting line when their
+ * session starts.
+ *
+ * Until then they are CONFIRMED: a time, not a place in a line that has not
+ * formed. At 8pm everyone booked for the evening joins at once, ordered by
+ * S-number (slot time), behind whoever is left from the afternoon queue. A
+ * patient who is not there when called is held by the desk, as for anyone
+ * else. Reception can also check a patient in early.
+ *
+ * Runs every tick, so it is kept small: a partial index holds only these
+ * bookings, and session times are loaded only for doctor-days that have one
+ * coming up.
+ */
+export async function enqueueSlotSessionBookings(now: Date = new Date()): Promise<number> {
+  const due = await getAdminDb()
+    .select({
+      id: appointments.id,
+      hospitalId: appointments.hospitalId,
+      doctorId: appointments.doctorId,
+      serviceDate: appointments.serviceDate,
+      slotAt: appointments.scheduledSlotAt,
+      timezone: hospitals.timezone,
+    })
+    .from(appointments)
+    .innerJoin(hospitals, eq(hospitals.id, appointments.hospitalId))
+    .where(
+      and(
+        eq(appointments.status, 'CONFIRMED'),
+        eq(appointments.sessionKind, 'slot'),
+        lte(appointments.scheduledSlotAt, new Date(now.getTime() + SLOT_SESSION_LOOKAHEAD_MS)),
+      ),
+    );
+  if (due.length === 0) return 0;
+
+  const groups = new Map<string, typeof due>();
+  for (const row of due) {
+    const key = `${row.doctorId}|${row.serviceDate}`;
+    groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+
+  let enqueued = 0;
+  for (const rows of groups.values()) {
+    const { hospitalId, doctorId, serviceDate, timezone } = rows[0];
+    const sessions = await withTenant(hospitalId, (tx) =>
+      loadDaySessionsInTx(tx, { doctorId, serviceDate, timezone }),
+    );
+    for (const row of rows) {
+      const session = row.slotAt ? sessionForSlot(sessions, row.slotAt) : null;
+      // A slot whose session was removed since booking joins at its own time.
+      const startsAt = session?.startAt ?? row.slotAt;
+      if (!startsAt || startsAt.getTime() > now.getTime()) continue;
+      try {
+        // The desk's own check-in: the doctor-day lock, the event, and the
+        // late-return placement should their slot have already passed.
+        await applyQueueAction({
+          hospitalId,
+          appointmentId: row.id,
+          action: 'enqueue',
+          timezone,
+          actorUserId: null,
+          now,
+        });
+        enqueued += 1;
+      } catch (error) {
+        // Checked in by the desk a moment ago, or cancelled: nothing to do.
+        console.warn('[sweeps] slot-session enqueue skipped', row.id, error);
+      }
+    }
+  }
+  return enqueued;
+}
+
 export type SweepResult = {
   appointmentsMarkedNoShow: number;
   appointmentsResumed: number;
+  /** Booked evening slot-session patients moved into the line at session start. */
+  slotBookingsEnqueued: number;
   subscriptionsExpired: number;
   paymentLinksExpired: number;
   /** IPD room charges posted (T1.10): one line per occupied bed per day. */
@@ -172,6 +257,7 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
   const result: SweepResult = {
     appointmentsMarkedNoShow: 0,
     appointmentsResumed: 0,
+    slotBookingsEnqueued: 0,
     subscriptionsExpired: 0,
     paymentLinksExpired: 0,
     bedDaysCharged: 0,
@@ -187,6 +273,12 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
     result.appointmentsResumed = await resumePausedAppointments(now);
   } catch (error) {
     console.error('[sweeps] appointment auto-resume failed', error);
+  }
+
+  try {
+    result.slotBookingsEnqueued = await enqueueSlotSessionBookings(now);
+  } catch (error) {
+    console.error('[sweeps] slot-session enqueue failed', error);
   }
 
   try {
@@ -222,7 +314,7 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
   }
 
   const total =
-    result.appointmentsMarkedNoShow + result.appointmentsResumed +
+    result.appointmentsMarkedNoShow + result.appointmentsResumed + result.slotBookingsEnqueued +
     result.subscriptionsExpired + result.paymentLinksExpired + result.bedDaysCharged;
   if (total > 0) {
     console.log('[sweeps] completed', JSON.stringify(result));
