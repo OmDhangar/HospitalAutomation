@@ -1,6 +1,6 @@
 import { and, asc, eq, gt, sql } from 'drizzle-orm';
 import { getDb, withTenant, type Tx } from '@/lib/db';
-import { markRequestReadOnly } from '@/lib/db/request-context';
+import { markRequestReadOnly, markRequestStaffUser } from '@/lib/db/request-context';
 import { auditLogs, branches, hospitals, sessions, staffMemberships, users } from '@/lib/db/schema';
 import {
   hashPassword,
@@ -241,6 +241,7 @@ export async function resolveSession(token: string | undefined): Promise<Session
     // Re-marked on every resolve, cache hit included: the flag lives for one
     // request, the cached session for thirty seconds across many.
     if (cached.session.readOnly) markRequestReadOnly();
+    else if (!cached.session.impersonatedByUserId) markRequestStaffUser(cached.session.userId);
     return cached.session;
   }
 
@@ -329,6 +330,9 @@ export async function resolveSession(token: string | undefined): Promise<Session
     returnHospitalId: row.returnHospitalId,
     mustChangePassword: row.mustChangePassword,
   };
+
+  // A real member of the hospital: identity functions in the database may rely on it.
+  if (!impersonating && !row.readOnly) markRequestStaffUser(row.userId);
 
   sessionCache.set(tokenH, { session, expiresAt: Date.now() + SESSION_CACHE_TTL });
   return session;

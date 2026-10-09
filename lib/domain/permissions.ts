@@ -101,6 +101,18 @@ const PERMISSIONS = {
   'ipd.discharge': ['owner', 'receptionist'],
   /** Wards, beds, ward devices and nurse PINs. Prices stay `billing.price`. */
   'ipd.configure': ['owner'],
+
+  /*
+   * Patient identity (0039). Each list must equal the staff roles the matching
+   * definer function accepts in SQL; permissions.test.ts compares them.
+   */
+
+  /** Verify a presented QID and link this hospital's record to that person. */
+  'patients.link_identity': ['owner', 'receptionist', 'doctor'],
+  /** Correct a person's platform identity data (name, gender, birth year). */
+  'patients.correct_identity': ['owner'],
+  /** Merge duplicate patient records of this hospital, and undo a merge. */
+  'patients.merge': ['owner'],
 } as const satisfies Record<string, readonly StaffRole[]>;
 
 export type Permission = keyof typeof PERMISSIONS;

@@ -354,7 +354,7 @@ export async function findPatientsByPhone(
         address: patients.address,
       })
       .from(patients)
-      .where(eq(patients.phoneE164, phoneE164))
+      .where(and(eq(patients.phoneE164, phoneE164), isNull(patients.mergedIntoId)))
       .orderBy(asc(patients.name))
       .limit(10),
   );

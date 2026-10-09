@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, lte } from 'drizzle-orm';
 import { withTenant, type Tx } from '@/lib/db';
 import { getAdminDb } from '@/lib/db/admin';
 import {
@@ -7,7 +7,6 @@ import {
   doctors,
   hospitals,
   notificationOutbox,
-  patients,
   queueEvents,
 } from '@/lib/db/schema';
 import { generatePublicToken } from '@/lib/security/tokens';
@@ -19,6 +18,7 @@ import type { Locale } from '@/lib/i18n/patient';
 import { getProvider } from '@/lib/notify/provider';
 import { allocateTokenInTx, CapacityError } from './capacity';
 import { lockDoctorDay } from './doctor-day';
+import { resolvePatientInTx, type PatientInput } from './patients';
 import { getDoctorSlotsForDate, type GeneratedSlot } from './scheduling';
 import { getPlanAccess } from './subscriptions';
 
@@ -306,6 +306,8 @@ export async function bookSlotForWalkIn(args: {
   timezone: string;
   slotDatetimeIso: string;
   patient: { name: string; age?: number | null; gender?: string | null; phoneE164: string };
+  /** A record picked at the desk or a verified QID; defaults to the typed details. */
+  patientInput?: PatientInput;
   actorUserId?: string | null;
   now?: Date;
 }) {
@@ -331,6 +333,7 @@ export async function bookSlotForWalkIn(args: {
       slotDate,
       slotNumber: slot.slotNumber,
       patient: args.patient,
+      patientInput: args.patientInput,
       source: 'reception',
       checkIn: true,
       actorUserId: args.actorUserId,
@@ -401,6 +404,8 @@ async function bookSlotInTx(
       phoneE164: string;
       locale?: Locale;
     };
+    /** A record picked at the desk or a verified QID; defaults to the typed details. */
+    patientInput?: PatientInput;
     source: 'whatsapp' | 'reception';
     /** The patient is here: put them straight into the waiting line. */
     checkIn: boolean;
@@ -438,29 +443,14 @@ async function bookSlotInTx(
   const timezone = hospital?.timezone ?? 'Asia/Kolkata';
   const serviceDate = serviceDateIn(timezone, slotDate);
 
-  // Upsert patient
-  const [patient] = await tx
-    .insert(patients)
-    .values({
-      hospitalId: args.hospitalId,
-      phoneE164: args.patient.phoneE164,
-      name: args.patient.name.trim(),
-      age: args.patient.age ?? null,
-      gender: args.patient.gender ?? null,
-      locale: args.patient.locale ?? 'en',
-      whatsappOptInAt: now,
-    })
-    .onConflictDoUpdate({
-      target: [patients.hospitalId, patients.phoneE164, patients.name],
-      set: {
-        name: args.patient.name.trim(),
-        age: args.patient.age !== undefined ? args.patient.age : patients.age,
-        gender: args.patient.gender !== undefined ? args.patient.gender : patients.gender,
-        updatedAt: now,
-        whatsappOptInAt: sql`coalesce(${patients.whatsappOptInAt}, excluded.whatsapp_opt_in_at)`,
-      },
-    })
-    .returning();
+  // The patient first, then the doctor's day: the lock order every booking path keeps.
+  const patient = await resolvePatientInTx(tx, {
+    hospitalId: args.hospitalId,
+    input: args.patientInput ?? { kind: 'details', details: { ...args.patient, name: args.patient.name.trim() } },
+    whatsappOptIn: true,
+    actorUserId: args.actorUserId ?? null,
+    now,
+  });
 
   /**
    * Lock the doctor's day, creating it first if needed, so the lock is

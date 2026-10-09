@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   isRequestReadOnly,
   markRequestReadOnly,
+  markRequestStaffUser,
+  requestStaffUserId,
   withRequestContext,
 } from '../request-context';
 
@@ -65,5 +67,24 @@ describe('request read-only context', () => {
     });
 
     expect(isRequestReadOnly()).toBe(false);
+  });
+});
+
+describe('request staff user', () => {
+  it('is absent by default: public, WhatsApp and worker paths carry no staff user', async () => {
+    await withRequestContext({ readOnly: false }, async () => {
+      expect(requestStaffUserId()).toBeNull();
+    });
+  });
+
+  it('is visible after an await once marked, and does not leak into another request', async () => {
+    await withRequestContext({ readOnly: false }, async () => {
+      markRequestStaffUser('user-1');
+      await Promise.resolve();
+      expect(requestStaffUserId()).toBe('user-1');
+    });
+    await withRequestContext({ readOnly: false }, async () => {
+      expect(requestStaffUserId()).toBeNull();
+    });
   });
 });

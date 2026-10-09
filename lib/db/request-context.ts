@@ -14,7 +14,16 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  * the flag set while resolving the session was invisible to the transaction
  * that followed. Async context spans both.
  */
-type RequestContext = { readOnly: boolean };
+type RequestContext = {
+  readOnly: boolean;
+  /**
+   * The signed-in staff user, when this request has one. `withTenant` writes it
+   * to `app.staff_user_id` so the identity definer functions can require a real
+   * member of the hospital (0039). Public booking, the patient link, WhatsApp
+   * and the worker never set it.
+   */
+  staffUserId?: string | null;
+};
 
 const storage = new AsyncLocalStorage<RequestContext>();
 
@@ -37,6 +46,30 @@ export function markRequestReadOnly(): void {
     return;
   }
   storage.enterWith({ readOnly: true });
+}
+
+/**
+ * Records the staff user behind this request. Called only when an ordinary
+ * (non-impersonated) staff session resolves, so a support operator never
+ * carries one.
+ *
+ * Unlike the read-only flag, a stray value here would widen access rather than
+ * narrow it, which is why the database does not trust it alone: every identity
+ * function also requires an active membership of that user in the transaction's
+ * own hospital.
+ */
+export function markRequestStaffUser(userId: string): void {
+  const existing = storage.getStore();
+  if (existing) {
+    existing.staffUserId = userId;
+    return;
+  }
+  storage.enterWith({ readOnly: false, staffUserId: userId });
+}
+
+/** The staff user of this request, or null when there is none (public, WhatsApp, worker). */
+export function requestStaffUserId(): string | null {
+  return storage.getStore()?.staffUserId ?? null;
 }
 
 /**

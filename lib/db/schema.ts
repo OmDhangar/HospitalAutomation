@@ -197,6 +197,9 @@ export const hospitals = pgTable('hospitals', {
   ownerPhoneE164: text('owner_phone_e164'),
   /** How many present patients a late returner is placed behind (0034). */
   lateRejoinAfterPatients: smallint('late_rejoin_after_patients').notNull().default(2),
+  /** MRN configuration (0039): optional prefix and the first number issued. Fixed once MRNs exist. */
+  mrnPrefix: text('mrn_prefix'),
+  mrnStart: integer('mrn_start').notNull().default(10001),
   active: boolean('active').notNull().default(true),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
@@ -539,6 +542,77 @@ export const doctorIntervalBlocks = pgTable(
   (t) => [index('doctor_interval_blocks_idx').on(t.doctorId, t.serviceDate)],
 );
 
+/* ------------------------------------------------------------------ persons */
+
+/**
+ * Qurio's platform-wide person identity (0039). Not tenant-readable: the app
+ * role has no privileges on it and reaches it only through the identity
+ * definer functions (register_person, verify_person_by_qid, ...). Declared
+ * here for the admin connection and for types.
+ *
+ * Two independent lifecycle attributes: merge (merged_into_person_id) and
+ * minimization (erased_at). The QID never changes, rows are never deleted, and
+ * identity_name_key is always derived by the database.
+ */
+export const persons = pgTable('persons', {
+  id: id(),
+  qid: text('qid').notNull().unique(),
+  identityName: text('identity_name'),
+  identityNameKey: text('identity_name_key'),
+  identityGender: text('identity_gender'),
+  identityBirthYear: smallint('identity_birth_year'),
+  createdByHospitalId: uuid('created_by_hospital_id').references(() => hospitals.id, { onDelete: 'set null' }),
+  abhaNumber: text('abha_number'),
+  abhaAddress: text('abha_address'),
+  abhaLinkedAt: timestamp('abha_linked_at', { withTimezone: true }),
+  abhaVerifiedAt: timestamp('abha_verified_at', { withTimezone: true }),
+  mergedIntoPersonId: uuid('merged_into_person_id'),
+  mergedAt: timestamp('merged_at', { withTimezone: true }),
+  mergedByUserId: uuid('merged_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  erasedAt: timestamp('erased_at', { withTimezone: true }),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const personMerges = pgTable('person_merges', {
+  id: id(),
+  fromPersonId: uuid('from_person_id').notNull().references(() => persons.id),
+  toPersonId: uuid('to_person_id').notNull().references(() => persons.id),
+  fromQid: text('from_qid').notNull(),
+  toQid: text('to_qid').notNull(),
+  flattenedPersonIds: uuid('flattened_person_ids').array().notNull().default(sql`'{}'`),
+  initiatedBy: text('initiated_by').$type<'platform' | 'hospital_local'>().notNull(),
+  initiatedByHospitalId: uuid('initiated_by_hospital_id').references(() => hospitals.id, { onDelete: 'set null' }),
+  reason: text('reason').notNull(),
+  mergedByUserId: uuid('merged_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: createdAt(),
+  undoneAt: timestamp('undone_at', { withTimezone: true }),
+  undoneByUserId: uuid('undone_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+});
+
+export const personIdentityCorrections = pgTable('person_identity_corrections', {
+  id: id(),
+  personId: uuid('person_id').notNull().references(() => persons.id),
+  field: text('field').$type<'name' | 'gender' | 'birth_year'>().notNull(),
+  oldValue: text('old_value'),
+  newValue: text('new_value'),
+  reason: text('reason').notNull(),
+  correctedByUserId: uuid('corrected_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  correctedByHospitalId: uuid('corrected_by_hospital_id').references(() => hospitals.id, { onDelete: 'set null' }),
+  createdAt: createdAt(),
+});
+
+export const personVerificationAttempts = pgTable('person_verification_attempts', {
+  id: id(),
+  qid: text('qid').notNull(),
+  hospitalId: uuid('hospital_id').notNull().references(() => hospitals.id, { onDelete: 'cascade' }),
+  staffUserId: uuid('staff_user_id').references(() => users.id, { onDelete: 'set null' }),
+  outcome: text('outcome').$type<'match' | 'no_match' | 'rate_limited'>().notNull(),
+  /** Set exactly when outcome is 'match'; patients_link_guard checks a fresh one before a desk link. */
+  matchedPersonId: uuid('matched_person_id').references(() => persons.id),
+  createdAt: createdAt(),
+});
+
 /* ----------------------------------------------------------------- patients */
 
 /**
@@ -564,6 +638,30 @@ export const patients = pgTable(
     address: text('address'),
     locale: locale('locale'),
     whatsappOptInAt: timestamp('whatsapp_opt_in_at', { withTimezone: true }),
+    /**
+     * Identity (0039). On an ACTIVE row (merged_into_id null) person_id and qid
+     * are the canonical person and QID; a HOSPITAL-MERGED row keeps the ones it
+     * had when merged. Set once; changed only by a recorded person merge.
+     * Nullable until the backfill and 0040 make them required.
+     */
+    personId: uuid('person_id').references(() => persons.id),
+    qid: text('qid'),
+    /** Hospital medical record number; never changes. */
+    mrn: text('mrn'),
+    /** Always qurio_name_key(name), derived by trigger. Never write it. */
+    nameKey: text('name_key'),
+    birthYear: smallint('birth_year'),
+    personLinkMethod: text('person_link_method').$type<
+      'registered_here' | 'qid_verified_at_desk' | 'qid_otp_verified' | 'abha_verified' | 'person_merge'
+    >(),
+    /** The exact QID presented when the link was verified at the desk; may be an alias. */
+    personLinkQid: text('person_link_qid'),
+    personLinkedAt: timestamp('person_linked_at', { withTimezone: true }),
+    personLinkedByUserId: uuid('person_linked_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    /** Set on a HOSPITAL-MERGED row: the ACTIVE row in this hospital it resolves to. */
+    mergedIntoId: uuid('merged_into_id'),
+    mergedAt: timestamp('merged_at', { withTimezone: true }),
+    mergedByUserId: uuid('merged_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -572,6 +670,56 @@ export const patients = pgTable(
     index('patients_hospital_phone_idx').on(t.hospitalId, t.phoneE164),
   ],
 );
+
+/** A hospital-level merge of one patient row into another (0039). Tenant table. */
+export const patientMerges = pgTable('patient_merges', {
+  id: id(),
+  hospitalId: uuid('hospital_id').notNull().references(() => hospitals.id, { onDelete: 'cascade' }),
+  fromPatientId: uuid('from_patient_id').notNull(),
+  toPatientId: uuid('to_patient_id').notNull(),
+  repointedPatientIds: uuid('repointed_patient_ids').array().notNull().default(sql`'{}'`),
+  personMergeId: uuid('person_merge_id').references(() => personMerges.id),
+  reason: text('reason').notNull(),
+  mergedByUserId: uuid('merged_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: createdAt(),
+  undoneAt: timestamp('undone_at', { withTimezone: true }),
+  undoneByUserId: uuid('undone_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+});
+
+/** Former QIDs of a patient row, left behind by person merges (0039). Read-only to the app. */
+export const patientQidAliases = pgTable(
+  'patient_qid_aliases',
+  {
+    hospitalId: uuid('hospital_id').notNull().references(() => hospitals.id, { onDelete: 'cascade' }),
+    patientId: uuid('patient_id').notNull(),
+    qid: text('qid').notNull(),
+    personMergeId: uuid('person_merge_id').notNull().references(() => personMerges.id),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('patient_qid_aliases_hospital_qid_key').on(t.hospitalId, t.qid)],
+);
+
+export const personMergeItems = pgTable('person_merge_items', {
+  mergeId: uuid('merge_id').notNull().references(() => personMerges.id),
+  patientId: uuid('patient_id').notNull().references(() => patients.id, { onDelete: 'cascade' }),
+  hospitalId: uuid('hospital_id').notNull(),
+  oldPersonId: uuid('old_person_id').notNull(),
+  oldQid: text('old_qid').notNull(),
+});
+
+export const personMergeRequests = pgTable('person_merge_requests', {
+  id: id(),
+  hospitalId: uuid('hospital_id').notNull().references(() => hospitals.id, { onDelete: 'cascade' }),
+  patientMergeId: uuid('patient_merge_id').references(() => patientMerges.id, { onDelete: 'set null' }),
+  fromPersonId: uuid('from_person_id').notNull().references(() => persons.id),
+  toPersonId: uuid('to_person_id').notNull().references(() => persons.id),
+  reason: text('reason').notNull(),
+  requestedByUserId: uuid('requested_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  status: text('status').$type<'pending' | 'merged' | 'rejected' | 'withdrawn'>().notNull().default('pending'),
+  resolvedPersonMergeId: uuid('resolved_person_merge_id').references(() => personMerges.id),
+  createdAt: createdAt(),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+});
 
 /* ------------------------------------------------------- appointments/queue */
 
@@ -1310,6 +1458,9 @@ export const bills = pgTable(
     patientName: text('patient_name'),
     patientPhone: text('patient_phone'),
     patientAddress: text('patient_address'),
+    /** Snapshots at finalization (0039): an old bill reprints with the identity it was issued under. */
+    patientQid: text('patient_qid'),
+    patientMrn: text('patient_mrn'),
     createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     finalizedAt: timestamp('finalized_at', { withTimezone: true }),
     finalizedByUserId: uuid('finalized_by_user_id').references(() => users.id, {

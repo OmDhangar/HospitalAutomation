@@ -67,6 +67,26 @@ async function main() {
     appRole,
   );
   await run('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO %I', appRole);
+  /**
+   * The blanket grant must not reach the platform identity tables (0039): the
+   * app role reaches persons only through the identity definer functions.
+   * Skipped on a fresh database, where the tables do not exist yet.
+   */
+  for (const table of [
+    'persons',
+    'person_identity_corrections',
+    'person_merges',
+    'person_merge_items',
+    'person_merge_requests',
+    'person_verification_attempts',
+  ]) {
+    const [found] = await sql`select to_regclass(${'public.' + table}) is not null as present`;
+    if (found?.present) await run(`REVOKE ALL ON TABLE public.${table} FROM %I`, appRole);
+  }
+  const [aliases] = await sql`select to_regclass('public.patient_qid_aliases') is not null as present`;
+  if (aliases?.present) {
+    await run('REVOKE INSERT, UPDATE, DELETE ON TABLE public.patient_qid_aliases FROM %I', appRole);
+  }
   await run(
     'ALTER DEFAULT PRIVILEGES IN SCHEMA public ' +
       'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I',

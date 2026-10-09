@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   STAFF_ROLES,
@@ -6,6 +8,7 @@ import {
   dashboardViewFor,
   homePathFor,
   isStaffRole,
+  type Permission,
 } from '../permissions';
 
 const OPD_ROLES = ['owner', 'receptionist', 'doctor'] as const;
@@ -172,5 +175,34 @@ describe('isStaffRole', () => {
     expect(isStaffRole('nurse')).toBe(true);
     expect(isStaffRole('admin')).toBe(false);
     expect(isStaffRole('')).toBe(false);
+  });
+});
+
+describe('identity permissions match the database', () => {
+  /**
+   * The identity definer functions in 0039 check the staff role themselves,
+   * so a role list here and in SQL can drift apart silently: the button shows
+   * and the database refuses, or worse, the other way round.
+   */
+  const migration = readFileSync(join(__dirname, '../../../drizzle/0039_persons_qid.sql'), 'utf8');
+
+  const sqlRoles = (fn: string): string[] => {
+    const start = migration.indexOf(`CREATE FUNCTION public.${fn}(`);
+    expect(start, `${fn} not found in 0039`).toBeGreaterThanOrEqual(0);
+    const body = migration.slice(start, migration.indexOf('END $fn$', start));
+    const match = body.match(/qurio_identity_context\(ARRAY\[([^\]]*)\]\)/);
+    expect(match, `${fn} does not check a staff role list`).not.toBeNull();
+    return match![1].split(',').map((r) => r.trim().replace(/'/g, '')).sort();
+  };
+
+  const appRoles = (permission: Permission) => STAFF_ROLES.filter((r) => can(r, permission)).sort();
+
+  it.each([
+    ['verify_person_by_qid', 'patients.link_identity'],
+    ['correct_person_identity', 'patients.correct_identity'],
+    ['merge_person_local', 'patients.merge'],
+    ['request_person_merge', 'patients.merge'],
+  ] as const)('%s accepts exactly the roles of %s', (fn, permission) => {
+    expect(sqlRoles(fn)).toEqual(appRoles(permission));
   });
 });

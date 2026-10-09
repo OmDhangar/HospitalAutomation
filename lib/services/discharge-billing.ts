@@ -39,6 +39,7 @@ import { generatePublicToken, hashToken } from '@/lib/security/tokens';
 import { postBedDaysForAdmissionInTx } from '@/lib/services/bed-days';
 import { getActivePayerInTx, setPayerInTx } from '@/lib/services/encounter-payers';
 import { getEncounterInTx } from '@/lib/services/encounters';
+import { resolveRow } from '@/lib/services/patients';
 
 /**
  * Discharge billing (IPD plan §T2.1–T2.4): by the time the doctor says the
@@ -612,6 +613,11 @@ export async function finalizeDischarge(args: {
         .select({ name: patients.name, phone: patients.phoneE164, address: patients.address })
         .from(patients)
         .where(eq(patients.id, encounter.patientId));
+      // The identity the bill is issued under, frozen: a later merge must not change a printed bill.
+      const [identity] = await tx
+        .select({ qid: patients.qid, mrn: patients.mrn })
+        .from(patients)
+        .where(eq(patients.id, await resolveRow(tx, encounter.patientId)));
 
       await tx
         .update(bills)
@@ -623,6 +629,8 @@ export async function finalizeDischarge(args: {
           patientName: patient.name,
           patientPhone: patient.phone,
           patientAddress: patient.address,
+          patientQid: identity?.qid ?? null,
+          patientMrn: identity?.mrn ?? null,
           finalizedAt: now,
           finalizedByUserId: args.actorUserId,
           updatedAt: now,

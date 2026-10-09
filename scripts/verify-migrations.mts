@@ -64,6 +64,8 @@ await admin.end();
 const scratchAdminUrl = urlFor(adminUrl, SCRATCH);
 const scratch = postgres(scratchAdminUrl, { max: 1, connect_timeout: 20 });
 
+// 0039 grants the identity functions to the app role by name (see migrate.ts).
+await scratch`select set_config('qurio.app_role', ${appRole}, false)`;
 await migrate(drizzle(scratch), { migrationsFolder: './drizzle' });
 const [{ n }] = await scratch<{ n: number }[]>`
   select count(*)::int as n from drizzle.__drizzle_migrations`;
@@ -96,6 +98,22 @@ for (const fn of [
 ]) {
   await run(`GRANT EXECUTE ON FUNCTION ${fn} TO %I`, appRole);
 }
+/**
+ * The blanket table grant above must not reach the platform identity tables:
+ * 0039 gives the app role no access to them at all, only to the definer
+ * functions. Re-revoked here, as db-bootstrap does.
+ */
+for (const table of [
+  'persons',
+  'person_identity_corrections',
+  'person_merges',
+  'person_merge_items',
+  'person_merge_requests',
+  'person_verification_attempts',
+]) {
+  await run(`REVOKE ALL ON TABLE public.${table} FROM %I`, appRole);
+}
+await run('REVOKE INSERT, UPDATE, DELETE ON TABLE public.patient_qid_aliases FROM %I', appRole);
 console.log(`granted to ${appRole}`);
 
 await scratch.end();

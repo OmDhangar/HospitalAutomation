@@ -274,6 +274,13 @@
       "when": 1790150000000,
       "tag": "0038_live_capacity_pace_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1790200000000,
+      "tag": "0039_persons_qid",
+      "breakpoints": true
     }
   ]
 }

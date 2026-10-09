@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { isRequestReadOnly } from './request-context';
+import { isRequestReadOnly, requestStaffUserId } from './request-context';
 import * as schema from './schema';
 
 let cachedClient: postgres.Sql | undefined;
@@ -126,11 +126,14 @@ export async function withTenant<T>(
     const readOnly = options.readOnly ?? isRequestReadOnly();
     // Written every time, never left to the pooled connection's last value.
     const clinical = options.clinical === true && !readOnly;
+    // Empty whenever there is no staff session, never the pooled connection's last value.
+    const staffUserId = readOnly ? '' : (requestStaffUserId() ?? '');
     await tx.execute(
       sql`select
         set_config('app.hospital_id', ${hospitalId}, true),
         set_config('app.read_only', ${readOnly ? 'true' : 'false'}, true),
-        set_config('app.clinical_access', ${clinical ? 'true' : 'false'}, true)`,
+        set_config('app.clinical_access', ${clinical ? 'true' : 'false'}, true),
+        set_config('app.staff_user_id', ${staffUserId}, true)`,
     );
     const tConfig = performance.now();
     const result = await fn(tx);

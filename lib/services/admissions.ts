@@ -25,6 +25,7 @@ import type { AppointmentStatus } from '@/lib/domain/types';
 import { setPayerInTx } from '@/lib/services/encounter-payers';
 import { getEncounterInTx, openEncounterForAppointmentInTx, type EncounterRow } from '@/lib/services/encounters';
 import { recordDepositInTx } from '@/lib/services/patient-billing';
+import { resolvePatientInTx, type PatientInput } from '@/lib/services/patients';
 
 /**
  * Admissions: Shift to IPD, the admission sheet, transfers, cancellation and
@@ -408,9 +409,9 @@ export async function transferBed(args: {
 
 /**
  * An emergency admission: no OPD token, so a new encounter (origin
- * 'emergency', stage 'ipd') is opened for the patient. The patient is matched
- * on phone + name exactly as a walk-in is, so a returning patient keeps one
- * record. With a bed, the patient is admitted at once; without, they join
+ * 'emergency', stage 'ipd') is opened for the patient. The patient is found
+ * or registered by resolvePatientInTx exactly as a walk-in is, so a returning
+ * patient keeps one record. With a bed, the patient is admitted at once; without, they join
  * Awaiting bed.
  */
 export async function createDirectAdmission(args: {
@@ -424,6 +425,8 @@ export async function createDirectAdmission(args: {
     gender?: string | null;
     address?: string | null;
   };
+  /** A record picked at the desk or a verified QID; defaults to the typed details. */
+  patientInput?: PatientInput;
   bedId?: string | null;
   extras?: AdmissionExtras;
   actorUserId: string;
@@ -442,26 +445,11 @@ export async function createDirectAdmission(args: {
 
         const name = args.patient.name.trim().replace(/\s+/g, ' ');
         if (!name) throw new AdmissionError('Enter the patient’s name');
-        const [patient] = await tx
-          .insert(patients)
-          .values({
-            hospitalId: args.hospitalId,
-            phoneE164: args.patient.phoneE164,
-            name,
-            age: args.patient.age ?? null,
-            gender: args.patient.gender ?? null,
-            address: args.patient.address ?? null,
-          })
-          .onConflictDoUpdate({
-            target: [patients.hospitalId, patients.phoneE164, patients.name],
-            set: {
-              age: sql`coalesce(${args.patient.age ?? null}::smallint, ${patients.age})`,
-              gender: sql`coalesce(${args.patient.gender ?? null}, ${patients.gender})`,
-              address: sql`coalesce(${args.patient.address ?? null}, ${patients.address})`,
-              updatedAt: new Date(),
-            },
-          })
-          .returning({ id: patients.id, name: patients.name });
+        const patient = await resolvePatientInTx(tx, {
+          hospitalId: args.hospitalId,
+          input: args.patientInput ?? { kind: 'details', details: { ...args.patient, name } },
+          actorUserId: args.actorUserId,
+        });
 
         const [encounter] = await tx
           .insert(encounters)

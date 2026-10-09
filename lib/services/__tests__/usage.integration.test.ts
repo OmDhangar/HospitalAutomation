@@ -7,6 +7,7 @@ import {
   getUpcomingSubscription,
 } from '@/lib/services/subscriptions';
 import { getHospitalUsage, getMessageBreakdown } from '@/lib/services/usage';
+import { insertFixturePatient } from '@/lib/test/patient-fixture';
 
 const adminUrl = process.env.DATABASE_ADMIN_URL;
 const enabled = Boolean(adminUrl && process.env.DATABASE_URL);
@@ -86,10 +87,12 @@ describe.skipIf(!enabled)('hospital usage', () => {
       insert into doctors (id, hospital_id, branch_id, name)
       values (${doctorId}, ${hospitalId}, ${branchId}, 'Dr Test')
     `;
-    await admin`
-      insert into patients (id, hospital_id, phone_e164, name)
-      values (${patientId}, ${hospitalId}, ${'+9199' + Date.now().toString().slice(-8)}, 'Test Patient')
-    `;
+    await insertFixturePatient(admin, {
+      id: patientId,
+      hospitalId,
+      phoneE164: '+9199' + Date.now().toString().slice(-8),
+      name: 'Test Patient',
+    });
   });
 
   afterAll(async () => {

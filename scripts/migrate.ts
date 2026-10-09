@@ -28,6 +28,9 @@ async function main() {
     await sql`ALTER TYPE bill_item_type ADD VALUE IF NOT EXISTS 'room'`;
   }
 
+  // 0039 grants the identity functions to the application role by name; the name is configurable.
+  await sql`select set_config('qurio.app_role', ${process.env.APP_DB_ROLE ?? 'opd_app'}, false)`;
+
   await migrate(db, { migrationsFolder: './drizzle' });
 
   /**
