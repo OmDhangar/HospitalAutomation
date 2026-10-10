@@ -17,6 +17,7 @@ import {
 import { markStaleAppointmentsNoShowForHospital } from '@/lib/services/sweeps';
 import { makeNoPhonePlaceholder } from '@/lib/domain/phone';
 import { serviceDateIn } from '@/lib/domain/time';
+import { insertFixturePatient } from '@/lib/test/patient-fixture';
 
 const adminUrl = process.env.DATABASE_ADMIN_URL;
 const enabled = Boolean(adminUrl && process.env.DATABASE_URL);
@@ -411,10 +412,12 @@ describe.skipIf(!enabled)('queue engine', () => {
     const seed = async (status: string, serviceDate: string, token: number) => {
       const patientId = uuid();
       const appointmentId = uuid();
-      await admin`
-        insert into patients (id, hospital_id, phone_e164, name)
-        values (${patientId}, ${hospitalId}, ${`+91980000${String(token).padStart(4, '0')}`}, ${`EOD ${token}`})
-      `;
+      await insertFixturePatient(admin, {
+        id: patientId,
+        hospitalId,
+        phoneE164: `+91980000${String(token).padStart(4, '0')}`,
+        name: `EOD ${token}`,
+      });
       await admin`
         insert into appointments
           (id, hospital_id, branch_id, doctor_id, patient_id, service_date,

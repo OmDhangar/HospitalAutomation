@@ -72,6 +72,9 @@ describe.skipIf(!enabled)('pace and the hybrid queue + slot day', () => {
   };
 
   beforeEach(async () => {
+    // The slot sweep runs across every hospital, so an earlier test's CONFIRMED
+    // slot would be counted by the next one. Start each test from none.
+    await admin`delete from hospitals where name = ${HOSPITAL_NAME}`;
     hospitalId = uuid();
     branchId = uuid();
     doctorId = uuid();

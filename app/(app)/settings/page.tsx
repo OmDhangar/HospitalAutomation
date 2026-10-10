@@ -18,6 +18,8 @@ import {
   BedIcon,
   LayersIcon,
   ActivityIcon,
+  FileTextIcon,
+  ShieldIcon,
 } from '@/components/icons';
 import { SaveButton, SaveForm } from '@/components/save-form';
 import { requireSession } from '@/lib/auth/session';
@@ -213,6 +215,82 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
           <Link href="/settings/ipd" className="w-full sm:w-auto">
             <Button variant="secondary" className="w-full sm:w-auto justify-center">
               Set up IPD
+            </Button>
+          </Link>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 sm:p-5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <FileTextIcon className="size-5 text-brand-600" />
+              <h2 className="text-base font-bold text-ink-900">Letterhead and IPD numbers</h2>
+            </div>
+            <p className="mt-0.5 text-xs text-ink-500">
+              Registration number, phones and doctors’ degrees on printed sheets, and where IPD numbers continue from.
+            </p>
+          </div>
+          <Link href="/settings/letterhead" className="w-full sm:w-auto">
+            <Button variant="secondary" className="w-full sm:w-auto justify-center">
+              Set letterhead
+            </Button>
+          </Link>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 sm:p-5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <FileTextIcon className="size-5 text-brand-600" />
+              <h2 className="text-base font-bold text-ink-900">Risk-class stock</h2>
+            </div>
+            <p className="mt-0.5 text-xs text-ink-500">
+              Stores, narcotics and other risk-class medicines, and how often they are counted. Switch “Risk-class stock” on under Modules first.
+            </p>
+          </div>
+          <Link href="/settings/stock" className="w-full sm:w-auto">
+            <Button variant="secondary" className="w-full sm:w-auto justify-center">
+              Set up stock
+            </Button>
+          </Link>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 sm:p-5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <ShieldIcon className="size-5 text-brand-600" />
+              <h2 className="text-base font-bold text-ink-900">Staff access</h2>
+            </div>
+            <p className="mt-0.5 text-xs text-ink-500">
+              Ward tablets with a PIN for each person, the lock on staff phones, and signing someone out everywhere.
+            </p>
+          </div>
+          <Link href="/settings/staff-access" className="w-full sm:w-auto">
+            <Button variant="secondary" className="w-full sm:w-auto justify-center">
+              Manage staff access
+            </Button>
+          </Link>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 sm:p-5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <LayersIcon className="size-5 text-brand-600" />
+              <h2 className="text-base font-bold text-ink-900">Modules</h2>
+            </div>
+            <p className="mt-0.5 text-xs text-ink-500">
+              Which parts of the IPD this hospital uses, and on which wards.
+            </p>
+          </div>
+          <Link href="/settings/modules" className="w-full sm:w-auto">
+            <Button variant="secondary" className="w-full sm:w-auto justify-center">
+              Choose modules
             </Button>
           </Link>
         </div>

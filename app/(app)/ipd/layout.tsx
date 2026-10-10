@@ -2,8 +2,10 @@ import Link from 'next/link';
 import { Button, Card, EmptyState } from '@/components/ui';
 import { BedIcon, PlusIcon } from '@/components/icons';
 import { SectionTabs, type SectionTab } from '@/components/ipd/section-tabs';
+import { getModuleStatesForRequest } from '@/lib/auth/modules';
 import { requireSession } from '@/lib/auth/session';
 import { can } from '@/lib/domain/permissions';
+import { moduleAllows } from '@/lib/modules/registry';
 
 /**
  * The IPD section (IPD plan §5): its own header strip under the app header —
@@ -25,6 +27,10 @@ export default async function IpdLayout({ children }: LayoutProps<'/ipd'>) {
   if (can(session.role, 'queue.mutate')) tabs.push({ label: 'Overview', href: '/ipd' });
   if (can(session.role, 'ipd.record')) tabs.push({ label: 'Ward', href: '/ipd/ward' });
   if (can(session.role, 'ipd.dischargeReady')) tabs.push({ label: 'My patients', href: '/ipd/my-patients' });
+  // Risk-class stock (plan B4a), once the owner has switched it on.
+  if (can(session.role, 'stock.view') && moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'stock', 'read')) {
+    tabs.push({ label: 'Stock', href: '/ipd/stock' });
+  }
   if (can(session.role, 'ipd.configure')) tabs.push({ label: 'Set up', href: '/settings/ipd' });
 
   return (

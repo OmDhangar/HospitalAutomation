@@ -1,5 +1,6 @@
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { insertFixturePatient } from '@/lib/test/patient-fixture';
 
 /**
  * These run against a real Postgres because row-level security cannot be
@@ -13,6 +14,16 @@ const appUrl = process.env.DATABASE_URL;
 const enabled = Boolean(adminUrl && appUrl);
 
 const uuid = () => crypto.randomUUID();
+
+/** Platform identity tables (0039): definer-only, never tenant-readable. */
+const PLATFORM_IDENTITY_TABLES = [
+  'persons',
+  'person_identity_corrections',
+  'person_merges',
+  'person_merge_items',
+  'person_merge_requests',
+  'person_verification_attempts',
+];
 
 const ids = {
   hospitalA: uuid(),
@@ -57,10 +68,12 @@ describe.skipIf(!enabled)('row-level security', () => {
       insert into doctors (id, hospital_id, branch_id, name)
       values (${ids.doctorA}, ${ids.hospitalA}, ${ids.branchA}, 'Dr A')
     `;
-    await admin`
-      insert into patients (id, hospital_id, phone_e164, name)
-      values (${ids.patientA}, ${ids.hospitalA}, '+919000000001', 'Patient A')
-    `;
+    await insertFixturePatient(admin, {
+      id: ids.patientA,
+      hospitalId: ids.hospitalA,
+      phoneE164: '+919000000001',
+      name: 'Patient A',
+    });
     await admin`
       insert into appointments
         (id, hospital_id, branch_id, doctor_id, patient_id, service_date,
@@ -170,6 +183,11 @@ describe.skipIf(!enabled)('row-level security', () => {
    * login has to be resolvable before any hospital is known, so it cannot be
    * filtered by one. Its hospital_id is the *result* of authenticating, not a
    * key to authorise by, and access to it is confined to lib/services/auth.ts.
+   *
+   * Partitioned tables (0043 on) are checked on the parent, which holds the
+   * policies. Each monthly partition must instead have row-level security
+   * FORCEd with no policy at all: that denies every direct read, so its rows
+   * are reachable only through the parent and the parent's policies.
    */
   it('leaves no tenant table outside row-level security', async () => {
     const unprotected = await admin`
@@ -185,8 +203,9 @@ describe.skipIf(!enabled)('row-level security', () => {
       from pg_class c
       join pg_namespace n on n.oid = c.relnamespace
       where n.nspname = 'public'
-        and c.relkind = 'r'
+        and c.relkind in ('r', 'p')
         and c.relname <> 'sessions'
+        and c.relname <> all (${PLATFORM_IDENTITY_TABLES})
         and exists (
           select 1 from pg_attribute a
           where a.attrelid = c.oid and a.attname = 'hospital_id' and not a.attisdropped
@@ -201,9 +220,35 @@ describe.skipIf(!enabled)('row-level security', () => {
               and p.policyname = 'tenant_isolation'
           )
         )
+        and not (
+          c.relispartition
+          and c.relrowsecurity
+          and c.relforcerowsecurity
+          and not exists (select 1 from pg_policies p where p.schemaname = 'public' and p.tablename = c.relname)
+        )
       order by c.relname
     `;
     expect(unprotected.map((r) => r.relname)).toEqual([]);
+  });
+
+  /**
+   * The exemption above. Platform identity tables (0039) carry a hospital_id
+   * for audit, but they are not tenant tables: the app role holds no privilege
+   * on them at all and reaches them only through the identity definer
+   * functions, so there is nothing for a tenant policy to scope.
+   */
+  it('gives the app role no access at all to the platform identity tables', async () => {
+    const role = process.env.APP_DB_ROLE ?? 'opd_app';
+    const reachable = await admin`
+      select t as relname
+      from unnest(${PLATFORM_IDENTITY_TABLES}::text[]) t
+      where has_table_privilege(${role}, 'public.' || t, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+         or not exists (
+           select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+           where n.nspname = 'public' and c.relname = t and c.relrowsecurity and c.relforcerowsecurity
+         )
+    `;
+    expect(reachable.map((r) => r.relname)).toEqual([]);
   });
 
   it('proves RLS is what is stopping it: the bypassing role sees everything', async () => {

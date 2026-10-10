@@ -3,11 +3,13 @@ import { notFound } from 'next/navigation';
 import { Button, Card, EmptyState } from '@/components/ui';
 import { OutboxStatus } from '@/components/ipd/outbox-status';
 import { RecordScreen } from '@/components/ipd/record-screen';
+import { getModuleStatesForRequest } from '@/lib/auth/modules';
 import { requireSession } from '@/lib/auth/session';
 import { dayOfStay } from '@/lib/domain/admission';
 import { can } from '@/lib/domain/permissions';
 import { getQuickPicks } from '@/lib/services/care-entries';
 import { getIpdCensus } from '@/lib/services/ipd-census';
+import { moduleAllows } from '@/lib/modules/registry';
 
 export const metadata = { title: 'Record · IPD' };
 
@@ -44,7 +46,14 @@ export default async function RecordPage({ params }: PageProps<'/ipd/ward/[wardI
   }
 
   const occupant = bed.occupant;
-  const picks = await getQuickPicks({ hospitalId: session.hospitalId, admissionId: occupant.admissionId });
+  const [picks, states] = await Promise.all([
+    getQuickPicks({ hospitalId: session.hospitalId, admissionId: occupant.admissionId }),
+    getModuleStatesForRequest(session.hospitalId),
+  ]);
+  const chartHref =
+    can(session.role, 'ipd.chart') && moduleAllows(states, 'charts', 'read')
+      ? `/ipd/admissions/${occupant.admissionId}/tpr`
+      : null;
   const ageSex = [occupant.age !== null ? String(occupant.age) : null, occupant.gender?.[0]?.toUpperCase() ?? null]
     .filter(Boolean)
     .join(' ');
@@ -67,6 +76,7 @@ export default async function RecordPage({ params }: PageProps<'/ipd/ward/[wardI
         backLabel={ward.name}
         recent={picks.recent}
         common={picks.common}
+        chartHref={chartHref}
       />
     </>
   );

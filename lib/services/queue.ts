@@ -45,6 +45,7 @@ import type { AppointmentStatus, QueueAction, QueueContext, QueueEntry } from '@
 import { generatePublicToken } from '@/lib/security/tokens';
 import { allocateTokenInTx, getDayCapacityInTx } from './capacity';
 import { lockDoctorDay } from './doctor-day';
+import { resolvePatientInTx, type PatientInput } from './patients';
 import { resolveScheduledStartInTx } from './scheduling';
 
 /**
@@ -502,6 +503,12 @@ export async function createWalkIn(args: {
     address?: string | null;
     locale?: 'mr' | 'hi' | 'en';
   };
+  /**
+   * How to find the patient when the desk already knows: a record picked from
+   * search, or a QID verified at the desk. Defaults to the typed details
+   * (same phone and name key reuses this hospital's record).
+   */
+  patientInput?: PatientInput;
   actorUserId?: string | null;
   source?: 'walk_in' | 'reception' | 'whatsapp';
   /**
@@ -543,6 +550,16 @@ export async function createWalkIn(args: {
       : 'walk_in';
   return withTenant(args.hospitalId, async (tx) => {
     const t0 = performance.now();
+    // A no-phone placeholder never opts in: nothing is ever sent to it.
+    const optedIn = (args.whatsappOptIn ?? true) && !isMockPhone(args.patient.phoneE164);
+    // The patient first, then the doctor's day: the lock order every booking path keeps.
+    const patient = await resolvePatientInTx(tx, {
+      hospitalId: args.hospitalId,
+      input: args.patientInput ?? { kind: 'details', details: args.patient },
+      whatsappOptIn: optedIn,
+      actorUserId: args.actorUserId ?? null,
+      now,
+    });
     // Takes the doctor-day lock and applies the quota; throws CapacityError
     // when the day has no place for this patient.
     const allocated = await allocateTokenInTx(tx, {
@@ -554,15 +571,13 @@ export async function createWalkIn(args: {
       now,
     });
     const prioritySeq = isEmergency ? await nextQueueSeq(tx, args.doctorId, serviceDate) : null;
-    // A no-phone placeholder never opts in: nothing is ever sent to it.
-    const optedIn = (args.whatsappOptIn ?? true) && !isMockPhone(args.patient.phoneE164);
     const queueLinkTemplate = !args.confirmationSentInChat;
     const publicToken = generatePublicToken();
     const publicTokenExpiresAt = new Date(now.getTime() + 18 * 60 * 60 * 1000);
 
     const nowIso = now.toISOString();
     const publicTokenExpiresAtIso = publicTokenExpiresAt.toISOString();
-    const whatsappOptInAtIso = optedIn ? nowIso : null;
+    const sendQueueLink = queueLinkTemplate && patient.whatsappOptInAt !== null;
 
     const [row] = await tx.execute<{
       appt_quota_pool: 'reserved' | 'shared' | 'extra' | null;
@@ -587,44 +602,8 @@ export async function createWalkIn(args: {
       appt_completed_at: Date | null;
       appt_created_at: Date;
       appt_updated_at: Date;
-      patient_id: string;
-      patient_hospital_id: string;
-      patient_phone_e164: string;
-      patient_name: string;
-      patient_age: number | null;
-      patient_gender: string | null;
-      patient_address: string | null;
-      patient_locale: typeof patients.$inferSelect['locale'];
-      patient_whatsapp_opt_in_at: Date | null;
-      patient_created_at: Date;
-      patient_updated_at: Date;
     }>(sql`
       with
-        upserted_patient as (
-          insert into patients (hospital_id, phone_e164, name, age, gender, address, locale, whatsapp_opt_in_at)
-          values (
-            ${args.hospitalId}::uuid,
-            ${args.patient.phoneE164},
-            ${args.patient.name},
-            ${args.patient.age ?? null},
-            ${args.patient.gender ?? null},
-            ${args.patient.address ?? null},
-            ${args.patient.locale ?? 'en'},
-            ${whatsappOptInAtIso ? sql`${whatsappOptInAtIso}::timestamptz` : sql`NULL`}
-          )
-          on conflict (hospital_id, phone_e164, name)
-          do update set
-            name = ${args.patient.name},
-            age = coalesce(${args.patient.age ?? null}, patients.age),
-            gender = coalesce(${args.patient.gender ?? null}, patients.gender),
-            address = coalesce(${args.patient.address ?? null}, patients.address),
-            whatsapp_opt_in_at = case 
-              when ${optedIn} then coalesce(patients.whatsapp_opt_in_at, excluded.whatsapp_opt_in_at)
-              else patients.whatsapp_opt_in_at
-            end,
-            updated_at = ${nowIso}::timestamptz
-          returning *
-        ),
         inserted_appt as (
           insert into appointments (
             hospital_id, branch_id, doctor_id, patient_id, service_date,
@@ -635,7 +614,7 @@ export async function createWalkIn(args: {
             ${args.hospitalId}::uuid,
             ${args.branchId}::uuid,
             ${args.doctorId}::uuid,
-            upserted_patient.id,
+            ${patient.id}::uuid,
             ${serviceDate},
             ${allocated.tokenNumber}::int,
             'WAITING',
@@ -647,7 +626,6 @@ export async function createWalkIn(args: {
             ${publicTokenExpiresAtIso}::timestamptz,
             ${nowIso}::timestamptz,
             ${allocated.pool}
-          from upserted_patient
           returning *
         ),
         inserted_event as (
@@ -685,14 +663,13 @@ export async function createWalkIn(args: {
           select
             ${args.hospitalId}::uuid,
             inserted_appt.id,
-            upserted_patient.id,
+            ${patient.id}::uuid,
             'queue_link',
             'queue_link',
-            coalesce(upserted_patient.locale, 'en'),
+            ${patient.locale ?? 'en'},
             jsonb_build_object('tokenNumber', inserted_appt.token_number, 'publicToken', inserted_appt.public_token)
-          from inserted_appt, upserted_patient
-          where upserted_patient.whatsapp_opt_in_at is not null
-            and ${queueLinkTemplate}
+          from inserted_appt
+          where ${sendQueueLink}
           on conflict do nothing
         )
       select
@@ -717,19 +694,8 @@ export async function createWalkIn(args: {
         inserted_appt.consult_started_at as appt_consult_started_at,
         inserted_appt.completed_at as appt_completed_at,
         inserted_appt.created_at as appt_created_at,
-        inserted_appt.updated_at as appt_updated_at,
-        upserted_patient.id as patient_id,
-        upserted_patient.hospital_id as patient_hospital_id,
-        upserted_patient.phone_e164 as patient_phone_e164,
-        upserted_patient.name as patient_name,
-        upserted_patient.age as patient_age,
-        upserted_patient.gender as patient_gender,
-        upserted_patient.address as patient_address,
-        upserted_patient.locale as patient_locale,
-        upserted_patient.whatsapp_opt_in_at as patient_whatsapp_opt_in_at,
-        upserted_patient.created_at as patient_created_at,
-        upserted_patient.updated_at as patient_updated_at
-      from inserted_appt, upserted_patient;
+        inserted_appt.updated_at as appt_updated_at
+      from inserted_appt;
     `);
 
     const tEnd = performance.now();
@@ -771,20 +737,6 @@ export async function createWalkIn(args: {
       sessionKind: 'queue',
       createdAt: new Date(row.appt_created_at),
       updatedAt: new Date(row.appt_updated_at),
-    };
-
-    const patient: typeof patients.$inferSelect = {
-      id: row.patient_id,
-      hospitalId: row.patient_hospital_id,
-      phoneE164: row.patient_phone_e164,
-      name: row.patient_name,
-      age: row.patient_age !== null && row.patient_age !== undefined ? Number(row.patient_age) : null,
-      gender: row.patient_gender,
-      address: row.patient_address,
-      locale: row.patient_locale,
-      whatsappOptInAt: row.patient_whatsapp_opt_in_at ? new Date(row.patient_whatsapp_opt_in_at) : null,
-      createdAt: new Date(row.patient_created_at),
-      updatedAt: new Date(row.patient_updated_at),
     };
 
     return {

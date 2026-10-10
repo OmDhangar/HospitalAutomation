@@ -44,3 +44,7 @@ next-env.d.ts
 
 # Claude Code local machine settings (paths and permission grants)
 .claude/settings.local.json
+
+# synthetic load-test sessions (scripts/synth/generate.ts); only valid in a load database
+loadtest/.sessions.json
+loadtest/results/

@@ -59,6 +59,7 @@ export function RecordScreen({
   backLabel,
   recent: initialRecent,
   common,
+  chartHref,
 }: {
   admissionId: string;
   patient: { name: string; ageSex: string; bedLabel: string; wardName: string; day: number | null };
@@ -66,6 +67,8 @@ export function RecordScreen({
   backLabel: string;
   recent: Pick[];
   common: Pick[];
+  /** The patient's T.P.R. chart, when the hospital has it switched on (IPD sheets plan B1). */
+  chartHref?: string | null;
 }) {
   const [recent, setRecent] = useState(initialRecent);
   const [query, setQuery] = useState('');
@@ -222,9 +225,16 @@ export function RecordScreen({
           </span>
         </div>
         <p className="mt-1 text-xl font-bold uppercase leading-tight tracking-wide text-ink-900 sm:text-2xl">{patient.name}</p>
-        <p className="text-sm text-ink-600">
-          {[patient.ageSex || null, patient.wardName, patient.day ? `Day ${patient.day}` : null].filter(Boolean).join(' · ')}
-        </p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm text-ink-600">
+            {[patient.ageSex || null, patient.wardName, patient.day ? `Day ${patient.day}` : null].filter(Boolean).join(' · ')}
+          </p>
+          {chartHref ? (
+            <Link href={chartHref} className="inline-flex min-h-11 shrink-0 items-center rounded-lg px-3 text-sm font-semibold text-brand-700 ring-1 ring-brand-300 hover:bg-brand-50">
+              TPR chart
+            </Link>
+          ) : null}
+        </div>
       </div>
 
       {!online ? (

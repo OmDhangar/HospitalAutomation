@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { getDb, withTenant } from '@/lib/db';
 import {
   appointments,
@@ -1314,7 +1314,8 @@ async function loadConversation(hospitalId: string, phoneE164: string) {
       })
       .from(patients)
       .where(
-        and(eq(patients.hospitalId, hospitalId), eq(patients.phoneE164, phoneE164)),
+        // ACTIVE records only: a merged duplicate is reached through its survivor.
+        and(eq(patients.hospitalId, hospitalId), eq(patients.phoneE164, phoneE164), isNull(patients.mergedIntoId)),
       );
 
     const firstPatient = patientRows[0];
@@ -1350,7 +1351,8 @@ async function existingName(hospitalId: string, phoneE164: string): Promise<stri
       .select({ name: patients.name })
       .from(patients)
       .where(
-        and(eq(patients.hospitalId, hospitalId), eq(patients.phoneE164, phoneE164)),
+        // ACTIVE records only: a merged duplicate is reached through its survivor.
+        and(eq(patients.hospitalId, hospitalId), eq(patients.phoneE164, phoneE164), isNull(patients.mergedIntoId)),
       );
     return patient?.name ?? null;
   });

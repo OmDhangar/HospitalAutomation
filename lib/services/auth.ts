@@ -1,7 +1,27 @@
-import { and, asc, eq, gt, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { getDb, withTenant, type Tx } from '@/lib/db';
-import { markRequestReadOnly } from '@/lib/db/request-context';
-import { auditLogs, branches, hospitals, sessions, staffMemberships, users } from '@/lib/db/schema';
+import { markRequestOrigin, markRequestReadOnly, markRequestStaffUser } from '@/lib/db/request-context';
+import {
+  auditLogs,
+  branches,
+  hospitalFeatures,
+  hospitals,
+  policyAcknowledgements,
+  sessions,
+  staffMemberships,
+  users,
+  wardDevices,
+} from '@/lib/db/schema';
+import { MONITORING_NOTICE_KEY, MONITORING_NOTICE_VERSION } from '@/lib/domain/monitoring-notice';
+import {
+  channelAllowed,
+  parseAccessSettings,
+  sessionRule,
+  sessionVerdict,
+  shouldWriteLastSeen,
+  wardRoleFor,
+  type Channel,
+} from '@/lib/domain/staff-access';
 import {
   hashPassword,
   MIN_PASSWORD_LENGTH,
@@ -40,6 +60,31 @@ export type Session = {
   returnHospitalId: string | null;
   /** Set by an operator-issued password reset; gates the rest of the app. */
   mustChangePassword: boolean;
+  /** The sessions row, for access logs and "sign out everywhere" (0042). */
+  sessionId: string;
+  /**
+   * Own device, or a PIN on a shared ward tablet (ADR-022). On a ward tablet
+   * `role` is capped by wardRoleFor (an owner acts as a doctor) and
+   * `personRole` is the person's own role.
+   */
+  channel: Channel;
+  personRole: StaffRole;
+  wardDeviceId: string | null;
+  deviceId: string | null;
+  /**
+   * Idle or backgrounded too long: the session is held but unusable until a
+   * PIN or password unlock. getSession() treats it as signed out;
+   * requireSession() sends it to the unlock screen.
+   */
+  locked: boolean;
+  /** The hospital requires the monitoring notice and this person has not accepted the current version. */
+  noticePending: boolean;
+  /**
+   * When the page itself should lock the screen (components/session-guard):
+   * after this long without a tap, or this long in the background. Null where
+   * the rule does not apply. The server enforces the same limits.
+   */
+  screenLock: { idleMs: number | null; backgroundMs: number | null };
 };
 
 /** Impersonation is for looking at a problem, not for living in. */
@@ -173,7 +218,11 @@ export async function createStaffUser(args: {
  * The password is verified even when no user matches, so that a wrong email and
  * a wrong password take the same time and cannot be told apart.
  */
-export async function login(email: string, password: string): Promise<string | null> {
+export async function login(
+  email: string,
+  password: string,
+  options: { deviceId?: string | null } = {},
+): Promise<string | null> {
   const db = getDb();
   const [user] = await db
     .select()
@@ -206,6 +255,9 @@ export async function login(email: string, password: string): Promise<string | n
     hospitalId,
     tokenHash: hashToken(token),
     expiresAt: new Date(Date.now() + SESSION_TTL_DAYS * 24 * 60 * 60 * 1000),
+    channel: 'personal',
+    deviceId: options.deviceId ?? null,
+    lastSeenAt: new Date(),
   });
 
   await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
@@ -225,22 +277,30 @@ export async function login(email: string, password: string): Promise<string | n
   return token;
 }
 
-// In-memory session cache (30s TTL) — avoids a DB roundtrip on every
-// auto-refresh cycle. Cleared on logout.
+// In-memory session cache: avoids a DB roundtrip on every auto-refresh cycle.
+// Cleared on logout, lock and revocation in this process. A ward-tablet
+// session is cached for only 10 s, so revoking a tablet takes effect quickly
+// on every instance.
 type SessionCacheEntry = { session: Session; expiresAt: number };
 const sessionCache = new Map<string, SessionCacheEntry>();
 const SESSION_CACHE_TTL = 30_000;
+const WARD_SESSION_CACHE_TTL = 10_000;
 
-export async function resolveSession(token: string | undefined): Promise<Session | null> {
+export async function resolveSession(
+  token: string | undefined,
+  options: { fresh?: boolean } = {},
+): Promise<Session | null> {
   if (!token) return null;
 
   const tokenH = hashToken(token);
 
-  const cached = sessionCache.get(tokenH);
+  // `fresh`: this browser has just locked (lib/auth/session.ts), so the cache — which may sit in
+  // another module instance or server — is not trusted until the lock is read from the database.
+  const cached = options.fresh ? undefined : sessionCache.get(tokenH);
   if (cached && cached.expiresAt > Date.now()) {
     // Re-marked on every resolve, cache hit included: the flag lives for one
     // request, the cached session for thirty seconds across many.
-    if (cached.session.readOnly) markRequestReadOnly();
+    await markSessionOnRequest(cached.session);
     return cached.session;
   }
 
@@ -255,10 +315,17 @@ export async function resolveSession(token: string | undefined): Promise<Session
       isPlatformAdmin: users.isPlatformAdmin,
       active: users.active,
       mustChangePassword: users.mustChangePassword,
+      sessionId: sessions.id,
       hospitalId: sessions.hospitalId,
       impersonatedByUserId: sessions.impersonatedByUserId,
       readOnly: sessions.readOnly,
       returnHospitalId: sessions.returnHospitalId,
+      channel: sessions.channel,
+      wardDeviceId: sessions.wardDeviceId,
+      deviceId: sessions.deviceId,
+      lastSeenAt: sessions.lastSeenAt,
+      lockedAt: sessions.lockedAt,
+      createdAt: sessions.createdAt,
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
@@ -271,7 +338,7 @@ export async function resolveSession(token: string | undefined): Promise<Session
    * database, so the very first tenant transaction of the request already
    * carries `app.read_only`.
    */
-  if (row.readOnly) markRequestReadOnly();
+  if (row.readOnly) await markRequestReadOnly();
 
   const impersonating = row.impersonatedByUserId !== null;
 
@@ -291,7 +358,13 @@ export async function resolveSession(token: string | undefined): Promise<Session
             .from(hospitals)
             .where(eq(hospitals.id, row.hospitalId));
           return found
-            ? { ...found, role: 'owner' as StaffRole, branchId: null }
+            ? {
+                ...found,
+                role: 'owner' as StaffRole,
+                branchId: null,
+                settings: parseAccessSettings(null),
+                noticePending: false,
+              }
             : null;
         })
       : null
@@ -308,11 +381,71 @@ export async function resolveSession(token: string | undefined): Promise<Session
           .where(
             and(eq(staffMemberships.userId, row.userId), eq(staffMemberships.active, true)),
           );
-        return found ?? null;
+        if (!found) return null;
+
+        const [access] = await tx
+          .select({ settings: hospitalFeatures.settings })
+          .from(hospitalFeatures)
+          .where(eq(hospitalFeatures.moduleId, 'staff_access'));
+        const settings = parseAccessSettings(access?.settings);
+
+        // A ward-tablet session lives only while its tablet is enrolled.
+        let branchId = found.branchId;
+        if (row.channel === 'ward_device') {
+          if (!row.wardDeviceId) return null;
+          const [device] = await tx
+            .select({ branchId: wardDevices.branchId })
+            .from(wardDevices)
+            .where(and(eq(wardDevices.id, row.wardDeviceId), isNull(wardDevices.revokedAt)));
+          if (!device) return null;
+          branchId = device.branchId;
+        }
+
+        let noticePending = false;
+        if (settings.monitoringNotice === 'required') {
+          const [ack] = await tx
+            .select({ id: policyAcknowledgements.id })
+            .from(policyAcknowledgements)
+            .where(
+              and(
+                eq(policyAcknowledgements.userId, row.userId),
+                eq(policyAcknowledgements.policyKey, MONITORING_NOTICE_KEY),
+                eq(policyAcknowledgements.policyVersion, MONITORING_NOTICE_VERSION),
+              ),
+            );
+          noticePending = !ack;
+        }
+        return { ...found, branchId, settings, noticePending };
       });
 
   // Membership revoked since the session was issued, or platform admin dropped.
   if (!context) return null;
+
+  /**
+   * The access rules (ADR-022), on the server: a channel the hospital has
+   * switched off for this role, or a session past its absolute limit or idle
+   * too long, ends here; a clinical role idle too long is locked.
+   * Impersonation has its own 30-minute limit and is left alone.
+   */
+  const channel = row.channel as Channel;
+  let locked = row.lockedAt !== null;
+  const rule = sessionRule(context.role, channel, context.settings);
+  if (!impersonating) {
+    const now = new Date();
+    const verdict = channelAllowed(context.settings, context.role, channel)
+      ? sessionVerdict({ createdAt: row.createdAt, lastSeenAt: row.lastSeenAt, lockedAt: row.lockedAt, now, rule })
+      : 'end';
+    if (verdict === 'end') {
+      await db.delete(sessions).where(eq(sessions.id, row.sessionId));
+      return null;
+    }
+    if (verdict === 'lock' && !locked) {
+      locked = true;
+      await db.update(sessions).set({ lockedAt: now }).where(eq(sessions.id, row.sessionId));
+    } else if (verdict === 'active' && shouldWriteLastSeen(row.lastSeenAt, now, rule)) {
+      await db.update(sessions).set({ lastSeenAt: now }).where(eq(sessions.id, row.sessionId));
+    }
+  }
 
   const session: Session = {
     userId: row.userId,
@@ -322,16 +455,48 @@ export async function resolveSession(token: string | undefined): Promise<Session
     hospitalId: row.hospitalId,
     hospitalName: context.hospitalName,
     timezone: context.timezone,
-    role: context.role,
+    role: channel === 'ward_device' ? wardRoleFor(context.role) : context.role,
     branchId: context.branchId,
     readOnly: row.readOnly,
     impersonatedByUserId: row.impersonatedByUserId,
     returnHospitalId: row.returnHospitalId,
     mustChangePassword: row.mustChangePassword,
+    sessionId: row.sessionId,
+    channel,
+    personRole: context.role,
+    wardDeviceId: row.wardDeviceId,
+    deviceId: row.deviceId,
+    locked,
+    noticePending: context.noticePending,
+    // Screens lock themselves where the server would lock or end the session within the hour.
+    screenLock: impersonating
+      ? { idleMs: null, backgroundMs: null }
+      : { idleMs: rule.idle.ms <= 60 * 60_000 ? rule.idle.ms : null, backgroundMs: rule.backgroundLockMs },
   };
 
-  sessionCache.set(tokenH, { session, expiresAt: Date.now() + SESSION_CACHE_TTL });
+  await markSessionOnRequest(session);
+
+  sessionCache.set(tokenH, {
+    session,
+    expiresAt: Date.now() + (channel === 'ward_device' ? WARD_SESSION_CACHE_TTL : SESSION_CACHE_TTL),
+  });
   return session;
+}
+
+/**
+ * What the database and the access log need to know about this request: a
+ * read-only support session, the real staff member (identity functions rely
+ * on it), and the session, channel and device (written onto entries). A
+ * locked session is marked as nobody.
+ */
+export async function markSessionOnRequest(session: Session): Promise<void> {
+  if (session.readOnly) {
+    await markRequestReadOnly();
+    return;
+  }
+  if (session.impersonatedByUserId || session.locked) return;
+  await markRequestStaffUser(session.userId);
+  await markRequestOrigin({ sessionId: session.sessionId, channel: session.channel, deviceId: session.deviceId });
 }
 
 /** Drops a token from the 30-second cache so a change takes effect at once. */
@@ -344,7 +509,26 @@ export async function logout(token: string | undefined) {
   if (!token) return;
   const tokenH = hashToken(token);
   sessionCache.delete(tokenH);
-  await getDb().delete(sessions).where(eq(sessions.tokenHash, tokenH));
+  const [ended] = await getDb()
+    .delete(sessions)
+    .where(eq(sessions.tokenHash, tokenH))
+    .returning({
+      userId: sessions.userId,
+      hospitalId: sessions.hospitalId,
+      channel: sessions.channel,
+      impersonatedByUserId: sessions.impersonatedByUserId,
+    });
+  if (ended && !ended.impersonatedByUserId) {
+    await withTenant(ended.hospitalId, (tx) =>
+      tx.insert(auditLogs).values({
+        hospitalId: ended.hospitalId,
+        actorUserId: ended.userId,
+        action: ended.channel === 'ward_device' ? 'auth.switch_user' : 'auth.logout',
+        objectType: 'user',
+        objectId: ended.userId,
+      }),
+    );
+  }
 }
 
 /** Reception and owners may move the queue; doctors may move their own. */
@@ -416,9 +600,22 @@ export async function setStaffActive(args: {
         ),
       ),
   );
-  // Removing someone takes effect now, not when this process's 30-second
-  // session cache happens to expire.
-  if (!args.active) invalidateSessionCache();
+  // Removing someone takes effect now: their sessions are deleted, so every
+  // instance refuses the token, and this process's cache is cleared.
+  if (!args.active) {
+    const [membership] = await withTenant(args.hospitalId, (tx) =>
+      tx
+        .select({ userId: staffMemberships.userId })
+        .from(staffMemberships)
+        .where(eq(staffMemberships.id, args.membershipId)),
+    );
+    if (membership) {
+      await getDb()
+        .delete(sessions)
+        .where(and(eq(sessions.userId, membership.userId), eq(sessions.hospitalId, args.hospitalId)));
+    }
+    invalidateSessionCache();
+  }
   return result;
 }
 

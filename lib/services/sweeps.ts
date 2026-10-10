@@ -5,6 +5,7 @@ import { appointments, hospitals, queueEvents, rateLimitEvents } from '@/lib/db/
 import { sessionForSlot } from '@/lib/domain/sessions';
 import type { AppointmentStatus } from '@/lib/domain/types';
 import { postBedDayCharges } from './bed-days';
+import { sealDueHospitals, verifyDueHospitals } from './evidence';
 import { expireStalePaymentLinks } from './payments';
 import { applyQueueAction, resumeAppointment } from './queue';
 import { loadDaySessionsInTx } from './scheduling';
@@ -162,6 +163,36 @@ export async function resumePausedAppointments(now: Date = new Date()): Promise<
  */
 const SLOT_SESSION_LOOKAHEAD_MS = 4 * 60 * 60 * 1000;
 
+/** Monthly-partitioned tables (plan §9.4 rule 8) and how far ahead their months are made. */
+const PARTITIONED_TABLES = ['chart_entries', 'acct_events'] as const;
+const PARTITION_MONTHS_AHEAD = 12;
+const PARTITION_CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
+let partitionsCheckedAt = 0;
+
+/** The evidence log (plan §7.6): look for hospitals due a seal every 5 minutes; check new seals hourly. */
+const EVIDENCE_SEAL_EVERY_MS = 5 * 60 * 1000;
+const EVIDENCE_VERIFY_EVERY_MS = 60 * 60 * 1000;
+let evidenceSealedAt = 0;
+let evidenceVerifiedAt = 0;
+
+/**
+ * Keeps twelve months of partitions ready ahead of today, so a reading is
+ * never refused for want of one. Idempotent and cheap (a catalogue lookup per
+ * month), and checked every six hours, not every tick.
+ */
+async function ensurePartitions(now: Date): Promise<number> {
+  if (now.getTime() - partitionsCheckedAt < PARTITION_CHECK_EVERY_MS) return 0;
+  let created = 0;
+  for (const table of PARTITIONED_TABLES) {
+    const rows = await getAdminDb().execute<{ created: number }>(
+      sql`select public.ensure_monthly_partitions(${table}, 0, ${PARTITION_MONTHS_AHEAD}) as created`,
+    );
+    created += Number(rows[0]?.created ?? 0);
+  }
+  partitionsCheckedAt = now.getTime();
+  return created;
+}
+
 /**
  * Moves booked evening slot-session patients into the waiting line when their
  * session starts.
@@ -303,6 +334,29 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
       .where(lt(rateLimitEvents.createdAt, new Date(now.getTime() - 24 * 60 * 60 * 1000)));
   } catch (error) {
     console.error('[sweeps] throttle pruning failed', error);
+  }
+
+  try {
+    if (now.getTime() - evidenceSealedAt >= EVIDENCE_SEAL_EVERY_MS) {
+      evidenceSealedAt = now.getTime();
+      const { sealed, busy } = await sealDueHospitals(now);
+      if (sealed + busy > 0) console.log('[sweeps] evidence sealed', JSON.stringify({ sealed, busy }));
+    }
+    if (now.getTime() - evidenceVerifiedAt >= EVIDENCE_VERIFY_EVERY_MS) {
+      evidenceVerifiedAt = now.getTime();
+      const { checked, failed } = await verifyDueHospitals();
+      if (checked > 0) console.log('[sweeps] evidence checked', JSON.stringify({ checked, failed }));
+    }
+  } catch (error) {
+    console.error('[sweeps] evidence sealing or checking failed', error);
+  }
+
+  try {
+    const created = await ensurePartitions(now);
+    if (created > 0) console.log('[sweeps] monthly partitions created', created);
+  } catch (error) {
+    // Logged loudly: twelve months of slack means there is time to fix it, not that it can wait.
+    console.error('[sweeps] partition upkeep failed', error);
   }
 
   try {

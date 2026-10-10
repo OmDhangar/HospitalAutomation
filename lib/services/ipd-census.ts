@@ -213,7 +213,11 @@ export type AdmissionSummary = {
   patientId: string;
   branchId: string;
   status: AdmissionStatus;
+  /** The IPD No.; null until the first bed (0041). */
+  ipdNumber: number | null;
   patientName: string;
+  /** The hospital's record number, the "Patient ID" on sheets; null until identity backfill (0040). */
+  mrn: string | null;
   age: number | null;
   gender: string | null;
   phoneE164: string;
@@ -255,7 +259,9 @@ export async function getAdmissionSummary(
           patientId: admissions.patientId,
           branchId: admissions.branchId,
           status: admissions.status,
+          ipdNumber: admissions.ipdNumber,
           patientName: patients.name,
+          mrn: patients.mrn,
           age: patients.age,
           gender: patients.gender,
           phoneE164: patients.phoneE164,
@@ -354,7 +360,7 @@ export async function findPatientsByPhone(
         address: patients.address,
       })
       .from(patients)
-      .where(eq(patients.phoneE164, phoneE164))
+      .where(and(eq(patients.phoneE164, phoneE164), isNull(patients.mergedIntoId)))
       .orderBy(asc(patients.name))
       .limit(10),
   );

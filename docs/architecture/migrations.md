@@ -93,4 +93,18 @@ select has_table_privilege('opd_app', 'your_table', 'INSERT');   -- expect true
 | 0028 | OPD clinical records: medicines, diagnoses, notes, prescriptions, drafts, access log, clinical key |
 
 The roadmap in `docs/plans/hms-expansion-plan.md` uses planned numbers. The
-real numbers are the ones above, and the next migration is 0029.
+real numbers are the ones in `drizzle/meta/_journal.json`.
+
+**Numbering rules from Oct 2026** (see [../plans/ipd-sheets-plan.md](../plans/ipd-sheets-plan.md) §9 and §11):
+
+- **0040 is reserved** for `drizzle/pending/0040_patient_identity_enforce.sql`. New migrations
+  start at **0041** and follow the build order in the IPD sheets plan.
+- **Order is decided by the journal `when`, not by the file number.** Drizzle applies only entries
+  whose `when` is newer than the last applied one, and skips older ones *silently*. Every new
+  entry gets `when = max(existing when) + 50000000`. When 0040 is promoted it goes at the **end**
+  of the journal with the largest `when`.
+- **No new enum values** in new work: use `text` + `CHECK`. `ALTER TYPE … ADD VALUE` cannot be
+  used in the transaction that adds it.
+- The migration runner v2 (plan phase A1) applies **one migration per transaction**, so every new
+  migration must be **idempotent** (`IF NOT EXISTS`, `CREATE OR REPLACE`, guarded `DO` blocks) and
+  is run twice in CI.

@@ -3,7 +3,6 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Alert, Button, Card, CardHeader, EmptyState, Field, Input, cn } from '@/components/ui';
 import { AlertTriangleIcon, BedIcon, SyringeIcon } from '@/components/icons';
-import { PatientHeader } from '@/components/ipd/patient-header';
 import { requireSession } from '@/lib/auth/session';
 import { formatRupees } from '@/lib/domain/billing';
 import { isLateRecording } from '@/lib/domain/care-entry';
@@ -11,9 +10,9 @@ import { can } from '@/lib/domain/permissions';
 import { formatTimeIn, serviceDateIn } from '@/lib/domain/time';
 import { PAYER_KIND_LABELS } from '@/lib/domain/payer';
 import { listEntriesForAdmission, type TimelineEntry } from '@/lib/services/care-entries';
-import { getAdmissionSummary } from '@/lib/services/ipd-census';
 import { getEncounterSettlement } from '@/lib/services/patient-billing';
-import { cancelAdmissionAction, setDischargeReadyAction, voidCareEntryAction, undoIpdAction } from '../../actions';
+import { cancelAdmissionAction, setDischargeReadyAction, voidCareEntryAction, undoIpdAction } from '../../../actions';
+import { loadAdmission } from './data';
 
 export const metadata = { title: 'Patient · IPD' };
 
@@ -22,16 +21,17 @@ export const metadata = { title: 'Patient · IPD' };
  * next, and everything recorded, day by day, newest first.
  *
  * Amounts and the running total are shown only to roles that take money;
- * a nurse or doctor sees the same timeline without a rupee on it. Opening
- * this page is logged as a read of the patient's record.
+ * a nurse or doctor sees the same timeline without a rupee on it.
+ *
+ * The Summary tab of the patient file: the header, the sheet tabs and the
+ * access log are the file's layout (./layout.tsx).
  */
 export default async function AdmissionPage({ params, searchParams }: PageProps<'/ipd/admissions/[id]'>) {
   const session = await requireSession();
   const { id } = await params;
   const query = await searchParams;
-  const now = new Date();
 
-  const admission = await getAdmissionSummary(session.hospitalId, id);
+  const admission = await loadAdmission(session.hospitalId, id);
   if (!admission) notFound();
 
   const showMoney = can(session.role, 'billing.collect');
@@ -41,7 +41,6 @@ export default async function AdmissionPage({ params, searchParams }: PageProps<
       hospitalId: session.hospitalId,
       admissionId: id,
       actorUserId: session.userId,
-      logView: true,
     }),
     showMoney ? getEncounterSettlement(session.hospitalId, admission.encounterId) : Promise.resolve(null),
   ]);
@@ -51,26 +50,11 @@ export default async function AdmissionPage({ params, searchParams }: PageProps<
   const days = groupByDay(entries, session.timezone);
   const inBed = admission.status === 'admitted' || admission.status === 'discharge_ready';
   const canCorrect = can(session.role, 'ipd.correct') && writable && admission.status !== 'discharged';
+  // Who wrote each entry, how and when: the evidence log, for the owner (plan Rev 5.1).
+  const showHistory = can(session.role, 'acct.view') && writable;
 
   return (
-    <div className="mx-auto max-w-4xl space-y-4">
-      <Link href="/ipd" className="inline-flex min-h-11 items-center text-sm text-ink-500 hover:text-ink-800">
-        ← IPD
-      </Link>
-
-      <PatientHeader
-        name={admission.patientName}
-        age={admission.age}
-        gender={admission.gender}
-        phoneE164={admission.phoneE164}
-        bed={admission.bed && inBed ? admission.bed : null}
-        admittedAt={admission.admittedAt}
-        doctorName={admission.doctorName}
-        status={admission.status}
-        timezone={session.timezone}
-        now={now}
-      />
-
+    <div className="space-y-4">
       {typeof query.error === 'string' ? <Alert tone="error">{query.error}</Alert> : null}
       {typeof query.saved === 'string' ? (
         <SavedNotice
@@ -170,6 +154,7 @@ export default async function AdmissionPage({ params, searchParams }: PageProps<
                         timezone={session.timezone}
                         showMoney={showMoney}
                         correct={canCorrect ? { admissionId: id } : null}
+                        showHistory={showHistory}
                       />
                     ))}
                   </ul>
@@ -185,6 +170,11 @@ export default async function AdmissionPage({ params, searchParams }: PageProps<
                               {formatTimeIn(session.timezone, entry.occurredAt)} · {entry.description} ×{entry.quantity}
                             </span>{' '}
                             — {entry.voidReason}
+                            {showHistory ? (
+                              <Link href={`/accountability/record/care_entry/${entry.id}`} className="ml-2 font-semibold hover:text-brand-800 hover:underline">
+                                History
+                              </Link>
+                            ) : null}
                           </li>
                         ))}
                       </ul>
@@ -263,11 +253,13 @@ function EntryRow({
   timezone,
   showMoney,
   correct,
+  showHistory,
 }: {
   entry: TimelineEntry;
   timezone: string;
   showMoney: boolean;
   correct: { admissionId: string } | null;
+  showHistory: boolean;
 }) {
   const late = isLateRecording(entry.occurredAt, entry.recordedAt);
   return (
@@ -282,6 +274,11 @@ function EntryRow({
           <p className="text-xs text-ink-500">
             {entry.recordedByName ?? 'Staff'}
             {late ? ` · recorded ${formatTimeIn(timezone, entry.recordedAt)}` : ''}
+            {showHistory ? (
+              <Link href={`/accountability/record/care_entry/${entry.id}`} className="ml-2 font-semibold hover:text-brand-800 hover:underline">
+                History
+              </Link>
+            ) : null}
           </p>
         </div>
         {showMoney ? (

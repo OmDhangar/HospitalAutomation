@@ -1,5 +1,6 @@
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { insertFixturePatient } from '@/lib/test/patient-fixture';
 
 /**
  * The guarantees migration 0032 makes, asserted against a real Postgres: the
@@ -70,9 +71,12 @@ describe.skipIf(!enabled)('IPD schema (0032)', () => {
     await admin`
       insert into doctors (id, hospital_id, branch_id, name)
       values (${ids.doctorA}, ${ids.hospitalA}, ${ids.branchA}, 'Dr A')`;
-    await admin`
-      insert into patients (id, hospital_id, phone_e164, name)
-      values (${ids.patientA}, ${ids.hospitalA}, '+919000000101', 'Rahul Patil')`;
+    await insertFixturePatient(admin, {
+      id: ids.patientA,
+      hospitalId: ids.hospitalA,
+      phoneE164: '+919000000101',
+      name: 'Rahul Patil',
+    });
     await admin`
       insert into encounters
         (id, hospital_id, branch_id, patient_id, attending_doctor_id, origin, stage)
