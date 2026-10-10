@@ -227,3 +227,13 @@ export function normaliseBedCode(typed: string): string | null {
   const code = typed.toUpperCase().replace(/[\s-]/g, '');
   return /^[A-HJKMNP-Z2-9]{6}$/.test(code) ? code : null;
 }
+
+/** What the QR on a bed label holds: a short prefix so a scan of anything else is ignored. */
+export const BED_QR_PREFIX = 'QB1:';
+export const bedQrPayload = (code: string) => `${BED_QR_PREFIX}${code}`;
+
+/** The bed code inside a scanned QR, or null if it is not one of our bed labels. */
+export function bedCodeFromQr(raw: string): string | null {
+  if (!raw.startsWith(BED_QR_PREFIX)) return null;
+  return normaliseBedCode(raw.slice(BED_QR_PREFIX.length));
+}

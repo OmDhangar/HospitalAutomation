@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   BED_CODE_ALPHABET,
   MarError,
+  bedCodeFromQr,
+  bedQrPayload,
   checkGive,
   needsWitness,
   newBedCode,
@@ -101,5 +103,11 @@ describe('bed codes', () => {
     expect(normaliseBedCode('ab3-k7m')).toBe('AB3K7M');
     expect(normaliseBedCode('AB0K7M')).toBeNull();
     expect(normaliseBedCode('ABCDE')).toBeNull();
+  });
+
+  it('round-trip through the QR on the label, and anything else scanned is ignored', () => {
+    expect(bedCodeFromQr(bedQrPayload('ZXB3N2'))).toBe('ZXB3N2');
+    expect(bedCodeFromQr('https://example.com/ZXB3N2')).toBeNull();
+    expect(bedCodeFromQr('QB1:ZXB0N2')).toBeNull();
   });
 });

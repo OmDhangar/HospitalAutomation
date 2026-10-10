@@ -3,6 +3,7 @@
 import { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { MedicinePicker } from '@/components/clinical/medicine-picker';
+import { BedQrScanner } from '@/components/ipd/bed-qr-scanner';
 import { useToast } from '@/components/toast';
 import { Button, Card, CardHeader, EmptyState, cn } from '@/components/ui';
 import {
@@ -583,6 +584,7 @@ function GiveForm(props: {
   const [clientId, setClientId] = useState(() => crypto.randomUUID());
   const [at, setAt] = useState(() => localInput(new Date()));
   const [code, setCode] = useState('');
+  const [scanned, setScanned] = useState(false);
   // Measured from when the form was opened: a time typed over 2 hours before then is a late entry.
   const [openedAt] = useState(() => Date.now());
   const late = openedAt - new Date(at).getTime() > LATE_ENTRY_MS;
@@ -598,7 +600,7 @@ function GiveForm(props: {
         props.act(
           async () => {
             if (needsCode && code.trim()) {
-              const proved = await proveAtBedDynamic({ admissionId: props.admissionId, code });
+              const proved = await proveAtBedDynamic({ admissionId: props.admissionId, code, method: scanned ? 'qr' : 'code' });
               if (!proved.ok) return proved;
             }
             return giveDynamic({
@@ -644,13 +646,24 @@ function GiveForm(props: {
           Code on the patient’s bed {props.enforce ? '' : '(asked for; recorded if missing)'}
           <input
             value={code}
-            onChange={(e) => setCode(e.target.value)}
+            onChange={(e) => {
+              setCode(e.target.value);
+              setScanned(false);
+            }}
             autoCapitalize="characters"
             autoComplete="off"
             maxLength={8}
             placeholder="6 letters and numbers"
             className={cn(field, 'font-mono uppercase tracking-widest')}
           />
+          <span className="mt-2 block">
+            <BedQrScanner
+              onCode={(found) => {
+                setCode(found);
+                setScanned(true);
+              }}
+            />
+          </span>
         </label>
       ) : null}
       {needsWitnessPick ? (

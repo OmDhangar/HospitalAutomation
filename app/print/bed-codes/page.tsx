@@ -4,6 +4,8 @@ import { requireModule } from '@/lib/auth/modules';
 import { requireSession } from '@/lib/auth/session';
 import { can } from '@/lib/domain/permissions';
 import { listBedCodes } from '@/lib/services/mar';
+import { bedQrPayload } from '@/lib/domain/mar';
+import { qrMatrix, qrSvgPath } from '@/lib/qr/encode';
 
 export const metadata = { title: 'Bed codes' };
 
@@ -35,11 +37,24 @@ export default async function BedCodesPrint({ searchParams }: PageProps<'/print/
               {session.hospitalName} · {b.wardName}
             </p>
             <p className="text-lg font-bold">Bed {b.label}</p>
+            {b.code ? <BedQr code={b.code} /> : null}
             <p className="mt-1 font-mono text-3xl font-bold tracking-[0.3em]">{b.code}</p>
-            <p className="mt-1 text-[10px] text-ink-500">Bedside code · बेड कोड</p>
+            <p className="mt-1 text-[10px] text-ink-500">Scan, or type the code · स्कॅन करा किंवा कोड टाका</p>
           </div>
         ))}
       </div>
     </main>
+  );
+}
+
+/** The bed's QR, drawn by our own encoder (lib/qr/encode.ts): crisp at any print size. */
+function BedQr({ code }: { code: string }) {
+  const qr = qrMatrix(bedQrPayload(code), 'M');
+  const n = qr.size + 8;
+  return (
+    <svg viewBox={`0 0 ${n} ${n}`} className="mx-auto mt-1 size-28" role="img" aria-label={`QR code for ${code}`} shapeRendering="crispEdges">
+      <rect width={n} height={n} fill="#fff" />
+      <path d={qrSvgPath(qr)} fill="#000" />
+    </svg>
   );
 }

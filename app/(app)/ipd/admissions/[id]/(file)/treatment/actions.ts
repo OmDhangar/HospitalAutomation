@@ -188,10 +188,16 @@ export async function strikeOutDoseDynamic(args: { admissionId: string; marId: s
   });
 }
 
-export async function proveAtBedDynamic(args: { admissionId: string; code: string }): Promise<Result> {
+export async function proveAtBedDynamic(args: { admissionId: string; code: string; method?: 'code' | 'qr' }): Promise<Result> {
   return run(async () => {
     const session = await authorize('ipd.administer', args.admissionId);
-    await proveAtBed({ hospitalId: session.hospitalId, admissionId: args.admissionId, code: args.code, actor: actorOf(session) });
+    await proveAtBed({
+      hospitalId: session.hospitalId,
+      admissionId: args.admissionId,
+      code: args.code,
+      method: args.method === 'qr' ? 'qr' : 'code',
+      actor: actorOf(session),
+    });
     return ok('Bed code accepted for 5 minutes');
   });
 }
