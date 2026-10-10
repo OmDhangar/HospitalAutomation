@@ -28,6 +28,22 @@ Queue history is append-only, so the answer always exists.
 Never edit the database to "fix" a queue. The event log is the record of what
 happened, and rewriting it destroys the only thing that can settle a dispute.
 
+## A lab says nobody told them, or a test was "never called"
+
+Test follow-up (module **Test follow-up**) keeps every order, call and step.
+
+1. As the owner open **Tests → Today** for that day: the lab's row shows tasks raised and raised to
+   the admin; **By person** shows who called; **Pending** lists every test still open with its last
+   call.
+2. For one test, **Accountability** → filter **Tests and follow-up**, or open its History: order,
+   payment, task raised, escalation (by the system), each call with its outcome and caller, and each
+   step with who did it.
+3. No task raised at all? Check the test has a lab (Settings → Tests and labs → Which test is done
+   where), the lab is open, and — for a "from payment" lab — that the visit was marked Paid. The
+   worker logs `[sweeps] test follow-up failed` if the sweep itself is failing.
+4. A test ordered by mistake: the ordering doctor or the owner cancels it (dashboard card or Today →
+   Cancel test). Never edit `test_orders`; the database refuses it.
+
 ## Patients are not receiving WhatsApp messages
 
 Work down this list in order:

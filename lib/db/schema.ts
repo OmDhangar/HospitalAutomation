@@ -22,6 +22,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { STAFF_ROLES } from '@/lib/domain/permissions';
+import type { CallOutcome, ClockFrom, ClosingOutcome, ServicePointKind, TestOrderStatus } from '@/lib/domain/test-orders';
 import { APPOINTMENT_STATUSES, QUEUE_ACTIONS } from '@/lib/domain/types';
 
 /**
@@ -1893,6 +1894,8 @@ export const chargeItems = pgTable(
     sellingPricePaise: integer('selling_price_paise'),
     taxRateBp: integer('tax_rate_bp').notNull().default(0),
     isTest: boolean('is_test').notNull().default(false),
+    /** Where the test is done (0047, C4a). Only for tests; its foreign key lives in the migration. */
+    servicePointId: uuid('service_point_id'),
     active: boolean('active').notNull().default(true),
     createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     createdAt: createdAt(),
@@ -2645,3 +2648,111 @@ export const stockBalances = pgTable(
   },
   (t) => [primaryKey({ columns: [t.hospitalId, t.locationId, t.batchId] })],
 );
+
+/* ------------------------------------------------ test orders and follow-up (0047, C4a) */
+
+/** A lab or room tests are done in, and the way to it in English, Marathi and Hindi. */
+export const servicePoints = pgTable(
+  'service_points',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull(),
+    kind: text('kind').$type<ServicePointKind>().notNull().default('lab'),
+    name: text('name').notNull(),
+    nameMr: text('name_mr'),
+    nameHi: text('name_hi'),
+    floor: text('floor'),
+    floorMr: text('floor_mr'),
+    floorHi: text('floor_hi'),
+    section: text('section'),
+    sectionMr: text('section_mr'),
+    sectionHi: text('section_hi'),
+    clockFrom: text('clock_from').$type<ClockFrom>().notNull().default('order'),
+    clockMinutes: smallint('clock_minutes').notNull().default(30),
+    active: boolean('active').notNull().default(true),
+    createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('service_points_tenant_key').on(t.hospitalId, t.id)],
+);
+
+/** Who works at a service point. Removing someone stamps the row; it is never deleted. */
+export const servicePointStaff = pgTable('service_point_staff', {
+  id: id(),
+  hospitalId: uuid('hospital_id')
+    .notNull()
+    .references(() => hospitals.id, { onDelete: 'cascade' }),
+  servicePointId: uuid('service_point_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  assignedByUserId: uuid('assigned_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  assignedAt: timestamp('assigned_at', { withTimezone: true }).notNull().defaultNow(),
+  removedByUserId: uuid('removed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  removedAt: timestamp('removed_at', { withTimezone: true }),
+});
+
+/** Clinical. One test for one patient; moves forward only (trigger). */
+export const testOrders = pgTable(
+  'test_orders',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    encounterId: uuid('encounter_id').notNull(),
+    setting: text('setting').$type<'opd' | 'ipd'>().notNull(),
+    appointmentId: uuid('appointment_id').references(() => appointments.id, { onDelete: 'set null' }),
+    admissionId: uuid('admission_id'),
+    chargeItemId: uuid('charge_item_id').notNull(),
+    testName: text('test_name').notNull(),
+    servicePointId: uuid('service_point_id').notNull(),
+    billItemId: uuid('bill_item_id').references(() => billItems.id, { onDelete: 'set null' }),
+    careEntryId: uuid('care_entry_id'),
+    clockFrom: text('clock_from').$type<ClockFrom>().notNull(),
+    clockMinutes: smallint('clock_minutes').notNull(),
+    orderedAt: timestamp('ordered_at', { withTimezone: true }).notNull().defaultNow(),
+    orderedByUserId: uuid('ordered_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    clientId: uuid('client_id').notNull(),
+    paidAt: timestamp('paid_at', { withTimezone: true }),
+    dueAt: timestamp('due_at', { withTimezone: true }),
+    taskRaisedAt: timestamp('task_raised_at', { withTimezone: true }),
+    escalatedAt: timestamp('escalated_at', { withTimezone: true }),
+    status: text('status').$type<TestOrderStatus>().notNull().default('ordered'),
+    arrivedAt: timestamp('arrived_at', { withTimezone: true }),
+    arrivedByUserId: uuid('arrived_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    doneAt: timestamp('done_at', { withTimezone: true }),
+    doneByUserId: uuid('done_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    reportedAt: timestamp('reported_at', { withTimezone: true }),
+    reportedByUserId: uuid('reported_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    closedAt: timestamp('closed_at', { withTimezone: true }),
+    closedByUserId: uuid('closed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    closedReason: text('closed_reason').$type<ClosingOutcome>(),
+    closedNote: text('closed_note'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('test_orders_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('test_orders_client_key').on(t.hospitalId, t.clientId),
+  ],
+);
+
+/** Clinical. Every call to a patient who has not arrived; append-only. */
+export const testFollowUpCalls = pgTable('test_follow_up_calls', {
+  id: id(),
+  hospitalId: uuid('hospital_id')
+    .notNull()
+    .references(() => hospitals.id, { onDelete: 'cascade' }),
+  orderId: uuid('order_id').notNull(),
+  servicePointId: uuid('service_point_id').notNull(),
+  outcome: text('outcome').$type<CallOutcome>().notNull(),
+  note: text('note'),
+  calledAt: timestamp('called_at', { withTimezone: true }).notNull().defaultNow(),
+  calledByUserId: uuid('called_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  callerAssigned: boolean('caller_assigned').notNull(),
+  clientId: uuid('client_id').notNull(),
+});

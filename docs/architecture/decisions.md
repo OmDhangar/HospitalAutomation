@@ -434,3 +434,24 @@ session, channel or device (none was ever recorded on an entry or access-log row
 (the identity definer functions saw none), or — for a support session — its read-only flag at the
 database (the app's own checks still refused writes). Tests passed because they always set the
 context explicitly; `lib/db/__tests__/request-context.test.ts` now also covers the per-request path.
+
+### ADR-032 · Test follow-up: per-lab clock, the lab's own staff call, the admin sees what was missed
+*11 Oct 2026 · IPD sheets plan Rev 5.1, phase C4a (D-LABCLOCK, D-LABFU, D-LABMSG)*
+
+**Decision:** A test the doctor orders is done at a service point (a lab or a room) with its own
+staff. If the patient has not arrived within the service point's set time — counted from the order
+or from payment, per service point, 30 minutes by default — the patient goes on that staff's list as
+"call now"; if nobody calls within 15 more minutes it is raised to the owner. The staff call (no
+WhatsApp), read the way to the lab in the patient's language, and record what the patient said;
+"went home" and "refused" close the test. Every assigned person counts as on duty: there is no
+roster. OPD tests go on the visit's bill so the desk's Paid tap starts a payment clock; ward tests
+are billed at discharge and always count from the order. Each order keeps the clock it was ordered
+under. The sweep stamps the moment a task was raised and escalated (for the evidence log); the
+screens compute the same states from the times. Orders move forward only and calls are append-only,
+enforced by the database.
+
+**Why:** the pilot hospital's admin asked for it: patients sent for a test get lost or go home, and
+nobody knows until the doctor asks for the report. Making it the lab's own staff's job, with a
+deadline and an escalation, and showing the owner each lab's day and each person's calls, closes the
+loop without a new role or messages that cost money and carry patient data.
+

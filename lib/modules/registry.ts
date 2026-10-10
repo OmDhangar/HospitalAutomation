@@ -111,6 +111,23 @@ export const MODULES = [
     defaultState: 'off',
   },
   {
+    id: 'test_follow_up',
+    title: 'Test follow-up',
+    description:
+      'The doctor sends a patient for a test; the lab or room’s own staff see who has not arrived in time, call them and guide them (floor and section in Marathi, Hindi and English), and the owner sees the day’s pending tests per lab and who followed up.',
+    tier: 'basic',
+    core: false,
+    // OPD orders need nothing else; ward orders use the IPD bedside entries when IPD is on.
+    dependsOn: [],
+    uses: ['core_ipd'],
+    routes: ['/tests', '/settings/tests'],
+    fileTabs: [],
+    printSheets: [],
+    hasStages: false,
+    // Off until the owner sets up the labs and switches it on (plan §11.3 rule 8).
+    defaultState: 'off',
+  },
+  {
     id: 'staff_access',
     title: 'Staff sign-in',
     description: 'Ward tablets with a PIN per person, the lock on personal phones, and the monitoring notice.',

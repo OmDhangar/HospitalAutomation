@@ -354,3 +354,74 @@ inclusion proofs for single-event exports (L6).
 story with makers, device, session, late writing and seals; a bedside item with its bill line;
 another hospital sees nothing); migration lint and re-run check; browser check on the demo hospital
 (links on readings and entries, History of a reading, an admission and a new bedside item).
+
+**B4a count-first stock (10 Oct 2026), migration 0046 (module `stock`, off by default), ADR-028:**
+- Risk-class medicines only (the hospital picks: NDPS, psychotropics, a few high-value items):
+  `risk_classes`, `medicine_risk_classes`, `stock_locations` (main store, ward stores, crash carts),
+  `stock_batches`, `purchase_receipts` (against the supplier's invoice), two-sided
+  `stock_transfers`, blind `stock_counts` with the paper register's "used since last count",
+  `stock_adjustments`, an append-only `stock_ledger` and `stock_balances` kept by the ledger's
+  trigger (the app cannot write balances, and a balance cannot go below zero).
+- Separation of duties in the database: a count's approver is not its counter, an adjustment's
+  approver is not its requester; counting by someone who moved the stock is flagged (observe) or
+  refused (enforce). Every table feeds the evidence log.
+- Screens under `/ipd/stock` (overview, receive, send, take delivery, count, adjust) and Settings →
+  Stock. Permissions `stock.view/move/count/approve/configure`.
+
+**Verified (from the B4a change):** 12 unit tests (`lib/domain/__tests__/stock.test.ts`) and 9
+integration tests (`stock.integration.test.ts`): receipts once per retry, transfers with shortfalls,
+blind counts, two-person approval, the counter-who-moved rule, adjustments and the database guards.
+**Not applied to production:** 0046 is for the owner to apply (`npm run db:migrate:plan` first).
+*(This entry was added with C4a; B4a was merged without one.)*
+
+**C4a test orders and follow-up (11 Oct 2026, plan Rev 5.1), migration 0047 (module `test_follow_up`,
+off by default), ADR-032:**
+- **Labs and rooms** (`service_points`): name, floor and section in English, Marathi and Hindi; when
+  the "not arrived" clock starts (from the order, the default, or from payment) and how long it runs
+  (30 minutes unless the hospital says otherwise, 5–240) — D-LABCLOCK. **Staff**
+  (`service_point_staff`): any staff member, removed by a stamp, never deleted; all assigned staff
+  count as on duty (owner's choice, 11 Oct). Each test (`charge_items.is_test`) gets its lab
+  (`charge_items.service_point_id`); a test with no lab is billed as before but not followed up.
+  Settings → Tests and labs (owner).
+- **Ordering:** OPD — "Send for tests" card under the consultation on the doctor's dashboard (the
+  visit's own doctor, or the owner): each test becomes a `test_orders` row and, if priced, a line on
+  the visit's bill (owner's choice, 11 Oct), so the desk's Paid tap takes it and starts a "from
+  payment" clock. A resubmitted form orders nothing twice. Ward — the doctor's existing Tests button
+  still bills each test as a bedside entry; with the module on, each entry of a test that has a lab
+  becomes its order too (ward tests always count from the order), and the 2-minute Undo cancels it.
+  The ordering doctor or the owner can cancel a mistaken order; an unpaid OPD line is voided with it.
+- **The lab's list** (`/tests/[lab]`): patients not arrived, most urgent first (raised to the admin,
+  then "call now", then by how long since they were sent), with a live "sent N min ago" clock, the
+  patient's number as a Call button, the way to the lab in the patient's language to read out, and
+  the last calls. After the call: no answer, coming now, told the way, will come later, went home,
+  refused (cost / fear / other, with a note). "Went home" and "refused" close the test as not
+  coming. Then Arrived → Test done → Report added (a step can skip the one before it). One call
+  covers all the patient's waiting tests at that lab. Only the lab's staff (or the owner) can work
+  it; every call records whether the caller was assigned. Calls only, no WhatsApp (D-LABMSG).
+- **Escalation (D-LABFU):** the sweep stamps `task_raised_at` when the set time passes with the
+  patient not arrived and nobody has called since, and `escalated_at` 15 minutes later if still
+  nobody has called; the owner's menu shows "Tests (n)" while such patients are still not arrived.
+  The screens compute the same states from the times, so they are right between sweeps.
+- **Today** (`/tests/today`, owner): per lab — ordered, arrived, done, report added, not coming,
+  pending, tasks raised, raised to admin, calls; per person — calls, reached, arrivals, tests done,
+  reports added (by when they did it, on any day's orders); the pending list (every test still open,
+  any day) with the last call, Call and Cancel. Previous days by date.
+- **Database guards:** orders move forward only and never lose a stamp or change what was ordered
+  (trigger); calls are append-only (no UPDATE/DELETE for the app); both clinical (`clinical_access`);
+  tenant RLS on all four tables; every row in the evidence log (`service_point.*`,
+  `service_point_staff.*`, `test_order.*`, `test_call.created`), the sweep's stamps as the system's.
+- Permissions `tests.order` (owner, doctor), `tests.work` (all roles; the service checks the lab's
+  staff), `tests.oversee` and `tests.configure` (owner).
+
+**Verified:** typecheck, lint on the new files; 793 unit tests (11 new); `test-orders.integration.test.ts`
+(13: once-only ordering and billing, wrong doctor / no lab / not a test refused, the payment clock from
+the desk's Paid tap, task and escalation by the sweep with and without a call, lab staff only, call
+outcomes closing tests, forward-only steps and the database guards, cancel with the bill line,
+clinical key and tenancy, the day view, evidence for every step, ward orders and Undo); the whole
+integration suite (340); migration lint and a second run of 0047 on the same database. Browser check
+on the demo hospital: Settings → Tests and labs (Marathi and Hindi names, staff, placing tests,
+Saved feedback), "Send for tests" on the dashboard, the lab's list at 375, 768 and 1280 px with no
+sideways scroll, Marathi directions, a call, Arrived and Test done, the Today screen at 375 and 1280.
+**Not applied to production:** 0047 is for the owner to apply (`npm run db:migrate:plan` first).
+**Not done in C4a:** typed results and report files (C4b), a lab role, a duty roster (assigned =
+on duty), k6 numbers for the new pages, push or SMS alerts to the admin (in-app only).

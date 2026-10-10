@@ -7,6 +7,9 @@ import { MobileNav, type NavItem } from '@/components/mobile-nav';
 import { SessionGuard } from '@/components/session-guard';
 import { getSession, requireSession } from '@/lib/auth/session';
 import { can, homePathFor } from '@/lib/domain/permissions';
+import { getModuleStatesForRequest } from '@/lib/auth/modules';
+import { moduleAllows } from '@/lib/modules/registry';
+import { countEscalatedTests, myServicePoints } from '@/lib/services/test-orders';
 import { switchUserAction } from '../ward-device/actions';
 import { signOutAction } from './dashboard/actions';
 
@@ -43,6 +46,19 @@ async function AppHeader() {
   // For a nurse this is the first and only work item.
   if (can(session.role, 'ipd.view')) {
     navItems.push({ label: 'IPD', href: '/ipd' });
+  }
+
+  /**
+   * Test follow-up (C4a): for the owner always, with the count of patients
+   * raised to them; for anyone else only when they are on a lab's staff.
+   */
+  if (can(session.role, 'tests.work') && moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'test_follow_up', 'read')) {
+    if (can(session.role, 'tests.oversee')) {
+      const escalated = await countEscalatedTests(session.hospitalId);
+      navItems.push({ label: escalated > 0 ? `Tests (${escalated})` : 'Tests', href: '/tests' });
+    } else if ((await myServicePoints({ hospitalId: session.hospitalId, userId: session.userId, isOwner: false })).length > 0) {
+      navItems.push({ label: 'Tests', href: '/tests' });
+    }
   }
 
   if (can(session.role, 'reports.view')) {

@@ -323,6 +323,13 @@
       "when": 1790500000000,
       "tag": "0046_stock",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1790550000000,
+      "tag": "0047_test_follow_up",
+      "breakpoints": true
     }
   ]
 }

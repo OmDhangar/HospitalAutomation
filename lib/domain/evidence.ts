@@ -199,6 +199,17 @@ const LABELS: Record<string, string> = {
   'stock_count_line.changed': 'Count changed',
   'stock_adjustment.created': 'Stock adjustment asked',
   'stock_adjustment.changed': 'Stock adjustment decided',
+  'service_point.created': 'Lab or room added',
+  'service_point.changed': 'Lab or room changed',
+  'service_point_staff.created': 'Staff added to a lab',
+  'service_point_staff.changed': 'Staff removed from a lab',
+  'test_order.created': 'Test ordered',
+  'test_order.changed': 'Test updated',
+  'test_call.created': 'Patient called about a test',
+  'tests.service_point_created': 'Lab or room set up',
+  'tests.service_point_changed': 'Lab or room settings changed',
+  'tests.test_placed': 'Test assigned to a lab or room',
+  'tests.order_cancelled': 'Test cancelled',
   'evidence.verified': 'Evidence log checked',
   'evidence.verification_failed': 'Evidence log check FAILED',
   'support.impersonation.start': 'QuriioHQ support opened this hospital',
@@ -214,6 +225,7 @@ export const EVENT_FAMILIES = {
   billing: { label: 'Billing', prefixes: ['bill_item.', 'billing.', 'payment.'] },
   admissions: { label: 'Admissions and beds', prefixes: ['admission.', 'bed_assignment.', 'ipd.'] },
   stock: { label: 'Risk-class stock', prefixes: ['stock_', 'stock.'] },
+  tests: { label: 'Tests and follow-up', prefixes: ['test_', 'service_point', 'tests.'] },
   records: { label: 'Records opened', prefixes: ['record_access.'] },
   access: { label: 'Sign-in and access', prefixes: ['auth.', 'support.', 'policy_acknowledgement.'] },
   settings: { label: 'Settings', prefixes: ['module.', 'letterhead.', 'medicine.', 'doctor.', 'capacity.', 'whatsapp.'] },
@@ -239,6 +251,26 @@ const ACCESS_TEXT: Record<string, string> = {
   print_ipd_file: 'printed the patient file',
   view_file_upload: 'opened an attached file',
   family_unlock: 'family opened the status page',
+};
+
+const TEST_STATUS_TEXT: Record<string, string> = {
+  ordered: 'not arrived',
+  arrived: 'arrived',
+  done: 'test done',
+  reported: 'report added',
+  not_coming: 'not coming',
+  cancelled: 'cancelled',
+};
+
+const TEST_OUTCOME_TEXT: Record<string, string> = {
+  no_answer: 'no answer',
+  coming_now: 'coming now',
+  told_the_way: 'told the way',
+  will_come_later: 'will come later',
+  went_home: 'went home',
+  refused_cost: 'refused: cost',
+  refused_fear: 'refused: fear',
+  refused_other: 'refused: other',
 };
 
 /**
@@ -323,6 +355,19 @@ export function eventDetail(action: string, payload: Record<string, unknown>): s
       return [num('quantity') === null ? null : `${num('quantity')! > 0 ? '+' : ''}${num('quantity')}`, text('reason_code'), text('status')]
         .filter(Boolean)
         .join(' · ');
+    case 'test_order.created':
+    case 'test_order.changed': {
+      const status = text('status');
+      const parts = [status ? (TEST_STATUS_TEXT[status] ?? status) : null];
+      if (text('escalated_at')) parts.push('raised to the admin');
+      else if (text('task_raised_at')) parts.push('not-arrived task raised');
+      if (text('closed_reason')) parts.push(TEST_OUTCOME_TEXT[text('closed_reason')!] ?? text('closed_reason'));
+      return parts.filter(Boolean).join(' · ') || null;
+    }
+    case 'test_call.created': {
+      const outcome = text('outcome');
+      return outcome ? (TEST_OUTCOME_TEXT[outcome] ?? outcome) : null;
+    }
     case 'evidence.verified':
     case 'evidence.verification_failed':
       return `${num('digests') ?? 0} seals, ${num('events') ?? 0} events`;

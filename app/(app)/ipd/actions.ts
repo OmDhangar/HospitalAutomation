@@ -27,6 +27,9 @@ import {
 import { formatUndoToken, idList, isId, parseUndoToken } from '@/lib/domain/undo';
 import { PatientBillingError } from '@/lib/services/patient-billing';
 import { DoctorIpdError, orderTests } from '@/lib/services/doctor-ipd';
+import { getModuleStatesForRequest } from '@/lib/auth/modules';
+import { moduleAllows } from '@/lib/modules/registry';
+import { cancelOrdersForCareEntries, createIpdTestOrders } from '@/lib/services/test-orders';
 
 /**
  * The desk's IPD actions (IPD plan §5.3–5.5, task T1.6). Form posts that
@@ -255,6 +258,10 @@ export async function orderTestsAction(form: FormData) {
     entryIds = results.flatMap((result) => (result.ok && !result.repeat ? [result.entryId] : []));
     const refused = results.find((result) => !result.ok);
     firstError = refused && !refused.ok ? refused.error : '';
+    // Test follow-up (C4a): each test that has a lab or room goes on that lab's list too.
+    if (entryIds.length > 0 && moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'test_follow_up', 'write')) {
+      await createIpdTestOrders({ hospitalId: session.hospitalId, admissionId, careEntryIds: entryIds, actorUserId: session.userId });
+    }
   } catch (err) {
     if (err instanceof DoctorIpdError) go('/ipd/my-patients', { error: err.message });
     throw err;
@@ -307,6 +314,7 @@ export async function undoIpdAction(form: FormData) {
       message = 'Undone: the entry is back on the record and the bill.';
     } else if (kind === 'tests') {
       for (const entryId of idList(args[0])) await undoCareEntry({ ...base, entryId });
+      await cancelOrdersForCareEntries({ ...base, careEntryIds: idList(args[0]) });
       message = 'Undone: the tests were taken back.';
     } else {
       go(back, { error: 'Nothing to undo.' });

@@ -45,6 +45,10 @@ import {
   type IpdStatus,
 } from '@/lib/services/ipd-census';
 import { ConsultationPanel } from './consultation-panel';
+import { TestOrderCard } from './test-order-card';
+import { getModuleStatesForRequest } from '@/lib/auth/modules';
+import { moduleAllows } from '@/lib/modules/registry';
+import { listOrderableTests, listVisitTests, type VisitTestRow } from '@/lib/services/test-orders';
 import { IpdBadge, ShiftToIpdButton } from './shift-to-ipd-button';
 import {
   AddExtraCapacityButton,
@@ -171,6 +175,19 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
       ])
     : {};
   const ipd: IpdRowContext = { statuses: ipdStatuses, canShift };
+  // Test follow-up (C4a): the doctor sends the patient in the room for tests.
+  const canOrderTests =
+    Boolean(serving) &&
+    showConsultation &&
+    can(session.role, 'tests.order') &&
+    !ipdStatuses[serving?.appointmentId ?? ''] &&
+    moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'test_follow_up', 'write');
+  const [orderableTests, visitTests] = canOrderTests
+    ? await Promise.all([
+        listOrderableTests(session.hospitalId),
+        listVisitTests(session.hospitalId, [serving!.appointmentId]),
+      ])
+    : [[], new Map<string, VisitTestRow[]>()];
   // The doctor's one tap to their admitted patients (T3.1).
   const canSeeAdmitted = effectiveView === 'doctor' && can(session.role, 'ipd.dischargeReady');
   const admittedCount = canSeeAdmitted ? await countAdmittedForDoctorUser(session.hospitalId, session.userId) : 0;
@@ -422,6 +439,15 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                   key={serving.appointmentId}
                   appointmentId={serving.appointmentId}
                   isEmergency={serving.isEmergency}
+                />
+              ) : null}
+
+              {serving && canOrderTests && orderableTests.length > 0 ? (
+                <TestOrderCard
+                  key={`tests-${serving.appointmentId}`}
+                  appointmentId={serving.appointmentId}
+                  tests={orderableTests.map(({ id, name, servicePointName }) => ({ id, name, servicePointName }))}
+                  sent={(visitTests.get(serving.appointmentId) ?? []).map(({ id, testName, servicePointName, status }) => ({ id, testName, servicePointName, status }))}
                 />
               ) : null}
 

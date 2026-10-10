@@ -10,6 +10,7 @@ import { expireStalePaymentLinks } from './payments';
 import { applyQueueAction, resumeAppointment } from './queue';
 import { loadDaySessionsInTx } from './scheduling';
 import { expireLapsedSubscriptions } from './subscriptions';
+import { raiseTestFollowUps } from './test-order-clock';
 
 /**
  * The housekeeping nobody was running.
@@ -275,6 +276,9 @@ export type SweepResult = {
   paymentLinksExpired: number;
   /** IPD room charges posted (T1.10): one line per occupied bed per day. */
   bedDaysCharged: number;
+  /** Test follow-up (C4a): "not arrived" tasks raised, and those raised to the admin. */
+  testTasksRaised: number;
+  testTasksEscalated: number;
 };
 
 /**
@@ -292,6 +296,8 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
     subscriptionsExpired: 0,
     paymentLinksExpired: 0,
     bedDaysCharged: 0,
+    testTasksRaised: 0,
+    testTasksEscalated: 0,
   };
 
   try {
@@ -367,9 +373,19 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
     console.error('[sweeps] bed-day charges failed', error);
   }
 
+  try {
+    // Test follow-up (C4a): stamps each "not arrived" task and each escalation to the admin.
+    const tests = await raiseTestFollowUps(now);
+    result.testTasksRaised = tests.raised;
+    result.testTasksEscalated = tests.escalated;
+  } catch (error) {
+    console.error('[sweeps] test follow-up failed', error);
+  }
+
   const total =
     result.appointmentsMarkedNoShow + result.appointmentsResumed + result.slotBookingsEnqueued +
-    result.subscriptionsExpired + result.paymentLinksExpired + result.bedDaysCharged;
+    result.subscriptionsExpired + result.paymentLinksExpired + result.bedDaysCharged +
+    result.testTasksRaised + result.testTasksEscalated;
   if (total > 0) {
     console.log('[sweeps] completed', JSON.stringify(result));
   }
