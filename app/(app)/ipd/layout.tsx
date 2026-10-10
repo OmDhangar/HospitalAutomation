@@ -7,6 +7,9 @@ import { requireSession } from '@/lib/auth/session';
 import { can } from '@/lib/domain/permissions';
 import { moduleAllows } from '@/lib/modules/registry';
 import { countMyWitnessRequests, listAwaitingCountersign } from '@/lib/services/mar';
+import { myEscalations } from '@/lib/services/due';
+import { readWardDeviceCookie } from '@/lib/auth/ward-device-cookie';
+import { resolveWardDevice } from '@/lib/services/staff-access';
 
 /**
  * The IPD section (IPD plan §5): its own header strip under the app header —
@@ -32,6 +35,9 @@ export default async function IpdLayout({ children }: LayoutProps<'/ipd'>) {
   if (can(session.role, 'stock.view') && moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'stock', 'read')) {
     tabs.push({ label: 'Stock', href: '/ipd/stock' });
   }
+  if (can(session.role, 'ipd.dueQuality') && moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'mar', 'read')) {
+    tabs.push({ label: 'Dose timing', href: '/ipd/quality' });
+  }
   if (can(session.role, 'ipd.configure')) tabs.push({ label: 'Set up', href: '/settings/ipd' });
 
   // Treatment card (B3-min): doses waiting for my witness, and telephone orders waiting for my countersign.
@@ -42,6 +48,17 @@ export default async function IpdLayout({ children }: LayoutProps<'/ipd'>) {
         can(session.role, 'ipd.countersign') ? listAwaitingCountersign({ hospitalId: session.hospitalId, userId: session.userId }) : [],
       ])
     : [0, []];
+  // Late time-critical doses (B3b): by ward and level, never the patient or the drug (no PHI in a banner).
+  const device = marOn && session.channel === 'ward_device' ? await resolveWardDevice(await readWardDeviceCookie()) : null;
+  const escalations =
+    marOn && can(session.role, 'ipd.dueBoard')
+      ? await myEscalations({
+          hospitalId: session.hospitalId,
+          userId: session.userId,
+          isOwner: session.role === 'owner',
+          wardIds: device ? (device.wardIds.length > 0 ? device.wardIds : 'all') : null,
+        })
+      : [];
 
   return (
     <div className="space-y-4">
@@ -74,6 +91,16 @@ export default async function IpdLayout({ children }: LayoutProps<'/ipd'>) {
           <div className="h-2.5" />
         )}
       </div>
+      {escalations.map((e) => (
+        <Link
+          key={`${e.wardId}-${e.level}`}
+          href={e.wardId ? `/ipd/ward/${e.wardId}/due` : '/ipd/ward'}
+          className="flex min-h-12 items-center justify-between rounded-xl bg-red-600 px-4 text-sm font-semibold text-white"
+        >
+          {e.count} time-critical dose{e.count === 1 ? '' : 's'} overdue in {e.wardName}
+          {e.level === 2 ? ' · for the doctor' : ''} <span aria-hidden>→</span>
+        </Link>
+      ))}
       {toWitness > 0 ? (
         <Link href="/ipd/witness" className="flex min-h-12 items-center justify-between rounded-xl bg-amber-100 px-4 text-sm font-semibold text-amber-950 ring-1 ring-amber-300">
           {toWitness} dose{toWitness === 1 ? '' : 's'} waiting for your witness <span aria-hidden>→</span>

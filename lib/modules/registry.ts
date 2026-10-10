@@ -103,7 +103,16 @@ export const MODULES = [
     core: false,
     dependsOn: ['patient_file'],
     uses: ['stock'],
-    routes: ['/ipd/admissions/[id]/(file)/treatment', '/ipd/witness', '/print/bed-codes'],
+    routes: [
+      '/ipd/admissions/[id]/(file)/treatment',
+      '/ipd/witness',
+      '/print/bed-codes',
+      '/ipd/ward/[wardId]/due',
+      '/api/ipd/due',
+      '/print/round-list',
+      '/settings/treatment',
+      '/ipd/quality',
+    ],
     fileTabs: [{ slug: 'treatment', label: 'Treatment', permission: 'ipd.view', order: 20 }],
     printSheets: [{ id: 'treatment', label: 'Treatment card and MAR', permission: 'ipd.view', order: 20 }],
     // Observe: a missing countersign, bedside proof or witness is flagged on the dose. Enforce: refused.

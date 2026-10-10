@@ -9,6 +9,8 @@ import { addDays, chartDayOf, isChartDay } from '@/lib/domain/tpr';
 import { moduleAllows } from '@/lib/modules/registry';
 import { getTreatmentCard, listDeviceWitnessRequests, listOrderingDoctors, listWitnessCandidates } from '@/lib/services/mar';
 import { listPinPeople, resolveWardDevice } from '@/lib/services/staff-access';
+import { getAdmissionDue } from '@/lib/services/due';
+import { timingText } from '@/lib/domain/due';
 import { loadAdmission } from '../data';
 import { TreatmentCard } from './treatment-card';
 
@@ -39,14 +41,20 @@ export default async function TreatmentPage({ params, searchParams }: PageProps<
   const stage = states.get('mar')?.stage ?? 'observe';
 
   const device = session.channel === 'ward_device' ? await resolveWardDevice(await readWardDeviceCookie()) : null;
-  const [card, doctors, candidates, deviceRequests, devicePeople] = await Promise.all([
+  const [card, due, doctors, candidates, deviceRequests, devicePeople] = await Promise.all([
     getTreatmentCard({ hospitalId: session.hospitalId, admissionId: id, day, timezone: session.timezone }),
+    getAdmissionDue({ hospitalId: session.hospitalId, admissionId: id, day, timezone: session.timezone, now }),
     canRecord ? listOrderingDoctors(session.hospitalId) : Promise.resolve([]),
     canRecord ? listWitnessCandidates(session.hospitalId, session.userId) : Promise.resolve([]),
     device && canRecord ? listDeviceWitnessRequests({ hospitalId: session.hospitalId, deviceId: device.id }) : Promise.resolve([]),
     device && canRecord ? listPinPeople(device) : Promise.resolve([]),
   ]);
   const myDoctor = doctors.find((d) => d.userId === session.userId);
+  // Opened from the due board: this line's dose at this due time.
+  const focus =
+    typeof query.order === 'string' && typeof query.due === 'string' && /^[0-9a-f-]{36}$/i.test(query.order) && !Number.isNaN(Date.parse(query.due))
+      ? { orderId: query.order, dueAt: new Date(query.due).toISOString() }
+      : null;
   const base = `/ipd/admissions/${id}/treatment`;
   const dayText = new Intl.DateTimeFormat('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(`${day}T00:00:00Z`));
 
@@ -109,6 +117,18 @@ export default async function TreatmentPage({ params, searchParams }: PageProps<
         orders={card.orders.map((o) => ({
           id: o.id,
           kind: o.kind,
+          taskKind: o.taskKind,
+          timingText: timingText(o.timing, session.timezone),
+          timeCritical: due.get(o.id)?.timeCritical ?? false,
+          windowBefore: due.get(o.id)?.windowBefore ?? 60,
+          windowAfter: due.get(o.id)?.windowAfter ?? 60,
+          instances: (due.get(o.id)?.instances ?? []).map((i) => ({
+            dueAt: i.dueAt,
+            status: i.status as never,
+            overdueMin: i.overdueMin,
+            recorded: i.recorded,
+            closeToPrevious: i.closeToPrevious,
+          })),
           description: o.description,
           dose: o.dose,
           route: o.route,
@@ -149,6 +169,7 @@ export default async function TreatmentPage({ params, searchParams }: PageProps<
           .filter((r) => r.admissionId === id)
           .map((r) => ({ id: r.id, description: r.description, dose: r.dose, actorUserId: r.actorUserId, actorName: r.actorName, occurredAt: r.occurredAt.toISOString() }))}
         devicePeople={devicePeople}
+        focus={focus}
       />
     </div>
   );

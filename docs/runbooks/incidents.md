@@ -61,6 +61,26 @@ The treatment card (module **Treatment card and MAR**) records why.
 5. Never edit `treatment_orders` or `mar_administrations`; strike out and record again (the database
    refuses edits).
 
+## Time-critical alerts are not showing, or doses show as late or missed
+
+1. **Stage** (Settings → Modules → Treatment card and MAR): in `observe` escalations are only counted
+   (IPD → Dose timing shows "would"); `warn` shows the ward alert (L1); `enforce` also shows the
+   doctor alert (L2) and asks for a reason on late or early doses.
+2. **Signed list:** Settings → Treatment timing must say the time-critical list is signed. Any change
+   to the list or its windows clears the sign-off; until a doctor signs again nothing is treated as
+   time-critical (doses use the normal window, no alerts).
+3. **Who gets them:** L1 goes to the ward's nurse in charge and anyone on that ward; L2 to the doctor
+   on call (roster in Settings → Treatment timing) or else the ordering doctor. No in-charge set →
+   the ward's staff still see it on the due board.
+4. **Line has no timing:** a line written without clock times or an interval has no due times; the
+   doctor stops it and writes it again with timing.
+5. **"Late" that was on time:** the nurse picked the wrong due time, or the dose was recorded after the
+   fact. Strike out the dose with a reason and record it against the right due time.
+6. **Sweep not running:** escalations and the hourly roll-ups come from the sweep (`/api/internal/tick`);
+   check its last run in the logs before anything else.
+7. **Tablet board stale:** the "last synced" chip turns amber after 5 minutes and red after 15; the
+   board still computes from its cache. Reconnect, then reload. Use the printed round list meanwhile.
+
 ## Patients are not receiving WhatsApp messages
 
 Work down this list in order:

@@ -22,6 +22,7 @@ import {
   type Route,
 } from '@/lib/domain/mar';
 import type { OrderStatus } from '@/lib/domain/mar';
+import { STATUS_TEXT, TASK_KINDS, minutesToClock, suggestTiming, type InstanceStatus, type TaskKind } from '@/lib/domain/due';
 import {
   askWitnessAgainDynamic,
   countersignDynamic,
@@ -32,6 +33,7 @@ import {
   stopOrderDynamic,
   strikeOutDoseDynamic,
   strikeOutOrderDynamic,
+  taskDoneDynamic,
   witnessOnDeviceDynamic,
   type Result,
 } from './actions';
@@ -46,9 +48,18 @@ import {
  * missing (flags) after.
  */
 
+/** A due time of a line on this sheet (B3b), from the same engine as the ward's due board. */
+export type DueChip = { dueAt: string; status: InstanceStatus; overdueMin: number; recorded: boolean; closeToPrevious: boolean };
+
 export type CardOrderView = {
   id: string;
-  kind: 'medicine' | 'instruction';
+  kind: 'medicine' | 'instruction' | 'task';
+  taskKind: TaskKind | null;
+  timingText: string;
+  timeCritical: boolean;
+  windowBefore: number;
+  windowAfter: number;
+  instances: DueChip[];
   description: string;
   dose: string | null;
   route: Route | null;
@@ -118,6 +129,8 @@ export function TreatmentCard(props: {
   witnessCandidates: Person[];
   deviceRequests: DeviceRequestView[];
   devicePeople: Person[];
+  /** Opened from the due board: this line's Give, at this due time. */
+  focus: { orderId: string; dueAt: string } | null;
 }) {
   const toast = useToast();
   const router = useRouter();
@@ -203,15 +216,31 @@ function NewLine(props: {
   pending: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [kind, setKind] = useState<'medicine' | 'instruction'>('medicine');
+  const [kind, setKind] = useState<'medicine' | 'task' | 'instruction'>('medicine');
   const [medicine, setMedicine] = useState<{ id: string; label: string } | null>(null);
   const [dose, setDose] = useState('');
   const [route, setRoute] = useState<Route>('oral');
   const [frequency, setFrequency] = useState('');
   const [instructions, setInstructions] = useState('');
   const [description, setDescription] = useState('');
+  const [taskKind, setTaskKind] = useState<TaskKind>('vitals');
   const [doctorId, setDoctorId] = useState(props.defaultDoctorId ?? '');
   const [clientId, setClientId] = useState(() => crypto.randomUUID());
+  // Timing (B3b): suggested from the frequency, changed by the doctor as needed.
+  const [timingMode, setTimingMode] = useState<'clock' | 'interval' | 'once' | 'prn'>('clock');
+  const [clockTimes, setClockTimes] = useState('08:00, 20:00');
+  const [intervalHours, setIntervalHours] = useState('6');
+  const [firstDueAt, setFirstDueAt] = useState(() => localInput(new Date()));
+  const [latePolicy, setLatePolicy] = useState<'keep' | 'shift'>('keep');
+
+  const onFrequency = (value: string) => {
+    setFrequency(value);
+    const suggested = suggestTiming(value);
+    setTimingMode(suggested.mode);
+    setLatePolicy(suggested.mode === 'interval' ? 'shift' : 'keep');
+    if (suggested.clockTimes) setClockTimes(suggested.clockTimes.map(minutesToClock).join(', '));
+    if (suggested.intervalMin) setIntervalHours(String(suggested.intervalMin / 60));
+  };
 
   const reset = () => {
     setMedicine(null);
@@ -230,6 +259,7 @@ function NewLine(props: {
     );
   }
 
+  const timed = kind !== 'instruction';
   return (
     <Card>
       <CardHeader
@@ -258,21 +288,36 @@ function NewLine(props: {
                 frequency,
                 instructions,
                 description,
+                taskKind,
+                timingMode,
+                clockTimes,
+                intervalHours,
+                firstDueAt: timingMode === 'interval' || timingMode === 'once' ? new Date(firstDueAt).toISOString() : '',
+                latePolicy,
               }),
             reset,
           );
         }}
       >
-        <div className="flex gap-2" role="group" aria-label="Kind of line">
-          {(['medicine', 'instruction'] as const).map((k) => (
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Kind of line">
+          {(
+            [
+              ['medicine', 'Medicine'],
+              ['task', 'Timed task'],
+              ['instruction', 'Instruction'],
+            ] as const
+          ).map(([k, label]) => (
             <button
               key={k}
               type="button"
               aria-pressed={kind === k}
-              onClick={() => setKind(k)}
+              onClick={() => {
+                setKind(k);
+                if (k === 'task' && timingMode !== 'clock' && timingMode !== 'interval') setTimingMode('interval');
+              }}
               className={cn('min-h-11 rounded-lg px-4 text-sm font-medium ring-1 ring-inset', kind === k ? 'bg-brand-600 text-white ring-brand-600' : 'bg-white ring-ink-300')}
             >
-              {k === 'medicine' ? 'Medicine' : 'Instruction'}
+              {label}
             </button>
           ))}
         </div>
@@ -306,7 +351,7 @@ function NewLine(props: {
               </label>
               <label className="block text-sm font-medium text-ink-700">
                 Frequency
-                <input value={frequency} onChange={(e) => setFrequency(e.target.value)} required maxLength={30} list="mar-frequencies" placeholder="BD, TDS, q8h…" className={field} />
+                <input value={frequency} onChange={(e) => onFrequency(e.target.value)} required maxLength={30} list="mar-frequencies" placeholder="BD, TDS, q8h…" className={field} />
                 <datalist id="mar-frequencies">
                   {FREQUENCY_PRESETS.map((f) => (
                     <option key={f} value={f} />
@@ -319,12 +364,84 @@ function NewLine(props: {
               <input value={instructions} onChange={(e) => setInstructions(e.target.value)} maxLength={200} placeholder="e.g. after food, over 30 min" className={field} />
             </label>
           </>
+        ) : kind === 'task' ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block text-sm font-medium text-ink-700">
+              Task
+              <select value={taskKind} onChange={(e) => setTaskKind(e.target.value as TaskKind)} className={field}>
+                {Object.entries(TASK_KINDS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-sm font-medium text-ink-700">
+              What exactly
+              <input value={description} onChange={(e) => setDescription(e.target.value)} required maxLength={200} placeholder="e.g. TPR and BP, RBS before meals" className={field} />
+            </label>
+            {taskKind === 'vitals' || taskKind === 'bsl' ? (
+              <p className="text-xs text-ink-500 sm:col-span-2">Done automatically when the reading is charted on the T.P.R. chart within its window.</p>
+            ) : null}
+          </div>
         ) : (
           <label className="block text-sm font-medium text-ink-700">
             Instruction
             <input value={description} onChange={(e) => setDescription(e.target.value)} required maxLength={200} placeholder="e.g. Keep head end raised 30°" className={field} />
           </label>
         )}
+
+        {timed ? (
+          <fieldset className="space-y-3 rounded-xl bg-ink-50 p-3">
+            <legend className="px-1 text-sm font-semibold text-ink-800">When</legend>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="block text-sm font-medium text-ink-700">
+                Timing
+                <select
+                  value={timingMode}
+                  onChange={(e) => {
+                    const mode = e.target.value as typeof timingMode;
+                    setTimingMode(mode);
+                    setLatePolicy(mode === 'interval' ? 'shift' : 'keep');
+                  }}
+                  className={field}
+                >
+                  <option value="clock">At clock times</option>
+                  <option value="interval">Every N hours</option>
+                  {kind === 'medicine' ? <option value="once">Once (STAT)</option> : null}
+                  {kind === 'medicine' ? <option value="prn">When needed (SOS)</option> : null}
+                </select>
+              </label>
+              {timingMode === 'clock' ? (
+                <label className="block text-sm font-medium text-ink-700 sm:col-span-2">
+                  Clock times
+                  <input value={clockTimes} onChange={(e) => setClockTimes(e.target.value)} required placeholder="08:00, 20:00" className={field} />
+                </label>
+              ) : null}
+              {timingMode === 'interval' ? (
+                <label className="block text-sm font-medium text-ink-700">
+                  Every (hours)
+                  <input value={intervalHours} onChange={(e) => setIntervalHours(e.target.value)} required inputMode="decimal" className={field} />
+                </label>
+              ) : null}
+              {timingMode === 'interval' || timingMode === 'once' ? (
+                <label className="block text-sm font-medium text-ink-700">
+                  {timingMode === 'once' ? 'At' : 'First dose at'}
+                  <input type="datetime-local" value={firstDueAt} onChange={(e) => setFirstDueAt(e.target.value)} required className={field} />
+                </label>
+              ) : null}
+            </div>
+            {timingMode === 'clock' || timingMode === 'interval' ? (
+              <label className="block text-sm font-medium text-ink-700">
+                After a late dose
+                <select value={latePolicy} onChange={(e) => setLatePolicy(e.target.value as 'keep' | 'shift')} className={field}>
+                  <option value="keep">Keep the schedule</option>
+                  <option value="shift">Shift: next dose counts from when it was given</option>
+                </select>
+              </label>
+            ) : null}
+          </fieldset>
+        ) : null}
 
         <label className="block text-sm font-medium text-ink-700">
           Ordered by
@@ -362,12 +479,16 @@ function OrderLine(props: {
   channel: 'personal' | 'ward_device';
   enforce: boolean;
   witnessCandidates: Person[];
+  focus: { orderId: string; dueAt: string } | null;
   act: Act;
   pending: boolean;
   time: (iso: string) => string;
 }) {
   const { order } = props;
-  const [panel, setPanel] = useState<'give' | 'not' | 'stop' | null>(null);
+  // Opened from the board: only while that due time is still open on this sheet.
+  const focused =
+    props.focus?.orderId === order.id && props.canRecord && order.instances.some((i) => i.dueAt === props.focus!.dueAt && !i.recorded) ? props.focus.dueAt : null;
+  const [panel, setPanel] = useState<'give' | 'not' | 'done' | 'stop' | null>(focused ? (order.kind === 'task' ? 'done' : 'give') : null);
   const live = order.status === 'active' || order.status === 'awaiting_countersign';
   const mine = order.doctorUserId === props.myUserId;
 
@@ -376,7 +497,9 @@ function OrderLine(props: {
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <p className={cn('text-base font-semibold text-ink-900', order.status === 'struck_out' && 'line-through')}>
+            {order.kind === 'task' && order.taskKind ? `${TASK_KINDS[order.taskKind]}: ` : ''}
             {order.description}
+            {order.timeCritical ? <span className="ml-2 rounded bg-red-600 px-1.5 py-0.5 align-middle text-xs font-bold text-white">⏰ TC</span> : null}
             {order.risk ? (
               <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 align-middle text-xs font-semibold text-red-800">
                 {order.risk.className}
@@ -390,6 +513,7 @@ function OrderLine(props: {
               {order.instructions ? <span className="text-ink-600"> · {order.instructions}</span> : null}
             </p>
           ) : null}
+          {order.timingText ? <p className="text-xs font-medium text-ink-700">Due: {order.timingText}</p> : null}
           <p className="text-xs text-ink-500">
             {order.doctorName}
             {order.transcribed ? ` · written by ${order.enteredBy ?? 'staff'} (telephone/verbal)` : ''} ·{' '}
@@ -414,6 +538,21 @@ function OrderLine(props: {
         </span>
       </div>
 
+      {order.instances.length > 0 ? (
+        <ul className="flex flex-wrap gap-1.5" aria-label="Due times on this sheet">
+          {order.instances.map((i) => (
+            <li key={i.dueAt}>
+              <span className={cn('inline-flex min-h-8 items-center rounded-full px-2.5 text-xs font-semibold', chipTone(i.status, order.timeCritical))} title={STATUS_TEXT[i.status]}>
+                {props.time(i.dueAt)} · {i.status === 'overdue' ? `OVERDUE ${i.overdueMin}m` : STATUS_TEXT[i.status]}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {order.instances.some((i) => i.closeToPrevious) ? (
+        <p className="text-xs font-medium text-amber-800">The next dose comes close after a late one — check with the doctor.</p>
+      ) : null}
+
       {props.doses.length > 0 ? (
         <ul className="space-y-1">
           {props.doses.map((d) => (
@@ -424,6 +563,16 @@ function OrderLine(props: {
 
       {props.canRecord ? (
         <div className="flex flex-wrap gap-2">
+          {live && order.kind === 'task' && props.canAdminister ? (
+            <>
+              <Button type="button" variant={panel === 'done' ? 'primary' : 'secondary'} className="h-11" onClick={() => setPanel(panel === 'done' ? null : 'done')}>
+                Done
+              </Button>
+              <Button type="button" variant="secondary" className="h-11" onClick={() => setPanel(panel === 'not' ? null : 'not')}>
+                Not done
+              </Button>
+            </>
+          ) : null}
           {live && order.kind === 'medicine' && props.canAdminister ? (
             <>
               <Button type="button" variant={panel === 'give' ? 'primary' : 'secondary'} className="h-11" onClick={() => setPanel(panel === 'give' ? null : 'give')}>
@@ -460,8 +609,9 @@ function OrderLine(props: {
         </div>
       ) : null}
 
-      {panel === 'give' ? <GiveForm {...props} onDone={() => setPanel(null)} /> : null}
-      {panel === 'not' ? <NotGivenForm {...props} onDone={() => setPanel(null)} /> : null}
+      {panel === 'give' ? <GiveForm {...props} initialDue={focused} onDone={() => setPanel(null)} /> : null}
+      {panel === 'not' ? <NotGivenForm {...props} initialDue={focused} onDone={() => setPanel(null)} /> : null}
+      {panel === 'done' ? <TaskDoneForm {...props} initialDue={focused} onDone={() => setPanel(null)} /> : null}
       {panel === 'stop' ? (
         <form
           className="flex flex-wrap items-end gap-2"
@@ -481,6 +631,92 @@ function OrderLine(props: {
         </form>
       ) : null}
     </li>
+  );
+}
+
+function chipTone(status: InstanceStatus, timeCritical: boolean): string {
+  switch (status) {
+    case 'overdue':
+      return timeCritical ? 'bg-red-600 text-white' : 'bg-amber-400 text-amber-950';
+    case 'due_now':
+      return 'bg-sky-600 text-white';
+    case 'due_soon':
+      return 'bg-sky-100 text-sky-900';
+    case 'given_on_time':
+      return 'bg-emerald-100 text-emerald-900';
+    case 'given_late':
+    case 'given_early':
+      return 'bg-amber-100 text-amber-900';
+    case 'not_given':
+      return 'bg-ink-200 text-ink-800';
+    default:
+      return 'bg-ink-100 text-ink-600';
+  }
+}
+
+/** The due times a dose can answer: not yet recorded on this sheet; the one opened from the board, else the first open. */
+function useDuePicker(order: CardOrderView, initialDue: string | null) {
+  const open = order.instances.filter((i) => !i.recorded);
+  const first = open.find((i) => i.status === 'overdue' || i.status === 'due_now' || i.status === 'due_soon') ?? open[0];
+  const [dueAt, setDueAt] = useState<string>((initialDue && open.some((i) => i.dueAt === initialDue) ? initialDue : null) ?? first?.dueAt ?? '');
+  return { open, dueAt, setDueAt };
+}
+
+function DuePicker(props: { open: DueChip[]; dueAt: string; setDueAt: (v: string) => void; time: (iso: string) => string }) {
+  if (props.open.length === 0) return null;
+  return (
+    <label className="block text-sm font-medium text-ink-700">
+      For the dose due at
+      <select value={props.dueAt} onChange={(e) => props.setDueAt(e.target.value)} className={field}>
+        {props.open.map((i) => (
+          <option key={i.dueAt} value={i.dueAt}>
+            {props.time(i.dueAt)} · {i.status === 'overdue' ? `overdue ${i.overdueMin} min` : STATUS_TEXT[i.status].toLowerCase()}
+          </option>
+        ))}
+        <option value="">An extra dose, not on the schedule</option>
+      </select>
+    </label>
+  );
+}
+
+function TaskDoneForm(props: { order: CardOrderView; admissionId: string; initialDue: string | null; act: Act; pending: boolean; time: (iso: string) => string; onDone: () => void }) {
+  const [clientId] = useState(() => crypto.randomUUID());
+  const due = useDuePicker(props.order, props.initialDue);
+  return (
+    <form
+      className="space-y-3 rounded-xl bg-ink-50 p-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const form = new FormData(e.currentTarget);
+        props.act(
+          () =>
+            taskDoneDynamic({
+              admissionId: props.admissionId,
+              orderId: props.order.id,
+              clientId,
+              occurredAt: new Date(String(form.get('at'))).toISOString(),
+              note: String(form.get('note') ?? ''),
+              dueAt: due.dueAt || undefined,
+            }),
+          props.onDone,
+        );
+      }}
+    >
+      <DuePicker {...due} time={props.time} />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="block text-sm font-medium text-ink-700">
+          Done at
+          <input type="datetime-local" name="at" defaultValue={localInput(new Date())} required className={field} />
+        </label>
+        <label className="block text-sm font-medium text-ink-700">
+          Note (optional)
+          <input name="note" maxLength={200} className={field} />
+        </label>
+      </div>
+      <Button type="submit" variant="primary" className="h-11" isLoading={props.pending}>
+        Save: done
+      </Button>
+    </form>
   );
 }
 
@@ -576,6 +812,8 @@ function GiveForm(props: {
   channel: 'personal' | 'ward_device';
   enforce: boolean;
   witnessCandidates: Person[];
+  initialDue: string | null;
+  time: (iso: string) => string;
   act: Act;
   pending: boolean;
   onDone: () => void;
@@ -583,6 +821,15 @@ function GiveForm(props: {
   const { order } = props;
   const [clientId, setClientId] = useState(() => crypto.randomUUID());
   const [at, setAt] = useState(() => localInput(new Date()));
+  const due = useDuePicker(order, props.initialDue);
+  // Outside the window of the chosen due time: say why (required in enforce).
+  const offWindow = (() => {
+    if (!due.dueAt) return null;
+    const delay = (new Date(at).getTime() - new Date(due.dueAt).getTime()) / 60_000;
+    if (delay > order.windowAfter) return 'late';
+    if (delay < -order.windowBefore) return 'early';
+    return null;
+  })();
   const [code, setCode] = useState('');
   const [scanned, setScanned] = useState(false);
   // Measured from when the form was opened: a time typed over 2 hours before then is a late entry.
@@ -612,6 +859,8 @@ function GiveForm(props: {
               quantity: Number(form.get('quantity') ?? 1),
               lateReason: String(form.get('lateReason') ?? ''),
               witnessUserId: String(form.get('witness') ?? ''),
+              dueAt: due.dueAt || undefined,
+              timingReason: String(form.get('timingReason') ?? ''),
             });
           },
           () => {
@@ -621,6 +870,7 @@ function GiveForm(props: {
         );
       }}
     >
+      <DuePicker {...due} time={props.time} />
       <div className="grid gap-3 sm:grid-cols-3">
         <label className="block text-sm font-medium text-ink-700">
           Given at
@@ -635,6 +885,12 @@ function GiveForm(props: {
           <input name="quantity" type="number" inputMode="numeric" min={0} max={100} defaultValue={1} className={field} />
         </label>
       </div>
+      {offWindow ? (
+        <label className="block text-sm font-medium text-amber-900">
+          {offWindow === 'late' ? 'Given after its window' : 'Given before its window'}: why? {props.enforce ? '' : '(asked; not required yet)'}
+          <input name="timingReason" required={props.enforce} maxLength={200} className={field} />
+        </label>
+      ) : null}
       {late ? (
         <label className="block text-sm font-medium text-ink-700">
           Over 2 hours ago: why is it written late?
@@ -688,9 +944,10 @@ function GiveForm(props: {
   );
 }
 
-function NotGivenForm(props: { order: CardOrderView; admissionId: string; act: Act; pending: boolean; onDone: () => void }) {
+function NotGivenForm(props: { order: CardOrderView; admissionId: string; initialDue: string | null; time: (iso: string) => string; act: Act; pending: boolean; onDone: () => void }) {
   const [clientId] = useState(() => crypto.randomUUID());
   const [choice, setChoice] = useState<NotGivenChoice>('refused');
+  const due = useDuePicker(props.order, props.initialDue);
   return (
     <form
       className="space-y-3 rounded-xl bg-ink-50 p-3"
@@ -706,11 +963,13 @@ function NotGivenForm(props: { order: CardOrderView; admissionId: string; act: A
               occurredAt: new Date(String(form.get('at'))).toISOString(),
               choice,
               reasonText: String(form.get('reasonText') ?? ''),
+              dueAt: due.dueAt || undefined,
             }),
           props.onDone,
         );
       }}
     >
+      <DuePicker {...due} time={props.time} />
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" role="group" aria-label="Why not given">
         {Object.entries(NOT_GIVEN).map(([value, { label }]) => (
           <button

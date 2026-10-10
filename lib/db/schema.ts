@@ -24,6 +24,7 @@ import {
 import { STAFF_ROLES } from '@/lib/domain/permissions';
 import type { CallOutcome, ClockFrom, ClosingOutcome, ServicePointKind, TestOrderStatus } from '@/lib/domain/test-orders';
 import type { ControlFlag, DoseState, ReasonCode, Route } from '@/lib/domain/mar';
+import type { TaskKind, TimingMode } from '@/lib/domain/due';
 import { APPOINTMENT_STATUSES, QUEUE_ACTIONS } from '@/lib/domain/types';
 
 /**
@@ -1650,6 +1651,11 @@ export const medicines = pgTable(
     sellingPricePaise: integer('selling_price_paise'),
     taxRateBp: integer('tax_rate_bp').notNull().default(0),
     active: boolean('active').notNull().default(true),
+    /** Time-critical (0049, B3b): alerts and escalation when late, once the list is signed off. */
+    timeCritical: boolean('time_critical').notNull().default(false),
+    tcWindowBeforeMin: smallint('tc_window_before_min'),
+    tcWindowAfterMin: smallint('tc_window_after_min'),
+    tcChangedAt: timestamp('tc_changed_at', { withTimezone: true }),
     createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -1921,6 +1927,8 @@ export const wards = pgTable(
     sortOrder: smallint('sort_order').notNull().default(0),
     /** The room charge per day: a charge item of kind 'room'. */
     dailyChargeItemId: uuid('daily_charge_item_id'),
+    /** Who gets level-1 escalations of late time-critical doses (0049). */
+    inChargeUserId: uuid('in_charge_user_id'),
     active: boolean('active').notNull().default(true),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -2776,13 +2784,20 @@ export const treatmentOrders = pgTable(
     admissionId: uuid('admission_id').notNull(),
     encounterId: uuid('encounter_id').notNull(),
     patientId: uuid('patient_id').notNull(),
-    kind: text('kind').$type<'medicine' | 'instruction'>().notNull(),
+    kind: text('kind').$type<'medicine' | 'instruction' | 'task'>().notNull(),
     medicineId: uuid('medicine_id'),
     description: text('description').notNull(),
     dose: text('dose'),
     route: text('route').$type<Route>(),
     frequency: text('frequency'),
     instructions: text('instructions'),
+    /** Timing (0049, B3b): null on lines written before it, which are never due. */
+    timingMode: text('timing_mode').$type<TimingMode>(),
+    clockTimes: smallint('clock_times').array(),
+    intervalMin: smallint('interval_min'),
+    firstDueAt: timestamp('first_due_at', { withTimezone: true }),
+    latePolicy: text('late_policy').$type<'keep' | 'shift'>(),
+    taskKind: text('task_kind').$type<TaskKind>(),
     orderingDoctorId: uuid('ordering_doctor_id').notNull(),
     orderedAt: timestamp('ordered_at', { withTimezone: true }).notNull().defaultNow(),
     enteredByUserId: uuid('entered_by_user_id').references(() => users.id, { onDelete: 'set null' }),
@@ -2830,6 +2845,11 @@ export const marAdministrations = pgTable(
     witnessedByUserId: uuid('witnessed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     witnessedAt: timestamp('witnessed_at', { withTimezone: true }),
     presenceProofId: uuid('presence_proof_id'),
+    /** The due time this dose answers, and how it stood against its window (0049). */
+    dueAt: timestamp('due_at', { withTimezone: true }),
+    timingStatus: text('timing_status').$type<'on_time' | 'late' | 'early' | 'unscheduled'>(),
+    delayMin: integer('delay_min'),
+    timingReason: text('timing_reason'),
     controlFlags: text('control_flags').array().$type<ControlFlag[]>().notNull().default(sql`'{}'::text[]`),
     recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
     recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
@@ -2884,4 +2904,106 @@ export const presenceProofs = pgTable('presence_proofs', {
   channel: text('channel').$type<'personal' | 'ward_device'>(),
   deviceId: text('device_id'),
   sessionId: uuid('session_id'),
+});
+
+/* ------------------------------------------------ due times and alerts (0049, B3b) */
+
+export const timeCriticalSignoffs = pgTable('time_critical_signoffs', {
+  id: id(),
+  hospitalId: uuid('hospital_id')
+    .notNull()
+    .references(() => hospitals.id, { onDelete: 'cascade' }),
+  signedByUserId: uuid('signed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  signedRole: text('signed_role').$type<'doctor' | 'pharmacist' | 'owner'>().notNull(),
+  doctorId: uuid('doctor_id'),
+  signedAt: timestamp('signed_at', { withTimezone: true }).notNull().defaultNow(),
+  list: jsonb('list').$type<{ medicineId: string; name: string; before: number; after: number }[]>().notNull(),
+  windows: jsonb('windows').$type<Record<string, number>>().notNull(),
+  note: text('note'),
+});
+
+/** Clinical. A time-critical alert put off, with its reason (≤ 30 min, twice per dose). */
+export const dueSnoozes = pgTable('due_snoozes', {
+  id: id(),
+  hospitalId: uuid('hospital_id')
+    .notNull()
+    .references(() => hospitals.id, { onDelete: 'cascade' }),
+  orderId: uuid('order_id').notNull(),
+  dueAt: timestamp('due_at', { withTimezone: true }).notNull(),
+  snoozedByUserId: uuid('snoozed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  reason: text('reason').notNull(),
+  snoozedAt: timestamp('snoozed_at', { withTimezone: true }).notNull().defaultNow(),
+  until: timestamp('until', { withTimezone: true }).notNull(),
+});
+
+/** Clinical. One per late time-critical dose and level; acknowledged once (trigger). */
+export const dueEscalations = pgTable('due_escalations', {
+  id: id(),
+  hospitalId: uuid('hospital_id')
+    .notNull()
+    .references(() => hospitals.id, { onDelete: 'cascade' }),
+  branchId: uuid('branch_id').notNull(),
+  admissionId: uuid('admission_id').notNull(),
+  wardId: uuid('ward_id'),
+  orderId: uuid('order_id').notNull(),
+  dueAt: timestamp('due_at', { withTimezone: true }).notNull(),
+  level: smallint('level').$type<1 | 2>().notNull(),
+  mode: text('mode').$type<'observe' | 'live'>().notNull(),
+  target: text('target').$type<'ward_in_charge' | 'ward' | 'on_call' | 'ordering_doctor'>().notNull(),
+  targetUserId: uuid('target_user_id').references(() => users.id, { onDelete: 'set null' }),
+  raisedAt: timestamp('raised_at', { withTimezone: true }).notNull().defaultNow(),
+  acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true }),
+  acknowledgedByUserId: uuid('acknowledged_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+});
+
+export const onCallAssignments = pgTable('on_call_assignments', {
+  id: id(),
+  hospitalId: uuid('hospital_id')
+    .notNull()
+    .references(() => hospitals.id, { onDelete: 'cascade' }),
+  branchId: uuid('branch_id').notNull(),
+  doctorId: uuid('doctor_id').notNull(),
+  startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
+  endsAt: timestamp('ends_at', { withTimezone: true }).notNull(),
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: createdAt(),
+  cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+  cancelledByUserId: uuid('cancelled_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+});
+
+/** Written by the worker; read by the quality page. */
+export const dueRollupsDaily = pgTable(
+  'due_rollups_daily',
+  {
+    hospitalId: uuid('hospital_id').notNull(),
+    wardId: uuid('ward_id').notNull(),
+    day: date('day', { mode: 'string' }).notNull(),
+    timeCritical: boolean('time_critical').notNull(),
+    due: integer('due').notNull(),
+    onTime: integer('on_time').notNull(),
+    late: integer('late').notNull(),
+    early: integer('early').notNull(),
+    notGiven: integer('not_given').notNull(),
+    missed: integer('missed').notNull(),
+    medianDelayMin: integer('median_delay_min'),
+    wouldEscalate: integer('would_escalate').notNull().default(0),
+    escalated: integer('escalated').notNull().default(0),
+    computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.hospitalId, t.wardId, t.day, t.timeCritical] })],
+);
+
+export const alertRatings = pgTable('alert_ratings', {
+  id: id(),
+  hospitalId: uuid('hospital_id')
+    .notNull()
+    .references(() => hospitals.id, { onDelete: 'cascade' }),
+  wardId: uuid('ward_id').notNull(),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  shiftDay: date('shift_day', { mode: 'string' }).notNull(),
+  shift: text('shift').$type<'morning' | 'evening' | 'night'>().notNull(),
+  rating: text('rating').$type<'too_many' | 'about_right' | 'too_few'>().notNull(),
+  createdAt: createdAt(),
 });

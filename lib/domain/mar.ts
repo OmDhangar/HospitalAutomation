@@ -16,6 +16,7 @@
  */
 
 import type { ModuleStage } from '@/lib/modules/registry';
+import { isTaskKind, parseTiming, type TaskKind, type TimingInput } from '@/lib/domain/due';
 
 export class MarError extends Error {}
 
@@ -90,8 +91,9 @@ export const FUTURE_SLACK_MS = 5 * 60_000;
 /* ---------------------------------------------------------------- orders */
 
 export type OrderInput =
-  | { kind: 'medicine'; medicineId: string; dose: string; route: Route; frequency: string; instructions: string | null }
-  | { kind: 'instruction'; description: string };
+  | { kind: 'medicine'; medicineId: string; dose: string; route: Route; frequency: string; instructions: string | null; timing: TimingInput }
+  | { kind: 'instruction'; description: string }
+  | { kind: 'task'; taskKind: TaskKind; description: string; timing: TimingInput };
 
 const tidy = (value: unknown, max: number, label: string, required: boolean): string | null => {
   const text = String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -104,17 +106,39 @@ const tidy = (value: unknown, max: number, label: string, required: boolean): st
 };
 
 /** Checks a treatment line as typed. Throws MarError. */
-export function parseOrder(raw: {
-  kind: string;
-  medicineId?: string | null;
-  dose?: string | null;
-  route?: string | null;
-  frequency?: string | null;
-  instructions?: string | null;
-  description?: string | null;
-}): OrderInput {
+export function parseOrder(
+  raw: {
+    kind: string;
+    medicineId?: string | null;
+    dose?: string | null;
+    route?: string | null;
+    frequency?: string | null;
+    instructions?: string | null;
+    description?: string | null;
+    taskKind?: string | null;
+    timingMode?: string | null;
+    clockTimes?: string | null;
+    intervalHours?: string | number | null;
+    firstDueAt?: string | null;
+    latePolicy?: string | null;
+  },
+  now: Date = new Date(),
+): OrderInput {
+  const timing = (frequency: string | null) => {
+    try {
+      return parseTiming(raw, frequency, now);
+    } catch (err) {
+      throw new MarError((err as Error).message);
+    }
+  };
   if (raw.kind === 'instruction') {
     return { kind: 'instruction', description: tidy(raw.description, 200, 'instruction', true)! };
+  }
+  if (raw.kind === 'task') {
+    if (!raw.taskKind || !isTaskKind(raw.taskKind)) throw new MarError('Choose the task');
+    const t = timing(null);
+    if (t.mode !== 'clock' && t.mode !== 'interval') throw new MarError('A task needs clock times or an interval');
+    return { kind: 'task', taskKind: raw.taskKind, description: tidy(raw.description, 200, 'task', true)!, timing: t };
   }
   if (raw.kind !== 'medicine') throw new MarError('Choose a medicine or an instruction');
   if (!raw.medicineId || !/^[0-9a-f-]{36}$/i.test(raw.medicineId)) throw new MarError('Choose the medicine');
@@ -127,6 +151,7 @@ export function parseOrder(raw: {
     route,
     frequency: tidy(raw.frequency, 30, 'frequency', true)!,
     instructions: tidy(raw.instructions, 200, 'instructions', false),
+    timing: timing(tidy(raw.frequency, 30, 'frequency', true)),
   };
 }
 

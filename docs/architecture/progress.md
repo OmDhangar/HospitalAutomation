@@ -477,3 +477,53 @@ print and the bed-code labels.
 generator — a small dependency or our own encoder), witness at waste and the stock ledger posting
 (B4b), due times, windows, time-critical alerts and the due board (B3b), offline doses (B3b's offline
 board), diet and blood lines, allergy checks (B2), legal item L5 (PIN e-signature validity).
+
+**Bed QR codes (11 Oct 2026):** our own QR encoder (`lib/qr/encode.ts`, ADR-034) puts `QB1:` + the
+bed code on every bed label as an SVG; the give form has "Scan bed QR" where the browser has
+`BarcodeDetector` (the code then counts as scanned, `method = 'qr'`), and typing the code still
+works everywhere. Tests: the ISO 18004 "HELLO WORLD" 1-M codewords and error correction, format and
+version bits, and jsQR decoding 209 generated codes across modes, versions and ECC levels.
+
+**B3b due engine, due board and time-critical alerts (11 Oct 2026), migration 0049 (ADR-034):**
+- **Timing on a line:** clock times ("8, 20") or every N hours from a first dose, keep or shift after
+  a late dose (suggested from the frequency; shift for interval antibiotics). Lines can also be
+  **tasks** (vitals, turning, drain check, glucose, other) with the same timing, done with one tap.
+- **Due engine** (`lib/domain/due.ts`, pure): instances, two-sided windows, statuses (due soon, due,
+  overdue, given on time/late/early, not given, missed), a give matched to its due time (or a chart
+  reading inside the window for vitals tasks), escalation times. Settings → Treatment timing (owner):
+  windows, due-soon lead, L1/L2 delays.
+- **Time-critical list:** the owner marks medicines (starter suggestions: IV antibiotics,
+  anticoagulants, insulin, anti-epileptics, Parkinson's, immunosuppressants…) with their own windows;
+  a doctor-linked login signs the list off; any change clears the sign-off. Until signed, nothing is
+  treated as time-critical.
+- **Giving against a due time:** the treatment tab shows each line's due chips; Give / Not given pick
+  the due time; late or early outside the window asks for a reason (required in enforce).
+- **Due board** (`/ipd/ward/[id]/due`): every occupied bed's lines in 2-hour columns 8 am–6 am on a
+  tablet, a "rounds" list on a phone (overdue first), a chime on ward tablets for new overdue time-critical doses (not in observe, not in quiet hours),
+  snooze (≤ 30 minutes, twice per dose, with a reason), acknowledge escalations, and the once-a-shift
+  alert-volume question. It caches its last payload and recomputes offline with "last synced" shown
+  in amber after 5 minutes and red after 15. Ward tiles show "n due / n overdue" badges.
+- **Escalation sweep** (every tick): L1 to the ward's nurse in charge (Settings → Treatment timing),
+  L2 to the on-call doctor (roster there) else the ordering doctor; one row per dose and level; red
+  banners in IPD for the right people until acknowledged or the dose is recorded. Hourly roll-ups by
+  ward, day and time-critical vs other feed IPD → Dose timing (on time %, late, early, not given,
+  missed, median delay, escalations, alert-volume answers).
+- **Round-list print** (`/print/round-list?ward=`): the same grid on paper with ✓ H R ✗ and empty
+  boxes for doses still due, for the downtime binder.
+- Permissions `ipd.dueBoard`, `ipd.dueConfigure`, `ipd.tcList`, `ipd.dueQuality`. Evidence:
+  `due_escalation.*`, `due_snooze.*`, `time_critical_signoff.*`, `on_call_assignment.*`, `mar.*`
+  settings changes.
+
+**Verified:** typecheck, lint on the changed files; 818 unit tests (`due.test.ts` 14, QR tests);
+`due.integration.test.ts` (8: timing stored, due instances and statuses, give against a due time with
+late/early reasons in enforce, tasks done, snooze limits, the sweep per stage and its targets,
+acknowledge, roll-ups, the sign-off gate) and the IPD integration suites (166); migration lint and a
+second run of 0049. Browser check on the demo hospital: the owner marks Ceftriaxone time-critical and
+signs the list; the doctor writes a 12-hourly time-critical line and a 4-hourly vitals task; in
+enforce the sweep raises L1 (ward) and L2 (doctor) with their banners; the due board at 1280 and
+375 px (no sideways scroll) and offline from its cache; Give from the board opens the late-reason
+prompt; the round-list print and the quality page.
+**Not applied to production:** 0049 is for the owner to apply (`npm run db:migrate:plan` first).
+**Not done in B3b:** recording doses offline (the board reads offline; recording waits for the
+outbox to take MAR rows), push notifications to phones (banners and the board chime only), witness at
+waste and the stock posting (B4b), the clinical sign-off of the real list (legal item L8), L5.

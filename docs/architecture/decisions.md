@@ -473,3 +473,33 @@ any of them blocks a nurse at the bedside (§12 stages); recording what was miss
 and the evidence log a trail from day one. Typed codes work on every phone today; `BarcodeDetector`
 is missing from many browsers and printing QR needs a generator we have not chosen.
 
+### ADR-034 · Due times are computed, not stored; time-critical alerts wait for a signed list
+*11 Oct 2026 · IPD sheets plan B3b (§7.3, D-TIMECRIT, D-ESC)*
+
+**Decision:** A treatment line stores its timing (clock times or every N hours from a first dose,
+and whether a late dose keeps the schedule or shifts it); due instances are computed from that and
+the doses recorded against them by one pure function (`lib/domain/due.ts`) used by the server, the
+due board in the browser and the round-list print. Nothing per instance is stored except what
+happened: a dose carries the `due_at` it answers, its timing status and delay, and a reason when
+late or early; snoozes and escalations are their own append-only rows. Windows are two-sided (30
+minutes for time-critical medicines, 60 for others, per medicine where the list says so). Escalation:
+L1 to the ward (nurse in charge) at window end + 15 minutes, L2 to the on-call doctor (else the
+ordering doctor) at + 45. Stages: in `observe` escalations are counted only (`mode = 'observe'`); in
+`warn` L1 is shown; in `enforce` L1 and L2 are shown and a late or early dose needs a reason. A
+medicine is treated as time-critical only after a doctor has signed off the hospital's list and its
+windows; any later change to the list or windows clears the sign-off until signed again. The due
+board keeps its last payload on the tablet and recomputes statuses offline, showing how old the data
+is; doses are still recorded online only.
+
+**Why:** stored instances drift the moment an order is changed, stopped or a dose is shifted; computing
+them keeps one source of truth and lets the board work from a cached payload. The sign-off gate is
+D-TIMECRIT: a vendor's starter list must not page a doctor until a clinician owns it (legal item L8).
+Showing escalations only from `warn` gives the pilot ward data on how often alerts would fire (and a
+once-a-shift "too many / about right / too few" answer) before anyone is woken by them. Nurses'
+timing is reported per ward and hour as a staffing signal (`due_rollups_daily`), never per person.
+
+**QR codes:** the bed label carries `QB1:` + the bed code as a QR made by our own encoder
+(`lib/qr/encode.ts`: byte and alphanumeric modes, versions 1–10, all ECC levels, checked against the
+ISO 18004 worked example and decoded by jsQR in tests), not a dependency. Scanning uses the browser's
+`BarcodeDetector` where present; typing the code always works.
+

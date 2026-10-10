@@ -12,6 +12,7 @@ import { loadDaySessionsInTx } from './scheduling';
 import { expireLapsedSubscriptions } from './subscriptions';
 import { raiseTestFollowUps } from './test-order-clock';
 import { sweepWitnesses } from './mar';
+import { computeDueRollups, sweepDueEscalations } from './due';
 
 /**
  * The housekeeping nobody was running.
@@ -166,6 +167,10 @@ export async function resumePausedAppointments(now: Date = new Date()): Promise<
 const SLOT_SESSION_LOOKAHEAD_MS = 4 * 60 * 60 * 1000;
 
 /** Monthly-partitioned tables (plan §9.4 rule 8) and how far ahead their months are made. */
+/** The due roll-ups (B3b) are refreshed hourly, never per request. */
+const DUE_ROLLUP_EVERY_MS = 60 * 60 * 1000;
+let dueRollupsAt = 0;
+
 const PARTITIONED_TABLES = ['chart_entries', 'acct_events', 'mar_administrations'] as const;
 const PARTITION_MONTHS_AHEAD = 12;
 const PARTITION_CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
@@ -283,6 +288,8 @@ export type SweepResult = {
   /** MAR (B3-min): witness requests closed unanswered, and gives flagged as unwitnessed after 15 minutes. */
   witnessRequestsExpired: number;
   witnessesLate: number;
+  /** B3b: live escalations of late time-critical doses raised this tick. */
+  dueEscalations: number;
 };
 
 /**
@@ -304,6 +311,7 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
     testTasksEscalated: 0,
     witnessRequestsExpired: 0,
     witnessesLate: 0,
+    dueEscalations: 0,
   };
 
   try {
@@ -389,6 +397,21 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
   }
 
   try {
+    // Time-critical doses (B3b): level 1 / level 2 escalations of overdue doses, every tick.
+    const escalations = await sweepDueEscalations(now);
+    result.dueEscalations = escalations.live;
+    if (escalations.observed > 0) console.log('[sweeps] escalations counted in observe', escalations.observed);
+    // The on-time figures, once an hour.
+    if (now.getTime() - dueRollupsAt >= DUE_ROLLUP_EVERY_MS) {
+      dueRollupsAt = now.getTime();
+      await computeDueRollups(now);
+    }
+  } catch (error) {
+    // Logged loudly: time-critical alerts depend on this sweep (plan §9 alerting).
+    console.error('[sweeps] CRITICAL due escalation sweep failed', error);
+  }
+
+  try {
     // Test follow-up (C4a): stamps each "not arrived" task and each escalation to the admin.
     const tests = await raiseTestFollowUps(now);
     result.testTasksRaised = tests.raised;
@@ -400,7 +423,7 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
   const total =
     result.appointmentsMarkedNoShow + result.appointmentsResumed + result.slotBookingsEnqueued +
     result.subscriptionsExpired + result.paymentLinksExpired + result.bedDaysCharged +
-    result.testTasksRaised + result.testTasksEscalated + result.witnessRequestsExpired + result.witnessesLate;
+    result.testTasksRaised + result.testTasksEscalated + result.witnessRequestsExpired + result.witnessesLate + result.dueEscalations;
   if (total > 0) {
     console.log('[sweeps] completed', JSON.stringify(result));
   }

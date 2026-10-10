@@ -141,6 +141,17 @@ const PERMISSIONS = {
   'ipd.witness': ['owner', 'doctor', 'nurse'],
   /** Print the bed codes that prove a nurse is at the bedside. */
   'ipd.bedCodes': ['owner'],
+  /**
+   * Due times (B3b): the ward's due board and snoozing a time-critical alert
+   * are the ward's; the windows, chime, roster and ward in-charge are the
+   * owner's; the time-critical list is the doctors' to set and sign off (the
+   * service checks the signer is linked to a doctor); the quality figures
+   * are the owner's.
+   */
+  'ipd.dueBoard': ['owner', 'doctor', 'nurse'],
+  'ipd.dueConfigure': ['owner'],
+  'ipd.tcList': ['owner', 'doctor'],
+  'ipd.dueQuality': ['owner'],
 
   /**
    * Test orders and follow-up (IPD sheets plan C4a). The doctor sends a

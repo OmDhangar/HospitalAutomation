@@ -220,6 +220,15 @@ const LABELS: Record<string, string> = {
   'witness_request.changed': 'Witness decided',
   'presence_proof.created': 'Bed code entered at the bedside',
   'mar.unlinked_risk_give': 'Risk-class medicine recorded without a treatment line',
+  'due_escalation.created': 'Late time-critical dose escalated',
+  'due_escalation.changed': 'Escalation acknowledged',
+  'due_snooze.created': 'Time-critical alert put off',
+  'time_critical_signoff.created': 'Time-critical list signed off',
+  'on_call_assignment.created': 'Doctor on call added',
+  'on_call_assignment.changed': 'Doctor on call removed',
+  'mar.time_critical_set': 'Medicine marked time-critical (or not)',
+  'mar.due_settings': 'Dose windows or escalation changed',
+  'mar.ward_in_charge': 'Ward in-charge set',
   'mar.bed_code_wrong': 'Wrong bed code entered',
   'stock.risk_class_witness': 'Risk class witness rule changed',
   'evidence.verified': 'Evidence log checked',
@@ -237,7 +246,10 @@ export const EVENT_FAMILIES = {
   billing: { label: 'Billing', prefixes: ['bill_item.', 'billing.', 'payment.'] },
   admissions: { label: 'Admissions and beds', prefixes: ['admission.', 'bed_assignment.', 'ipd.'] },
   stock: { label: 'Risk-class stock', prefixes: ['stock_', 'stock.'] },
-  treatment: { label: 'Treatment and MAR', prefixes: ['treatment_order', 'mar_', 'mar.', 'witness_request', 'presence_proof'] },
+  treatment: {
+    label: 'Treatment and MAR',
+    prefixes: ['treatment_order', 'mar_', 'mar.', 'witness_request', 'presence_proof', 'due_', 'time_critical', 'on_call'],
+  },
   tests: { label: 'Tests and follow-up', prefixes: ['test_', 'service_point', 'tests.'] },
   records: { label: 'Records opened', prefixes: ['record_access.'] },
   access: { label: 'Sign-in and access', prefixes: ['auth.', 'support.', 'policy_acknowledgement.'] },
@@ -377,6 +389,11 @@ export function eventDetail(action: string, payload: Record<string, unknown>): s
       if (flags.length) parts.push(`flags: ${flags.join(', ')}`);
       return parts.filter(Boolean).join(' · ') || null;
     }
+    case 'due_escalation.created':
+    case 'due_escalation.changed':
+      return [num('level') ? `level ${num('level')}` : null, text('mode') === 'observe' ? 'counted only (observe)' : null, text('target')?.replace(/_/g, ' ') ?? null]
+        .filter(Boolean)
+        .join(' · ');
     case 'witness_request.created':
     case 'witness_request.changed':
       return [text('method') === 'ward_device' ? 'on the ward tablet' : 'by approval', text('status')].filter(Boolean).join(' · ');

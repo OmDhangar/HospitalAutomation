@@ -13,6 +13,7 @@ import {
   proveAtBed,
   recordGive,
   recordNotGiven,
+  recordTaskDone,
   stopOrder,
   strikeOutDose,
   strikeOutOrder,
@@ -20,6 +21,8 @@ import {
   type Actor,
 } from '@/lib/services/mar';
 import { resolveWardDevice } from '@/lib/services/staff-access';
+import { getMarConfig, snoozeDue } from '@/lib/services/due';
+import type { DueContext } from '@/lib/services/mar';
 
 /**
  * The treatment card's actions (IPD sheets plan B3-min). Each returns a
@@ -46,6 +49,20 @@ const actorOf = (session: Awaited<ReturnType<typeof requireWritableSession>>): A
   wardDeviceId: session.wardDeviceId,
 });
 
+/** The hospital's windows and stage, for a dose recorded against a due time (B3b). */
+async function dueContext(session: Awaited<ReturnType<typeof requireWritableSession>>, dueAt: string | undefined, reason: string | undefined): Promise<DueContext> {
+  const config = await getMarConfig(session.hospitalId);
+  const at = dueAt ? new Date(dueAt) : null;
+  return {
+    dueAt: at && !Number.isNaN(at.getTime()) ? at : null,
+    reason: reason?.trim() || null,
+    settings: config.settings,
+    tcActive: config.tcActive,
+    timezone: session.timezone,
+    enforce: config.stage === 'enforce',
+  };
+}
+
 async function run(fn: () => Promise<Result>): Promise<Result> {
   try {
     return await fn();
@@ -69,6 +86,12 @@ export async function createOrderDynamic(args: {
   frequency?: string;
   instructions?: string;
   description?: string;
+  taskKind?: string;
+  timingMode?: string;
+  clockTimes?: string;
+  intervalHours?: string;
+  firstDueAt?: string;
+  latePolicy?: string;
 }): Promise<Result> {
   return run(async () => {
     const session = await requireWritableSession();
@@ -124,6 +147,8 @@ export async function giveDynamic(args: {
   quantity: number;
   lateReason: string;
   witnessUserId: string;
+  dueAt?: string;
+  timingReason?: string;
 }): Promise<Result> {
   return run(async () => {
     const session = await authorize('ipd.administer', args.admissionId);
@@ -141,6 +166,7 @@ export async function giveDynamic(args: {
       clientId: args.clientId,
       actor: actorOf(session),
       stage,
+      due: await dueContext(session, args.dueAt, args.timingReason),
     });
     const witness =
       outcome.witness === 'ward_device'
@@ -161,6 +187,7 @@ export async function notGivenDynamic(args: {
   occurredAt: string;
   choice: string;
   reasonText: string;
+  dueAt?: string;
 }): Promise<Result> {
   return run(async () => {
     const session = await authorize('ipd.administer', args.admissionId);
@@ -175,6 +202,7 @@ export async function notGivenDynamic(args: {
       reasonText: args.reasonText || null,
       clientId: args.clientId,
       actor: actorOf(session),
+      due: await dueContext(session, args.dueAt, undefined),
     });
     return ok('Noted as not given');
   });
@@ -232,5 +260,39 @@ export async function witnessOnDeviceDynamic(args: { admissionId: string; reques
       sessionId: session.sessionId,
     });
     return ok('Witnessed');
+  });
+}
+
+export async function taskDoneDynamic(args: { admissionId: string; orderId: string; clientId: string; occurredAt: string; note: string; dueAt?: string }): Promise<Result> {
+  return run(async () => {
+    const session = await authorize('ipd.administer', args.admissionId);
+    const occurredAt = new Date(args.occurredAt);
+    if (!isId(args.clientId) || Number.isNaN(occurredAt.getTime())) throw new MarError('Reload the page and try again');
+    await recordTaskDone({
+      hospitalId: session.hospitalId,
+      orderId: args.orderId,
+      occurredAt,
+      note: args.note || null,
+      clientId: args.clientId,
+      actor: actorOf(session),
+      due: await dueContext(session, args.dueAt, undefined),
+    });
+    return ok('Marked done');
+  });
+}
+
+/** Puts off a time-critical alert: a reason, up to 30 minutes, twice per dose (§7.10). */
+export async function snoozeDynamic(args: { admissionId: string; orderId: string; dueAt: string; minutes: number; reason: string }): Promise<Result> {
+  return run(async () => {
+    const session = await authorize('ipd.dueBoard', args.admissionId);
+    await snoozeDue({
+      hospitalId: session.hospitalId,
+      orderId: args.orderId,
+      dueAt: new Date(args.dueAt),
+      minutes: Number(args.minutes),
+      reason: args.reason,
+      actorUserId: session.userId,
+    });
+    return ok(`Alert put off for ${args.minutes} minutes`);
   });
 }

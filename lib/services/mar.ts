@@ -43,6 +43,16 @@ import {
   type Route,
 } from '@/lib/domain/mar';
 import { medicineLabel } from '@/lib/domain/medicine';
+import {
+  instancesFor,
+  timingFromRow,
+  timingOfGive,
+  windowFor,
+  type DueRecord,
+  type DueSettings,
+  type TaskKind,
+  type Timing,
+} from '@/lib/domain/due';
 import type { StaffRole } from '@/lib/domain/permissions';
 import { chartDayWindow } from '@/lib/domain/tpr';
 import type { ModuleStage } from '@/lib/modules/registry';
@@ -175,6 +185,7 @@ export async function createOrder(args: {
       } else {
         description = args.input.description;
       }
+      const timing = args.input.kind === 'instruction' ? null : args.input.timing;
 
       const origin = await requestOrigin();
       const [row] = await tx
@@ -192,6 +203,12 @@ export async function createOrder(args: {
           route: args.input.kind === 'medicine' ? args.input.route : null,
           frequency: args.input.kind === 'medicine' ? args.input.frequency : null,
           instructions: args.input.kind === 'medicine' ? args.input.instructions : null,
+          taskKind: args.input.kind === 'task' ? args.input.taskKind : null,
+          timingMode: timing?.mode ?? null,
+          clockTimes: timing?.mode === 'clock' ? timing.clockTimes : null,
+          intervalMin: timing?.mode === 'interval' ? timing.intervalMin : null,
+          firstDueAt: timing && (timing.mode === 'interval' || timing.mode === 'once') ? timing.firstDueAt : null,
+          latePolicy: timing && (timing.mode === 'clock' || timing.mode === 'interval') ? timing.latePolicy : null,
           orderingDoctorId: doctor.id,
           orderedAt: now,
           enteredByUserId: args.actor.userId,
@@ -206,6 +223,41 @@ export async function createOrder(args: {
     },
     clinical,
   );
+}
+
+type LockedOrder = Awaited<ReturnType<typeof lockOrderInTx>>;
+
+/** What a dose against `dueAt` means for its timing, after checking the due time is one of the line's and still open. */
+export type DueContext = { dueAt: Date | null; reason: string | null; settings: DueSettings; tcActive: boolean; timezone: string; enforce: boolean };
+
+async function dueTimingInTx(tx: Tx, order: LockedOrder, due: DueContext | undefined, occurredAt: Date) {
+  const timing = timingFromRow(order);
+  if (!due || !timing || timing.mode === 'prn') {
+    return { dueAt: null, timingStatus: timing && timing.mode !== 'prn' ? ('unscheduled' as const) : null, delayMin: null, timingReason: null };
+  }
+  if (!due.dueAt) return { dueAt: null, timingStatus: 'unscheduled' as const, delayMin: null, timingReason: due.reason };
+  const window = windowFor({ timeCritical: Boolean(order.timeCritical) && due.tcActive, medicineBefore: order.tcBefore, medicineAfter: order.tcAfter, settings: due.settings });
+  const records = await tx
+    .select({ id: marAdministrations.id, dueAt: marAdministrations.dueAt, state: marAdministrations.state, occurredAt: marAdministrations.occurredAt })
+    .from(marAdministrations)
+    .where(and(eq(marAdministrations.orderId, order.id), isNull(marAdministrations.voidedAt)));
+  const instances = instancesFor({
+    line: { timing, orderedAt: order.orderedAt, stoppedAt: order.stoppedAt, windowBeforeMin: window.before, windowAfterMin: window.after },
+    records: records as DueRecord[],
+    from: new Date(due.dueAt.getTime() - 1),
+    to: new Date(due.dueAt.getTime() + 1),
+    now: occurredAt,
+    timezone: due.timezone,
+    settings: due.settings,
+  });
+  const instance = instances.find((i) => i.dueAt.getTime() === due.dueAt!.getTime());
+  if (!instance) throw new MarError('That is not one of this line’s due times');
+  if (instance.record && !instance.record.fromChart) throw new MarError('This dose is already recorded');
+  const { status, delayMin } = timingOfGive({ dueAt: due.dueAt, occurredAt, windowBeforeMin: window.before, windowAfterMin: window.after });
+  if (status !== 'on_time' && due.enforce && !due.reason) {
+    throw new MarError(status === 'late' ? 'Given after its window: write why' : 'Given before its window: write why');
+  }
+  return { dueAt: due.dueAt, timingStatus: status, delayMin, timingReason: status === 'on_time' ? null : due.reason };
 }
 
 async function lockOrderInTx(tx: Tx, orderId: string) {
@@ -225,9 +277,19 @@ async function lockOrderInTx(tx: Tx, orderId: string) {
       enteredByUserId: treatmentOrders.enteredByUserId,
       orderingDoctorId: treatmentOrders.orderingDoctorId,
       doctorUserId: doctors.userId,
+      orderedAt: treatmentOrders.orderedAt,
+      timingMode: treatmentOrders.timingMode,
+      clockTimes: treatmentOrders.clockTimes,
+      intervalMin: treatmentOrders.intervalMin,
+      firstDueAt: treatmentOrders.firstDueAt,
+      latePolicy: treatmentOrders.latePolicy,
+      timeCritical: medicines.timeCritical,
+      tcBefore: medicines.tcWindowBeforeMin,
+      tcAfter: medicines.tcWindowAfterMin,
     })
     .from(treatmentOrders)
     .innerJoin(doctors, eq(doctors.id, treatmentOrders.orderingDoctorId))
+    .leftJoin(medicines, eq(medicines.id, treatmentOrders.medicineId))
     .where(eq(treatmentOrders.id, orderId))
     .for('update', { of: treatmentOrders });
   if (!order) throw new MarError('Treatment line not found');
@@ -368,6 +430,8 @@ export async function recordGive(args: {
   clientId: string;
   actor: Actor;
   stage: ModuleStage;
+  /** The due time this dose answers (B3b); absent for a dose outside the schedule. */
+  due?: DueContext;
   now?: Date;
 }): Promise<DoseOutcome> {
   const now = args.now ?? new Date();
@@ -413,6 +477,7 @@ export async function recordGive(args: {
       if (check.witness === 'approval') await assertWitnessCandidateInTx(tx, { witnessUserId: args.witnessUserId!, actorUserId: args.actor.userId });
       if (check.witness === 'ward_device' && !args.actor.wardDeviceId) throw new MarError('Ward tablet not found');
 
+      const timing = await dueTimingInTx(tx, order, args.due, args.occurredAt);
       const origin = await requestOrigin();
       const marId = crypto.randomUUID();
 
@@ -462,6 +527,7 @@ export async function recordGive(args: {
         witnessStatus,
         presenceProofId,
         controlFlags: check.flags,
+        ...timing,
         recordedAt: now,
         recordedByUserId: args.actor.userId,
         recordedChannel: origin?.channel ?? args.actor.channel,
@@ -499,6 +565,7 @@ export async function recordNotGiven(args: {
   reasonText: string | null;
   clientId: string;
   actor: Actor;
+  due?: DueContext;
   now?: Date;
 }): Promise<{ marId: string; repeat: boolean }> {
   const now = args.now ?? new Date();
@@ -514,9 +581,10 @@ export async function recordNotGiven(args: {
       const existing = await existingDoseInTx(tx, args.clientId);
       if (existing) return { marId: existing.id, repeat: true };
       const order = await lockOrderInTx(tx, args.orderId);
-      if (order.kind !== 'medicine') throw new MarError('An instruction has no doses');
+      if (order.kind === 'instruction') throw new MarError('An instruction has no doses');
       if (order.voidedAt) throw new MarError('This line was struck out');
       const admission = await admissionInBedInTx(tx, order.admissionId, true);
+      const timing = await dueTimingInTx(tx, order, args.due ? { ...args.due, enforce: false } : undefined, args.occurredAt);
       const origin = await requestOrigin();
       const [row] = await tx
         .insert(marAdministrations)
@@ -532,6 +600,61 @@ export async function recordNotGiven(args: {
           occurredAt: args.occurredAt,
           reasonCode: reason as ReasonCode,
           reasonText: text,
+          dueAt: timing.dueAt,
+          timingStatus: timing.dueAt ? null : timing.timingStatus,
+          recordedAt: now,
+          recordedByUserId: args.actor.userId,
+          recordedChannel: origin?.channel ?? args.actor.channel,
+          recordedDeviceId: origin?.deviceId ?? null,
+          recordedSessionId: origin?.sessionId ?? null,
+          clientId: args.clientId,
+        })
+        .returning({ id: marAdministrations.id });
+      return { marId: row.id, repeat: false };
+    },
+    clinical,
+  );
+}
+
+/** A timed task (vitals, sugar check, dressing, turning) marked done at the bedside, against its due time. */
+export async function recordTaskDone(args: {
+  hospitalId: string;
+  orderId: string;
+  occurredAt: Date;
+  note: string | null;
+  clientId: string;
+  actor: Actor;
+  due?: DueContext;
+  now?: Date;
+}): Promise<{ marId: string; repeat: boolean }> {
+  const now = args.now ?? new Date();
+  if (args.occurredAt.getTime() > now.getTime() + 5 * 60_000) throw new MarError('The time given is in the future');
+  if (now.getTime() - args.occurredAt.getTime() > 48 * 3_600_000) throw new MarError('That was over 48 hours ago. Tell the desk.');
+  return withTenant(
+    args.hospitalId,
+    async (tx) => {
+      const existing = await existingDoseInTx(tx, args.clientId);
+      if (existing) return { marId: existing.id, repeat: true };
+      const order = await lockOrderInTx(tx, args.orderId);
+      if (order.kind !== 'task') throw new MarError('Only a task line is marked done');
+      if (order.voidedAt || order.stoppedAt) throw new MarError('This line is no longer active');
+      const admission = await admissionInBedInTx(tx, order.admissionId, true);
+      const timing = await dueTimingInTx(tx, order, args.due ? { ...args.due, enforce: false } : undefined, args.occurredAt);
+      const origin = await requestOrigin();
+      const [row] = await tx
+        .insert(marAdministrations)
+        .values({
+          hospitalId: args.hospitalId,
+          branchId: admission.branchId,
+          admissionId: admission.id,
+          encounterId: admission.encounterId,
+          patientId: admission.patientId,
+          orderId: order.id,
+          state: 'given',
+          occurredAt: args.occurredAt,
+          quantity: 0,
+          reasonText: args.note?.replace(/\s+/g, ' ').trim().slice(0, 200) || null,
+          ...timing,
           recordedAt: now,
           recordedByUserId: args.actor.userId,
           recordedChannel: origin?.channel ?? args.actor.channel,
@@ -957,7 +1080,12 @@ export async function proveAtBed(args: { hospitalId: string; admissionId: string
 
 export type CardOrder = {
   id: string;
-  kind: 'medicine' | 'instruction';
+  kind: 'medicine' | 'instruction' | 'task';
+  taskKind: TaskKind | null;
+  timing: Timing | null;
+  timeCritical: boolean;
+  tcBefore: number | null;
+  tcAfter: number | null;
   medicineId: string | null;
   description: string;
   dose: string | null;
@@ -983,6 +1111,10 @@ export type CardDose = {
   orderId: string;
   state: DoseState;
   occurredAt: Date;
+  dueAt: Date | null;
+  timingStatus: 'on_time' | 'late' | 'early' | 'unscheduled' | null;
+  delayMin: number | null;
+  timingReason: string | null;
   dose: string | null;
   quantity: number | null;
   reasonCode: ReasonCode | null;
@@ -1038,11 +1170,21 @@ export async function getTreatmentCard(args: {
           riskName: riskClasses.name,
           riskKind: riskClasses.kind,
           riskWitness: riskClasses.witnessAtGive,
+          taskKind: treatmentOrders.taskKind,
+          timingMode: treatmentOrders.timingMode,
+          clockTimes: treatmentOrders.clockTimes,
+          intervalMin: treatmentOrders.intervalMin,
+          firstDueAt: treatmentOrders.firstDueAt,
+          latePolicy: treatmentOrders.latePolicy,
+          timeCritical: medicines.timeCritical,
+          tcBefore: medicines.tcWindowBeforeMin,
+          tcAfter: medicines.tcWindowAfterMin,
           dosesRecorded: sql<number>`(select count(*)::int from mar_administrations m where m.order_id = ${treatmentOrders.id} and m.voided_at is null)`,
         })
         .from(treatmentOrders)
         .innerJoin(doctors, eq(doctors.id, treatmentOrders.orderingDoctorId))
         .leftJoin(entered, eq(entered.id, treatmentOrders.enteredByUserId))
+        .leftJoin(medicines, eq(medicines.id, treatmentOrders.medicineId))
         .leftJoin(medicineRiskClasses, eq(medicineRiskClasses.medicineId, treatmentOrders.medicineId))
         .leftJoin(riskClasses, and(eq(riskClasses.id, medicineRiskClasses.riskClassId), isNull(riskClasses.archivedAt)))
         .where(eq(treatmentOrders.admissionId, args.admissionId))
@@ -1056,6 +1198,10 @@ export async function getTreatmentCard(args: {
           orderId: marAdministrations.orderId,
           state: marAdministrations.state,
           occurredAt: marAdministrations.occurredAt,
+          dueAt: marAdministrations.dueAt,
+          timingStatus: marAdministrations.timingStatus,
+          delayMin: marAdministrations.delayMin,
+          timingReason: marAdministrations.timingReason,
           dose: marAdministrations.dose,
           quantity: marAdministrations.quantity,
           reasonCode: marAdministrations.reasonCode,
@@ -1105,6 +1251,11 @@ export async function getTreatmentCard(args: {
           return {
             id: o.id,
             kind: o.kind,
+            taskKind: o.taskKind,
+            timing: timingFromRow(o),
+            timeCritical: Boolean(o.timeCritical),
+            tcBefore: o.tcBefore,
+            tcAfter: o.tcAfter,
             medicineId: o.medicineId,
             description: o.description,
             dose: o.dose,
