@@ -23,6 +23,7 @@ export function BedGrid({
   emptyHrefFor,
   selectedBedId,
   label,
+  badgeFor,
 }: {
   beds: readonly CensusBed[];
   timezone: string;
@@ -35,6 +36,8 @@ export function BedGrid({
   emptyHrefFor?: (bed: CensusBed) => string | null;
   selectedBedId?: string | null;
   label: string;
+  /** "1 due", "2 overdue" from the due board (B3b); red once a time-critical dose is escalated. */
+  badgeFor?: (bed: CensusBed) => { text: string; tone: 'due' | 'overdue' | 'escalated' } | null;
 }) {
   if (beds.length === 0) {
     return <p className="px-1 py-3 text-sm text-ink-500">No beds in this ward yet.</p>;
@@ -53,6 +56,7 @@ export function BedGrid({
         const occupant = bed.occupant;
         const href = occupant ? (hrefFor?.(bed) ?? null) : (emptyHrefFor?.(bed) ?? null);
         const going = occupant?.status === 'discharge_ready';
+        const badge = occupant ? (badgeFor?.(bed) ?? null) : null;
         const body = (
           <>
             <span
@@ -81,6 +85,16 @@ export function BedGrid({
                       ? `Day ${dayOfStay(occupant.admittedAt, now, timezone)}`
                       : ''}
                 </span>
+                {badge ? (
+                  <span
+                    className={cn(
+                      'mt-0.5 rounded-full px-1.5 text-[11px] font-bold leading-5',
+                      badge.tone === 'escalated' ? 'bg-red-600 text-white' : badge.tone === 'overdue' ? 'bg-amber-500 text-white' : 'bg-sky-100 text-sky-900',
+                    )}
+                  >
+                    {badge.text}
+                  </span>
+                ) : null}
               </>
             ) : (
               <span className={cn('mt-1 text-ink-400', size === 'lg' ? 'text-sm' : 'text-[11px]')}>Free</span>
@@ -99,7 +113,7 @@ export function BedGrid({
           href && 'hover:ring-brand-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-700',
         );
         const description = occupant
-          ? `Bed ${bed.label}, ${occupant.patientName}${going ? ', going home' : ''}`
+          ? `Bed ${bed.label}, ${occupant.patientName}${going ? ', going home' : ''}${badge ? `, ${badge.text}` : ''}`
           : `Bed ${bed.label}, free`;
         return (
           <li key={bed.id}>

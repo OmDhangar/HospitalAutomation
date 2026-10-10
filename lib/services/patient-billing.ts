@@ -10,6 +10,7 @@ import {
   services,
 } from '@/lib/db/schema';
 import { openEncounterForAppointmentInTx, type EncounterRow } from '@/lib/services/encounters';
+import { markTestOrdersPaid } from '@/lib/services/test-order-clock';
 import {
   calculateBillItem,
   paymentStatus,
@@ -301,7 +302,8 @@ export async function setConsultationPaid(args: {
   waiveCharges?: boolean;
   actorUserId: string;
 }): Promise<Settlement> {
-  return withTenant(args.hospitalId, async (tx) => {
+  let encounterId: string | null = null;
+  const settlement = await withTenant(args.hospitalId, async (tx) => {
     const encounter = await openEncounterForAppointmentInTx(tx, {
       appointmentId: args.appointmentId,
       actorUserId: args.actorUserId,
@@ -309,6 +311,7 @@ export async function setConsultationPaid(args: {
     if (encounter.stage !== 'opd') {
       throw new PatientBillingError('This patient is admitted. Take payment on the IPD bill.');
     }
+    encounterId = encounter.id;
 
     if (args.setFeePaise !== undefined) {
       await setDoctorConsultationFeeInTx(tx, {
@@ -394,6 +397,12 @@ export async function setConsultationPaid(args: {
 
     return settlementInTx(tx, encounter.id);
   });
+
+  // Paid: the tests of this visit are paid too, which starts a "from payment" clock (C4a, D-LABCLOCK).
+  if (args.paid && encounterId && settlement.paidPaise >= settlement.totalPaise) {
+    await markTestOrdersPaid({ hospitalId: args.hospitalId, encounterId });
+  }
+  return settlement;
 }
 
 /**

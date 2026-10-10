@@ -28,6 +28,59 @@ Queue history is append-only, so the answer always exists.
 Never edit the database to "fix" a queue. The event log is the record of what
 happened, and rewriting it destroys the only thing that can settle a dispute.
 
+## A lab says nobody told them, or a test was "never called"
+
+Test follow-up (module **Test follow-up**) keeps every order, call and step.
+
+1. As the owner open **Tests → Today** for that day: the lab's row shows tasks raised and raised to
+   the admin; **By person** shows who called; **Pending** lists every test still open with its last
+   call.
+2. For one test, **Accountability** → filter **Tests and follow-up**, or open its History: order,
+   payment, task raised, escalation (by the system), each call with its outcome and caller, and each
+   step with who did it.
+3. No task raised at all? Check the test has a lab (Settings → Tests and labs → Which test is done
+   where), the lab is open, and — for a "from payment" lab — that the visit was marked Paid. The
+   worker logs `[sweeps] test follow-up failed` if the sweep itself is failing.
+4. A test ordered by mistake: the ordering doctor or the owner cancels it (dashboard card or Today →
+   Cancel test). Never edit `test_orders`; the database refuses it.
+
+## A nurse cannot give a risk-class dose, or a dose shows a flag
+
+The treatment card (module **Treatment card and MAR**) records why.
+
+1. **Refused** only happens in the `enforce` stage (Settings → Modules). The message says what is
+   missing: the doctor's countersign on a telephone order, the bed code (type the code on the bed
+   label, or give it on the ward tablet), or a witness.
+2. **No bed code on the label?** Owner: Settings → IPD → Print bed codes. Codes never change once
+   given; a lost label is reprinted with the same code.
+3. **Witness not coming:** the dose is already saved. The nurse taps "Ask witness" on it to name
+   someone else, or uses the ward tablet. After 15 minutes the dose carries "Witness not there in
+   15 min"; that flag stays even if witnessed later.
+4. **Flags** (in observe or warn) are not errors: they are the record of what a rule found missing.
+   Review them in Accountability → Treatment and MAR, or the dose's History.
+5. Never edit `treatment_orders` or `mar_administrations`; strike out and record again (the database
+   refuses edits).
+
+## Time-critical alerts are not showing, or doses show as late or missed
+
+1. **Stage** (Settings → Modules → Treatment card and MAR): in `observe` escalations are only counted
+   (IPD → Dose timing shows "would"); `warn` shows the ward alert (L1); `enforce` also shows the
+   doctor alert (L2) and asks for a reason on late or early doses.
+2. **Signed list:** Settings → Treatment timing must say the time-critical list is signed. Any change
+   to the list or its windows clears the sign-off; until a doctor signs again nothing is treated as
+   time-critical (doses use the normal window, no alerts).
+3. **Who gets them:** L1 goes to the ward's nurse in charge and anyone on that ward; L2 to the doctor
+   on call (roster in Settings → Treatment timing) or else the ordering doctor. No in-charge set →
+   the ward's staff still see it on the due board.
+4. **Line has no timing:** a line written without clock times or an interval has no due times; the
+   doctor stops it and writes it again with timing.
+5. **"Late" that was on time:** the nurse picked the wrong due time, or the dose was recorded after the
+   fact. Strike out the dose with a reason and record it against the right due time.
+6. **Sweep not running:** escalations and the hourly roll-ups come from the sweep (`/api/internal/tick`);
+   check its last run in the logs before anything else.
+7. **Tablet board stale:** the "last synced" chip turns amber after 5 minutes and red after 15; the
+   board still computes from its cache. Reconnect, then reload. Use the printed round list meanwhile.
+
 ## Patients are not receiving WhatsApp messages
 
 Work down this list in order:

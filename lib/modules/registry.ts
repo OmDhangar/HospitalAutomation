@@ -95,6 +95,32 @@ export const MODULES = [
     defaultState: 'off',
   },
   {
+    id: 'mar',
+    title: 'Treatment card and MAR',
+    description:
+      'The doctor’s treatment card and every dose given or not given. Telephone orders are countersigned by the doctor; risk-class doses need the bed’s code from a personal phone and a second person’s witness.',
+    tier: 'basic',
+    core: false,
+    dependsOn: ['patient_file'],
+    uses: ['stock'],
+    routes: [
+      '/ipd/admissions/[id]/(file)/treatment',
+      '/ipd/witness',
+      '/print/bed-codes',
+      '/ipd/ward/[wardId]/due',
+      '/api/ipd/due',
+      '/print/round-list',
+      '/settings/treatment',
+      '/ipd/quality',
+    ],
+    fileTabs: [{ slug: 'treatment', label: 'Treatment', permission: 'ipd.view', order: 20 }],
+    printSheets: [{ id: 'treatment', label: 'Treatment card and MAR', permission: 'ipd.view', order: 20 }],
+    // Observe: a missing countersign, bedside proof or witness is flagged on the dose. Enforce: refused.
+    hasStages: true,
+    // Off until the owner switches it on, ward by ward (plan §11.3 rule 8, §12).
+    defaultState: 'off',
+  },
+  {
     id: 'stock',
     title: 'Risk-class stock',
     description:
@@ -108,6 +134,23 @@ export const MODULES = [
     printSheets: [],
     // Observe: a count by someone who moved the stock is flagged. Enforce: it is refused.
     hasStages: true,
+    defaultState: 'off',
+  },
+  {
+    id: 'test_follow_up',
+    title: 'Test follow-up',
+    description:
+      'The doctor sends a patient for a test; the lab or room’s own staff see who has not arrived in time, call them and guide them (floor and section in Marathi, Hindi and English), and the owner sees the day’s pending tests per lab and who followed up.',
+    tier: 'basic',
+    core: false,
+    // OPD orders need nothing else; ward orders use the IPD bedside entries when IPD is on.
+    dependsOn: [],
+    uses: ['core_ipd'],
+    routes: ['/tests', '/settings/tests'],
+    fileTabs: [],
+    printSheets: [],
+    hasStages: false,
+    // Off until the owner sets up the labs and switches it on (plan §11.3 rule 8).
     defaultState: 'off',
   },
   {

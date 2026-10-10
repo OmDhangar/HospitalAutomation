@@ -6,7 +6,7 @@ import { assertModule } from '@/lib/auth/modules';
 import { requireWritableSession } from '@/lib/auth/session';
 import { can } from '@/lib/domain/permissions';
 import { LOCATION_KINDS, RISK_KINDS, StockError, type LocationKind, type RiskKind } from '@/lib/domain/stock';
-import { createLocation, createRiskClass, setLocationActive, setMedicineRiskClass } from '@/lib/services/stock';
+import { createLocation, createRiskClass, setLocationActive, setMedicineRiskClass, setRiskClassWitness } from '@/lib/services/stock';
 
 /**
  * Settings → Stock (IPD sheets plan B4a): stores, risk classes and which
@@ -89,4 +89,12 @@ export async function setMedicineRiskClassAction(form: FormData) {
     }),
   );
   back({ saved: 'Saved', q: text(form, 'q') });
+}
+
+/** Whether every give of this class needs a witness on the MAR (B3-min). NDPS always do. */
+export async function setRiskClassWitnessAction(form: FormData) {
+  const session = await authorize();
+  const witnessAtGive = text(form, 'witnessAtGive') === 'true';
+  await attempt(() => setRiskClassWitness({ hospitalId: session.hospitalId, riskClassId: text(form, 'riskClassId'), witnessAtGive, actorUserId: session.userId }));
+  back({ saved: witnessAtGive ? 'Every give of this class now needs a witness' : 'This class no longer needs a witness at give' });
 }

@@ -434,3 +434,72 @@ session, channel or device (none was ever recorded on an entry or access-log row
 (the identity definer functions saw none), or — for a support session — its read-only flag at the
 database (the app's own checks still refused writes). Tests passed because they always set the
 context explicitly; `lib/db/__tests__/request-context.test.ts` now also covers the per-request path.
+
+### ADR-032 · Test follow-up: per-lab clock, the lab's own staff call, the admin sees what was missed
+*11 Oct 2026 · IPD sheets plan Rev 5.1, phase C4a (D-LABCLOCK, D-LABFU, D-LABMSG)*
+
+**Decision:** A test the doctor orders is done at a service point (a lab or a room) with its own
+staff. If the patient has not arrived within the service point's set time — counted from the order
+or from payment, per service point, 30 minutes by default — the patient goes on that staff's list as
+"call now"; if nobody calls within 15 more minutes it is raised to the owner. The staff call (no
+WhatsApp), read the way to the lab in the patient's language, and record what the patient said;
+"went home" and "refused" close the test. Every assigned person counts as on duty: there is no
+roster. OPD tests go on the visit's bill so the desk's Paid tap starts a payment clock; ward tests
+are billed at discharge and always count from the order. Each order keeps the clock it was ordered
+under. The sweep stamps the moment a task was raised and escalated (for the evidence log); the
+screens compute the same states from the times. Orders move forward only and calls are append-only,
+enforced by the database.
+
+**Why:** the pilot hospital's admin asked for it: patients sent for a test get lost or go home, and
+nobody knows until the doctor asks for the report. Making it the lab's own staff's job, with a
+deadline and an escalation, and showing the owner each lab's day and each person's calls, closes the
+loop without a new role or messages that cost money and carry patient data.
+
+### ADR-033 · MAR controls: flags before enforce, typed bed codes, witness at give first
+*11 Oct 2026 · IPD sheets plan B3-min (§7.2, D-WITNESS, D-ORD)*
+
+**Decision:** The treatment card takes any medicine; the controls apply to risk-class medicines only.
+Until the module's stage is `enforce`, a dose missing its countersign, bedside proof or witness is
+saved with a flag on the row (`control_flags`), never refused and never silently passed; in `enforce`
+it is refused with the reason. Bedside proof is the bed's 6-character code (no 0/O/1/I/L) typed within
+5 minutes before the give; QR labels and camera scanning come later on the same code. A witness is
+taken at give (NDPS always, IV psychotropics, and classes the owner marks): on the ward tablet by the
+witness's own PIN, or by approval in the witness's own session — never by typing a PIN on someone
+else's phone. Witness at waste waits for B4b, where waste posts to the stock ledger. A dose is saved
+at once and waits for its witness; a missing witness after 15 minutes is a flag, not a delay to care.
+
+**Why:** the pilot ward needs a few weeks of real use to see how often each control would fire before
+any of them blocks a nurse at the bedside (§12 stages); recording what was missing gives that data
+and the evidence log a trail from day one. Typed codes work on every phone today; `BarcodeDetector`
+is missing from many browsers and printing QR needs a generator we have not chosen.
+
+### ADR-034 · Due times are computed, not stored; time-critical alerts wait for a signed list
+*11 Oct 2026 · IPD sheets plan B3b (§7.3, D-TIMECRIT, D-ESC)*
+
+**Decision:** A treatment line stores its timing (clock times or every N hours from a first dose,
+and whether a late dose keeps the schedule or shifts it); due instances are computed from that and
+the doses recorded against them by one pure function (`lib/domain/due.ts`) used by the server, the
+due board in the browser and the round-list print. Nothing per instance is stored except what
+happened: a dose carries the `due_at` it answers, its timing status and delay, and a reason when
+late or early; snoozes and escalations are their own append-only rows. Windows are two-sided (30
+minutes for time-critical medicines, 60 for others, per medicine where the list says so). Escalation:
+L1 to the ward (nurse in charge) at window end + 15 minutes, L2 to the on-call doctor (else the
+ordering doctor) at + 45. Stages: in `observe` escalations are counted only (`mode = 'observe'`); in
+`warn` L1 is shown; in `enforce` L1 and L2 are shown and a late or early dose needs a reason. A
+medicine is treated as time-critical only after a doctor has signed off the hospital's list and its
+windows; any later change to the list or windows clears the sign-off until signed again. The due
+board keeps its last payload on the tablet and recomputes statuses offline, showing how old the data
+is; doses are still recorded online only.
+
+**Why:** stored instances drift the moment an order is changed, stopped or a dose is shifted; computing
+them keeps one source of truth and lets the board work from a cached payload. The sign-off gate is
+D-TIMECRIT: a vendor's starter list must not page a doctor until a clinician owns it (legal item L8).
+Showing escalations only from `warn` gives the pilot ward data on how often alerts would fire (and a
+once-a-shift "too many / about right / too few" answer) before anyone is woken by them. Nurses'
+timing is reported per ward and hour as a staffing signal (`due_rollups_daily`), never per person.
+
+**QR codes:** the bed label carries `QB1:` + the bed code as a QR made by our own encoder
+(`lib/qr/encode.ts`: byte and alphanumeric modes, versions 1–10, all ECC levels, checked against the
+ISO 18004 worked example and decoded by jsQR in tests), not a dependency. Scanning uses the browser's
+`BarcodeDetector` where present; typing the code always works.
+

@@ -262,6 +262,44 @@ export default async function SettingsPage({ searchParams }: PageProps<'/setting
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 sm:p-5">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
+              <FileTextIcon className="size-5 text-brand-600" />
+              <h2 className="text-base font-bold text-ink-900">Tests and labs</h2>
+            </div>
+            <p className="mt-0.5 text-xs text-ink-500">
+              Labs and rooms, the way to each in Marathi, Hindi and English, their staff, and when a patient who has not arrived is called. Switch “Test follow-up” on under Modules first.
+            </p>
+          </div>
+          <Link href="/settings/tests" className="w-full sm:w-auto">
+            <Button variant="secondary" className="w-full sm:w-auto justify-center">
+              Set up tests
+            </Button>
+          </Link>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 sm:p-5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <FileTextIcon className="size-5 text-brand-600" />
+              <h2 className="text-base font-bold text-ink-900">Treatment and due times</h2>
+            </div>
+            <p className="mt-0.5 text-xs text-ink-500">
+              Time-critical medicines and the doctor’s sign-off, dose windows, who is told when a dose is late, the doctor on call, and the ward-tablet chime. Switch “Treatment card and MAR” on under Modules first.
+            </p>
+          </div>
+          <Link href="/settings/treatment" className="w-full sm:w-auto">
+            <Button variant="secondary" className="w-full sm:w-auto justify-center">
+              Set up due times
+            </Button>
+          </Link>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 sm:p-5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
               <ShieldIcon className="size-5 text-brand-600" />
               <h2 className="text-base font-bold text-ink-900">Staff access</h2>
             </div>

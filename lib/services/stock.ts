@@ -194,7 +194,7 @@ export async function setLocationActive(args: { hospitalId: string; locationId: 
   });
 }
 
-export type RiskClass = { id: string; name: string; kind: RiskKind; countEvery: 'daily' | 'weekly'; medicines: number };
+export type RiskClass = { id: string; name: string; kind: RiskKind; countEvery: 'daily' | 'weekly'; witnessAtGive: boolean; medicines: number };
 
 export async function listRiskClasses(hospitalId: string): Promise<RiskClass[]> {
   return withTenant(hospitalId, (tx) =>
@@ -204,6 +204,7 @@ export async function listRiskClasses(hospitalId: string): Promise<RiskClass[]> 
         name: riskClasses.name,
         kind: riskClasses.kind,
         countEvery: riskClasses.countEvery,
+        witnessAtGive: riskClasses.witnessAtGive,
         medicines: sql<number>`(select count(*)::int from medicine_risk_classes m where m.risk_class_id = ${riskClasses.id})`,
       })
       .from(riskClasses)
@@ -212,7 +213,7 @@ export async function listRiskClasses(hospitalId: string): Promise<RiskClass[]> 
   );
 }
 
-export async function createRiskClass(args: { hospitalId: string; name: string; kind: RiskKind; countEvery: 'daily' | 'weekly'; actorUserId: string }) {
+export async function createRiskClass(args: { hospitalId: string; name: string; kind: RiskKind; countEvery: 'daily' | 'weekly'; witnessAtGive?: boolean; actorUserId: string }) {
   const name = args.name.trim().replace(/\s+/g, ' ');
   if (name.length < 2 || name.length > 60) throw new StockError('Give the risk class a name (2–60 letters)');
   return inTx(args.hospitalId, async (tx) => {
@@ -220,10 +221,23 @@ export async function createRiskClass(args: { hospitalId: string; name: string; 
     if (clash) throw new StockError(`There is already a risk class called ${name}`);
     const [row] = await tx
       .insert(riskClasses)
-      .values({ hospitalId: args.hospitalId, name, kind: args.kind, countEvery: args.countEvery, createdByUserId: args.actorUserId })
+      .values({ hospitalId: args.hospitalId, name, kind: args.kind, countEvery: args.countEvery, witnessAtGive: args.witnessAtGive ?? false, createdByUserId: args.actorUserId })
       .returning({ id: riskClasses.id });
     await audit(tx, { hospitalId: args.hospitalId, actorUserId: args.actorUserId, action: 'stock.risk_class_created', objectType: 'risk_class', objectId: row.id, metadata: { kind: args.kind, countEvery: args.countEvery } });
     return row.id;
+  });
+}
+
+/** Whether gives of this class need a witness on the MAR (B3-min, D-WITNESS). NDPS always do. */
+export async function setRiskClassWitness(args: { hospitalId: string; riskClassId: string; witnessAtGive: boolean; actorUserId: string }) {
+  await inTx(args.hospitalId, async (tx) => {
+    const updated = await tx
+      .update(riskClasses)
+      .set({ witnessAtGive: args.witnessAtGive })
+      .where(eq(riskClasses.id, args.riskClassId))
+      .returning({ id: riskClasses.id });
+    if (updated.length === 0) throw new StockError('Risk class not found');
+    await audit(tx, { hospitalId: args.hospitalId, actorUserId: args.actorUserId, action: 'stock.risk_class_witness', objectType: 'risk_class', objectId: args.riskClassId, metadata: { witnessAtGive: args.witnessAtGive } });
   });
 }
 

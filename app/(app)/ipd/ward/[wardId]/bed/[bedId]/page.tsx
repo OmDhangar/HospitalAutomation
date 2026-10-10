@@ -54,6 +54,9 @@ export default async function RecordPage({ params }: PageProps<'/ipd/ward/[wardI
     can(session.role, 'ipd.chart') && moduleAllows(states, 'charts', 'read')
       ? `/ipd/admissions/${occupant.admissionId}/tpr`
       : null;
+  // The treatment card (B3-min): doses are recorded there.
+  const treatmentHref =
+    can(session.role, 'ipd.administer') && moduleAllows(states, 'mar', 'read') ? `/ipd/admissions/${occupant.admissionId}/treatment` : null;
   const ageSex = [occupant.age !== null ? String(occupant.age) : null, occupant.gender?.[0]?.toUpperCase() ?? null]
     .filter(Boolean)
     .join(' ');
@@ -77,6 +80,7 @@ export default async function RecordPage({ params }: PageProps<'/ipd/ward/[wardI
         recent={picks.recent}
         common={picks.common}
         chartHref={chartHref}
+        treatmentHref={treatmentHref}
       />
     </>
   );
