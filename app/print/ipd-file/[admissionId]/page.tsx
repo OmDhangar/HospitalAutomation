@@ -2,6 +2,7 @@ import { notFound, redirect } from 'next/navigation';
 import { PrintLetterhead } from '@/components/print/letterhead';
 import { PrintSheetHeader, type SheetPatient } from '@/components/print/sheet-header';
 import { TprSheetPages } from '@/components/print/tpr-sheet';
+import { TreatmentSheet } from '@/components/print/treatment-sheet';
 import { requireModule } from '@/lib/auth/modules';
 import { requireSession } from '@/lib/auth/session';
 import { formatRupees } from '@/lib/domain/billing';
@@ -14,6 +15,7 @@ import { getAdmissionSummary, type AdmissionSummary } from '@/lib/services/ipd-c
 import { getLetterhead } from '@/lib/services/letterhead';
 import { logRecordAccess } from '@/lib/services/record-access';
 import { getTprDays, type TprDay } from '@/lib/services/tpr';
+import { getTreatmentCard } from '@/lib/services/mar';
 import { PrintControls } from '../../prescription/[id]/print-controls';
 
 export const metadata = { title: 'Patient file' };
@@ -77,6 +79,22 @@ export default async function PatientFilePrintPage({ params, searchParams }: Pag
     }
   }
 
+  // Treatment card and MAR (B3-min): the card, and the doses of one day or of the whole stay.
+  let treatment: Awaited<ReturnType<typeof getTreatmentCard>> | null = null;
+  if (sheets.some((sheet) => sheet.id === 'treatment')) {
+    const today = chartDayOf(new Date(), session.timezone);
+    const asked = typeof query.day === 'string' && isChartDay(query.day) ? query.day : null;
+    const first = admission.admittedAt ? chartDayOf(admission.admittedAt, session.timezone) : today;
+    const last = admission.dischargedAt ? chartDayOf(admission.dischargedAt, session.timezone) : today;
+    treatment = await getTreatmentCard({
+      hospitalId: session.hospitalId,
+      admissionId,
+      day: asked ?? first,
+      toDay: asked ?? (last < today ? last : today),
+      timezone: session.timezone,
+    });
+  }
+
   const patient: SheetPatient = {
     name: admission.patientName,
     age: admission.age,
@@ -117,6 +135,7 @@ export default async function PatientFilePrintPage({ params, searchParams }: Pag
               <PrintLetterhead letterhead={letterhead} title={sheet.label} />
               <PrintSheetHeader patient={patient} timezone={session.timezone} />
               {sheet.id === 'cover' ? <CoverSheet admission={admission} timezone={session.timezone} /> : null}
+              {sheet.id === 'treatment' && treatment ? <TreatmentSheet card={treatment} timezone={session.timezone} /> : null}
             </article>
           ),
         )}

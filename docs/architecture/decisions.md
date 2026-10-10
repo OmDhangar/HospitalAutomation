@@ -455,3 +455,21 @@ nobody knows until the doctor asks for the report. Making it the lab's own staff
 deadline and an escalation, and showing the owner each lab's day and each person's calls, closes the
 loop without a new role or messages that cost money and carry patient data.
 
+### ADR-033 · MAR controls: flags before enforce, typed bed codes, witness at give first
+*11 Oct 2026 · IPD sheets plan B3-min (§7.2, D-WITNESS, D-ORD)*
+
+**Decision:** The treatment card takes any medicine; the controls apply to risk-class medicines only.
+Until the module's stage is `enforce`, a dose missing its countersign, bedside proof or witness is
+saved with a flag on the row (`control_flags`), never refused and never silently passed; in `enforce`
+it is refused with the reason. Bedside proof is the bed's 6-character code (no 0/O/1/I/L) typed within
+5 minutes before the give; QR labels and camera scanning come later on the same code. A witness is
+taken at give (NDPS always, IV psychotropics, and classes the owner marks): on the ward tablet by the
+witness's own PIN, or by approval in the witness's own session — never by typing a PIN on someone
+else's phone. Witness at waste waits for B4b, where waste posts to the stock ledger. A dose is saved
+at once and waits for its witness; a missing witness after 15 minutes is a flag, not a delay to care.
+
+**Why:** the pilot ward needs a few weeks of real use to see how often each control would fire before
+any of them blocks a nurse at the bedside (§12 stages); recording what was missing gives that data
+and the evidence log a trail from day one. Typed codes work on every phone today; `BarcodeDetector`
+is missing from many browsers and printing QR needs a generator we have not chosen.
+

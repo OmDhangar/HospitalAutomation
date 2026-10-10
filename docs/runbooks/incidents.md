@@ -44,6 +44,23 @@ Test follow-up (module **Test follow-up**) keeps every order, call and step.
 4. A test ordered by mistake: the ordering doctor or the owner cancels it (dashboard card or Today →
    Cancel test). Never edit `test_orders`; the database refuses it.
 
+## A nurse cannot give a risk-class dose, or a dose shows a flag
+
+The treatment card (module **Treatment card and MAR**) records why.
+
+1. **Refused** only happens in the `enforce` stage (Settings → Modules). The message says what is
+   missing: the doctor's countersign on a telephone order, the bed code (type the code on the bed
+   label, or give it on the ward tablet), or a witness.
+2. **No bed code on the label?** Owner: Settings → IPD → Print bed codes. Codes never change once
+   given; a lost label is reprinted with the same code.
+3. **Witness not coming:** the dose is already saved. The nurse taps "Ask witness" on it to name
+   someone else, or uses the ward tablet. After 15 minutes the dose carries "Witness not there in
+   15 min"; that flag stays even if witnessed later.
+4. **Flags** (in observe or warn) are not errors: they are the record of what a rule found missing.
+   Review them in Accountability → Treatment and MAR, or the dose's History.
+5. Never edit `treatment_orders` or `mar_administrations`; strike out and record again (the database
+   refuses edits).
+
 ## Patients are not receiving WhatsApp messages
 
 Work down this list in order:

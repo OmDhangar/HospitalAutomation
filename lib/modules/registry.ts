@@ -95,6 +95,23 @@ export const MODULES = [
     defaultState: 'off',
   },
   {
+    id: 'mar',
+    title: 'Treatment card and MAR',
+    description:
+      'The doctor’s treatment card and every dose given or not given. Telephone orders are countersigned by the doctor; risk-class doses need the bed’s code from a personal phone and a second person’s witness.',
+    tier: 'basic',
+    core: false,
+    dependsOn: ['patient_file'],
+    uses: ['stock'],
+    routes: ['/ipd/admissions/[id]/(file)/treatment', '/ipd/witness', '/print/bed-codes'],
+    fileTabs: [{ slug: 'treatment', label: 'Treatment', permission: 'ipd.view', order: 20 }],
+    printSheets: [{ id: 'treatment', label: 'Treatment card and MAR', permission: 'ipd.view', order: 20 }],
+    // Observe: a missing countersign, bedside proof or witness is flagged on the dose. Enforce: refused.
+    hasStages: true,
+    // Off until the owner switches it on, ward by ward (plan §11.3 rule 8, §12).
+    defaultState: 'off',
+  },
+  {
     id: 'stock',
     title: 'Risk-class stock',
     description:

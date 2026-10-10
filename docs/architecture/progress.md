@@ -425,3 +425,55 @@ sideways scroll, Marathi directions, a call, Arrived and Test done, the Today sc
 **Not applied to production:** 0047 is for the owner to apply (`npm run db:migrate:plan` first).
 **Not done in C4a:** typed results and report files (C4b), a lab role, a duty roster (assigned =
 on duty), k6 numbers for the new pages, push or SMS alerts to the admin (in-app only).
+
+**B3-min treatment card and MAR (11 Oct 2026), migration 0048 (module `mar`, off by default, stages
+observe → warn → enforce), ADR-028, ADR-033:**
+- **Treatment card** (`treatment_orders`): medicine lines (dose, route, frequency, instructions) and
+  instruction lines, each naming the ordering doctor. Written by that doctor's own login = signed;
+  written by anyone else allowed to (a nurse taking a telephone or verbal order, or the owner) =
+  transcribed, and it waits for the named doctor's countersign — only their linked login can
+  countersign. Lines are stopped (with a reason) or struck out (written in error, while no dose is
+  recorded), never edited; a trigger enforces it.
+- **MAR** (`mar_administrations`, monthly partitions like the TPR chart): each dose given (with its
+  billing units; it posts the bill line through a bedside entry, once per retry) or not given —
+  refused, held by doctor, not available, nil by mouth, away, other (in words). Future times refused;
+  over 2 hours late needs a reason and is flagged; over 48 hours goes to the desk. Doses are struck
+  out with a reason (the bedside entry and bill line go with them), never edited.
+- **Risk-class controls (§7.2):** a risk-class line must be signed or countersigned; a give from a
+  personal phone needs the bed's 6-character code typed in the last 5 minutes (`presence_proofs`;
+  codes in `beds.bed_code`, printed from Settings → IPD → Print bed codes); NDPS gives, IV
+  psychotropics and any class the owner marks (`risk_classes.witness_at_give`, Settings → Stock) need
+  a second clinical person. In observe and warn a missing control is saved as a flag on the dose
+  (`control_flags`); in enforce it is refused. A risk-class medicine recorded from the bedside record
+  screen is refused in enforce ("give it from the treatment card") and noted in the evidence log before.
+- **Witness (D-WITNESS):** on the ward tablet the witness picks their name and types their own PIN
+  on it (counted and locked like an unlock); from a personal phone the nurse names the witness, who
+  approves on `/ipd/witness` in their own session within 10 minutes (an IPD banner says how many are
+  waiting). Witness ≠ giver (DB CHECK). The dose is saved at once as "awaiting witness"; the sweep
+  closes unanswered requests after 10 minutes and flags a give still unwitnessed after 15
+  (`witness_late`); the nurse can ask again.
+- **Screens:** "Treatment" tab on the patient file (and a Treatment button on the nurse's bed
+  screen): today's card with the day's doses under each line in the paper marks (✓ H R ✗), Give /
+  Not given, countersign, stop, strike out; earlier days to read. Doctors see a banner for telephone
+  orders waiting for their countersign. Print: "Treatment card and MAR" in the whole-file print
+  (one day, or the whole stay).
+- Permissions `ipd.order`, `ipd.transcribe`, `ipd.countersign`, `ipd.administer`, `ipd.witness`,
+  `ipd.bedCodes`. Evidence: `treatment_order.*`, `mar_administration.*`, `witness_request.*`,
+  `presence_proof.created`, plus `mar.unlinked_risk_give` and `mar.bed_code_wrong`.
+
+**Verified:** typecheck, lint on the changed files; 803 unit tests (10 new rules); `mar.integration.test.ts`
+(10: signed and transcribed lines and the countersign; a give once per retry with its bill line; not
+given with reasons; late, future and stopped lines; observe flags vs enforce refusals; bed code; witness
+by approval and on the tablet with a PIN, wrong PIN and self-witness refused; the sweep and asking
+again; strike-outs; the database guards and clinical key; evidence for every step); the whole
+integration suite except 7 WhatsApp booking tests that fail after midnight IST with or without these
+changes (they passed at 23:38 IST; a time-of-day dependency in that test, not looked into here);
+migration lint and a second run of 0048. Browser check on the demo hospital: the doctor writes two
+lines, the nurse (375 px, no sideways scroll) gives morphine with the bed code and a named witness and
+an antibiotic, writes a telephone order; the doctor sees both banners, witnesses, countersigns; the
+print and the bed-code labels.
+**Not applied to production:** 0048 is for the owner to apply (`npm run db:migrate:plan` first).
+**Not done in B3-min:** QR codes on the bed labels and camera scanning (typed code only; QR needs a
+generator — a small dependency or our own encoder), witness at waste and the stock ledger posting
+(B4b), due times, windows, time-critical alerts and the due board (B3b), offline doses (B3b's offline
+board), diet and blood lines, allergy checks (B2), legal item L5 (PIN e-signature validity).

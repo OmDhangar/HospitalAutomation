@@ -11,6 +11,7 @@ import { applyQueueAction, resumeAppointment } from './queue';
 import { loadDaySessionsInTx } from './scheduling';
 import { expireLapsedSubscriptions } from './subscriptions';
 import { raiseTestFollowUps } from './test-order-clock';
+import { sweepWitnesses } from './mar';
 
 /**
  * The housekeeping nobody was running.
@@ -165,7 +166,7 @@ export async function resumePausedAppointments(now: Date = new Date()): Promise<
 const SLOT_SESSION_LOOKAHEAD_MS = 4 * 60 * 60 * 1000;
 
 /** Monthly-partitioned tables (plan §9.4 rule 8) and how far ahead their months are made. */
-const PARTITIONED_TABLES = ['chart_entries', 'acct_events'] as const;
+const PARTITIONED_TABLES = ['chart_entries', 'acct_events', 'mar_administrations'] as const;
 const PARTITION_MONTHS_AHEAD = 12;
 const PARTITION_CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 let partitionsCheckedAt = 0;
@@ -279,6 +280,9 @@ export type SweepResult = {
   /** Test follow-up (C4a): "not arrived" tasks raised, and those raised to the admin. */
   testTasksRaised: number;
   testTasksEscalated: number;
+  /** MAR (B3-min): witness requests closed unanswered, and gives flagged as unwitnessed after 15 minutes. */
+  witnessRequestsExpired: number;
+  witnessesLate: number;
 };
 
 /**
@@ -298,6 +302,8 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
     bedDaysCharged: 0,
     testTasksRaised: 0,
     testTasksEscalated: 0,
+    witnessRequestsExpired: 0,
+    witnessesLate: 0,
   };
 
   try {
@@ -374,6 +380,15 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
   }
 
   try {
+    // MAR witnesses (B3-min): close approval requests past 10 minutes; flag gives still unwitnessed after 15.
+    const witnesses = await sweepWitnesses(now);
+    result.witnessRequestsExpired = witnesses.expired;
+    result.witnessesLate = witnesses.late;
+  } catch (error) {
+    console.error('[sweeps] witness sweep failed', error);
+  }
+
+  try {
     // Test follow-up (C4a): stamps each "not arrived" task and each escalation to the admin.
     const tests = await raiseTestFollowUps(now);
     result.testTasksRaised = tests.raised;
@@ -385,7 +400,7 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
   const total =
     result.appointmentsMarkedNoShow + result.appointmentsResumed + result.slotBookingsEnqueued +
     result.subscriptionsExpired + result.paymentLinksExpired + result.bedDaysCharged +
-    result.testTasksRaised + result.testTasksEscalated;
+    result.testTasksRaised + result.testTasksEscalated + result.witnessRequestsExpired + result.witnessesLate;
   if (total > 0) {
     console.log('[sweeps] completed', JSON.stringify(result));
   }

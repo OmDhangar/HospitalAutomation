@@ -23,6 +23,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { STAFF_ROLES } from '@/lib/domain/permissions';
 import type { CallOutcome, ClockFrom, ClosingOutcome, ServicePointKind, TestOrderStatus } from '@/lib/domain/test-orders';
+import type { ControlFlag, DoseState, ReasonCode, Route } from '@/lib/domain/mar';
 import { APPOINTMENT_STATUSES, QUEUE_ACTIONS } from '@/lib/domain/types';
 
 /**
@@ -1946,6 +1947,8 @@ export const beds = pgTable(
     label: text('label').notNull(),
     sortOrder: smallint('sort_order').notNull().default(0),
     active: boolean('active').notNull().default(true),
+    /** Printed on the bed; typed (or scanned) to prove the nurse is at the bedside (0048). Given on first need. */
+    bedCode: text('bed_code'),
     createdAt: createdAt(),
   },
   (t) => [
@@ -2428,6 +2431,8 @@ export const riskClasses = pgTable(
     name: text('name').notNull(),
     kind: text('kind').$type<'ndps' | 'psychotropic' | 'high_value' | 'other'>().notNull(),
     countEvery: text('count_every').$type<'daily' | 'weekly'>().notNull().default('daily'),
+    /** Gives of this class need a witness (0048). NDPS always do, whatever this says. */
+    witnessAtGive: boolean('witness_at_give').notNull().default(false),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     createdAt: createdAt(),
@@ -2755,4 +2760,128 @@ export const testFollowUpCalls = pgTable('test_follow_up_calls', {
   calledByUserId: uuid('called_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   callerAssigned: boolean('caller_assigned').notNull(),
   clientId: uuid('client_id').notNull(),
+});
+
+/* ------------------------------------------------ treatment card and MAR (0048, B3-min) */
+
+/** Clinical. A line on the treatment card; countersigned, stopped or struck out once, never edited (trigger). */
+export const treatmentOrders = pgTable(
+  'treatment_orders',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull(),
+    admissionId: uuid('admission_id').notNull(),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    kind: text('kind').$type<'medicine' | 'instruction'>().notNull(),
+    medicineId: uuid('medicine_id'),
+    description: text('description').notNull(),
+    dose: text('dose'),
+    route: text('route').$type<Route>(),
+    frequency: text('frequency'),
+    instructions: text('instructions'),
+    orderingDoctorId: uuid('ordering_doctor_id').notNull(),
+    orderedAt: timestamp('ordered_at', { withTimezone: true }).notNull().defaultNow(),
+    enteredByUserId: uuid('entered_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    transcribed: boolean('transcribed').notNull(),
+    countersignedAt: timestamp('countersigned_at', { withTimezone: true }),
+    countersignedByUserId: uuid('countersigned_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    stoppedAt: timestamp('stopped_at', { withTimezone: true }),
+    stoppedByUserId: uuid('stopped_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    stopReason: text('stop_reason'),
+    recordedChannel: text('recorded_channel').$type<'personal' | 'ward_device'>(),
+    recordedDeviceId: text('recorded_device_id'),
+    recordedSessionId: uuid('recorded_session_id'),
+    clientId: uuid('client_id').notNull(),
+    createdAt: createdAt(),
+    ...voidColumns(),
+  },
+  (t) => [
+    uniqueIndex('treatment_orders_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('treatment_orders_client_key').on(t.hospitalId, t.clientId),
+  ],
+);
+
+/** Clinical. One dose, given or not; partitioned by month on occurred_at; void-only (trigger). */
+export const marAdministrations = pgTable(
+  'mar_administrations',
+  {
+    id: uuid('id').notNull().defaultRandom(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull(),
+    admissionId: uuid('admission_id').notNull(),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    orderId: uuid('order_id').notNull(),
+    medicineId: uuid('medicine_id'),
+    state: text('state').$type<DoseState>().notNull(),
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+    dose: text('dose'),
+    quantity: smallint('quantity'),
+    reasonCode: text('reason_code').$type<ReasonCode>(),
+    reasonText: text('reason_text'),
+    careEntryId: uuid('care_entry_id'),
+    witnessStatus: text('witness_status').$type<'not_needed' | 'awaiting' | 'witnessed' | 'skipped'>().notNull().default('not_needed'),
+    witnessedByUserId: uuid('witnessed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    witnessedAt: timestamp('witnessed_at', { withTimezone: true }),
+    presenceProofId: uuid('presence_proof_id'),
+    controlFlags: text('control_flags').array().$type<ControlFlag[]>().notNull().default(sql`'{}'::text[]`),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    recordedChannel: text('recorded_channel').$type<'personal' | 'ward_device'>(),
+    recordedDeviceId: text('recorded_device_id'),
+    recordedSessionId: uuid('recorded_session_id'),
+    clientId: uuid('client_id').notNull(),
+    createdAt: createdAt(),
+    ...voidColumns(),
+  },
+  (t) => [primaryKey({ columns: [t.id, t.occurredAt] })],
+);
+
+/** Clinical. A second person confirming a risk-class give; decided once (trigger). */
+export const witnessRequests = pgTable('witness_requests', {
+  id: id(),
+  hospitalId: uuid('hospital_id')
+    .notNull()
+    .references(() => hospitals.id, { onDelete: 'cascade' }),
+  admissionId: uuid('admission_id').notNull(),
+  marId: uuid('mar_id').notNull(),
+  marOccurredAt: timestamp('mar_occurred_at', { withTimezone: true }).notNull(),
+  action: text('action').$type<'give'>().notNull().default('give'),
+  actorUserId: uuid('actor_user_id')
+    .notNull()
+    .references(() => users.id),
+  method: text('method').$type<'ward_device' | 'approval'>().notNull(),
+  deviceId: text('device_id'),
+  witnessUserId: uuid('witness_user_id').references(() => users.id),
+  status: text('status').$type<'pending' | 'approved' | 'declined' | 'expired' | 'withdrawn'>().notNull().default('pending'),
+  requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  decidedAt: timestamp('decided_at', { withTimezone: true }),
+  decidedChannel: text('decided_channel').$type<'personal' | 'ward_device'>(),
+  decidedDeviceId: text('decided_device_id'),
+  decidedSessionId: uuid('decided_session_id'),
+});
+
+/** Clinical. The nurse typed or scanned the bed's code: at the bedside at that moment. */
+export const presenceProofs = pgTable('presence_proofs', {
+  id: id(),
+  hospitalId: uuid('hospital_id')
+    .notNull()
+    .references(() => hospitals.id, { onDelete: 'cascade' }),
+  admissionId: uuid('admission_id').notNull(),
+  bedId: uuid('bed_id').notNull(),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id),
+  method: text('method').$type<'code' | 'qr'>().notNull(),
+  provedAt: timestamp('proved_at', { withTimezone: true }).notNull().defaultNow(),
+  channel: text('channel').$type<'personal' | 'ward_device'>(),
+  deviceId: text('device_id'),
+  sessionId: uuid('session_id'),
 });

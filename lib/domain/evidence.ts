@@ -210,6 +210,18 @@ const LABELS: Record<string, string> = {
   'tests.service_point_changed': 'Lab or room settings changed',
   'tests.test_placed': 'Test assigned to a lab or room',
   'tests.order_cancelled': 'Test cancelled',
+  'treatment_order.created': 'Treatment line written',
+  'treatment_order.changed': 'Treatment line countersigned or stopped',
+  'treatment_order.voided': 'Treatment line struck out',
+  'mar_administration.created': 'Dose recorded',
+  'mar_administration.changed': 'Dose witnessed or flagged',
+  'mar_administration.voided': 'Dose struck out',
+  'witness_request.created': 'Witness asked for',
+  'witness_request.changed': 'Witness decided',
+  'presence_proof.created': 'Bed code entered at the bedside',
+  'mar.unlinked_risk_give': 'Risk-class medicine recorded without a treatment line',
+  'mar.bed_code_wrong': 'Wrong bed code entered',
+  'stock.risk_class_witness': 'Risk class witness rule changed',
   'evidence.verified': 'Evidence log checked',
   'evidence.verification_failed': 'Evidence log check FAILED',
   'support.impersonation.start': 'QuriioHQ support opened this hospital',
@@ -225,6 +237,7 @@ export const EVENT_FAMILIES = {
   billing: { label: 'Billing', prefixes: ['bill_item.', 'billing.', 'payment.'] },
   admissions: { label: 'Admissions and beds', prefixes: ['admission.', 'bed_assignment.', 'ipd.'] },
   stock: { label: 'Risk-class stock', prefixes: ['stock_', 'stock.'] },
+  treatment: { label: 'Treatment and MAR', prefixes: ['treatment_order', 'mar_', 'mar.', 'witness_request', 'presence_proof'] },
   tests: { label: 'Tests and follow-up', prefixes: ['test_', 'service_point', 'tests.'] },
   records: { label: 'Records opened', prefixes: ['record_access.'] },
   access: { label: 'Sign-in and access', prefixes: ['auth.', 'support.', 'policy_acknowledgement.'] },
@@ -355,6 +368,18 @@ export function eventDetail(action: string, payload: Record<string, unknown>): s
       return [num('quantity') === null ? null : `${num('quantity')! > 0 ? '+' : ''}${num('quantity')}`, text('reason_code'), text('status')]
         .filter(Boolean)
         .join(' · ');
+    case 'mar_administration.created':
+    case 'mar_administration.changed': {
+      const parts = [text('state'), num('quantity') ? `× ${num('quantity')}` : null, text('reason_code')];
+      const witness = text('witness_status');
+      if (witness && witness !== 'not_needed') parts.push(`witness ${witness}`);
+      const flags = Array.isArray(payload.control_flags) ? (payload.control_flags as string[]) : [];
+      if (flags.length) parts.push(`flags: ${flags.join(', ')}`);
+      return parts.filter(Boolean).join(' · ') || null;
+    }
+    case 'witness_request.created':
+    case 'witness_request.changed':
+      return [text('method') === 'ward_device' ? 'on the ward tablet' : 'by approval', text('status')].filter(Boolean).join(' · ');
     case 'test_order.created':
     case 'test_order.changed': {
       const status = text('status');
