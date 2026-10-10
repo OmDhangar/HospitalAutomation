@@ -36,6 +36,7 @@ import {
   SearchIcon,
   ArrowLeftIcon,
   WifiOffIcon,
+  PrinterIcon,
 } from '../icons';
 
 describe('Centralized SVG Iconography', () => {
@@ -72,7 +73,7 @@ describe('Centralized SVG Iconography', () => {
   });
 
   it('exports the IPD icons, decorative like the rest', () => {
-    for (const Icon of [BedIcon, UndoIcon, SyringeIcon, SearchIcon, ArrowLeftIcon, WifiOffIcon]) {
+    for (const Icon of [BedIcon, UndoIcon, SyringeIcon, SearchIcon, ArrowLeftIcon, WifiOffIcon, PrinterIcon]) {
       const el = Icon({});
       expect(el.type).toBe('svg');
       expect(el.props['aria-hidden']).toBe('true');

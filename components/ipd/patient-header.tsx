@@ -29,7 +29,8 @@ export function AdmissionStatusChip({ status }: { status: keyof typeof STATUS })
 /**
  * Who this is, on every patient screen (IPD plan §6.4): the name large enough
  * to check against the patient in the bed, then age/sex, bed, day of stay,
- * doctor. Sticky on phones, so it never scrolls away while recording.
+ * doctor, and the IPD No. printed on every sheet. Sticky on phones, so it
+ * never scrolls away while recording.
  */
 export function PatientHeader({
   name,
@@ -42,6 +43,7 @@ export function PatientHeader({
   status,
   timezone,
   now,
+  ipdNumber = null,
   sticky = true,
 }: {
   name: string;
@@ -54,6 +56,7 @@ export function PatientHeader({
   status: keyof typeof STATUS;
   timezone: string;
   now: Date;
+  ipdNumber?: number | null;
   sticky?: boolean;
 }) {
   const ageSex = [age !== null ? String(age) : null, gender ? gender[0].toUpperCase() : null]
@@ -91,6 +94,7 @@ export function PatientHeader({
         {admittedAt && status !== 'discharged' ? (
           <span className="numeric text-ink-600">Day {dayOfStay(admittedAt, now, timezone)}</span>
         ) : null}
+        {ipdNumber !== null ? <span className="numeric text-ink-600">IPD No. {ipdNumber}</span> : null}
       </p>
     </div>
   );

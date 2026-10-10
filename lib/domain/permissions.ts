@@ -101,6 +101,29 @@ const PERMISSIONS = {
   'ipd.discharge': ['owner', 'receptionist'],
   /** Wards, beds, ward devices and nurse PINs. Prices stay `billing.price`. */
   'ipd.configure': ['owner'],
+  /**
+   * Record and correct readings on the T.P.R. chart (IPD sheets plan B1).
+   * Clinical staff only: the desk does not take vitals.
+   */
+  'ipd.chart': ['owner', 'doctor', 'nurse'],
+  /**
+   * The Accountability page: the evidence log, its seals and checks (IPD
+   * sheets plan §7.6). Owner only until the quality-officer role exists
+   * (plan §4.4); everyone's activity is on it, so it is not for staff.
+   */
+  'acct.view': ['owner'],
+  /**
+   * Risk-class stock (IPD sheets plan B4a). Seeing it and counting it are
+   * for anyone on the clinical or desk side; moving it (receive, send, take
+   * delivery, ask for an adjustment) for those who keep stock; approving a
+   * count or an adjustment for the owner and doctors — never the same person
+   * who counted or asked (the database refuses that too).
+   */
+  'stock.view': ['owner', 'doctor', 'nurse', 'receptionist'],
+  'stock.move': ['owner', 'nurse', 'receptionist'],
+  'stock.count': ['owner', 'doctor', 'nurse', 'receptionist'],
+  'stock.approve': ['owner', 'doctor'],
+  'stock.configure': ['owner'],
 
   /*
    * Patient identity (0039). Each list must equal the staff roles the matching

@@ -24,6 +24,7 @@ import { STARTER_CHARGE_ITEMS } from '@/lib/domain/starter-charge-items';
 import { STARTER_MEDICINES } from '@/lib/domain/starter-medicines';
 import { BILLABLE_ADMISSION_STATUSES, postCareEntryLineInTx, voidCareEntryLineInTx } from '@/lib/services/ipd-billing';
 import { quickAddChargeItemInTx } from '@/lib/services/ipd-config';
+import { requestOrigin } from '@/lib/db/request-context';
 
 /**
  * Bedside entries (IPD plan §5.6, task T1.7): what was given or used, by
@@ -170,6 +171,7 @@ async function recordOne(args: {
           item: args.entry.item,
           actorUserId: args.actorUserId,
         });
+        const origin = await requestOrigin();
         const [entry] = await tx
           .insert(careEntries)
           .values({
@@ -185,6 +187,9 @@ async function recordOne(args: {
             recordedAt: args.now,
             recordedByUserId: args.actorUserId,
             clientId: args.entry.clientId,
+            // Ward tablet or own phone, and which device (0042); null outside a staff request.
+            recordedChannel: origin?.channel ?? null,
+            recordedDeviceId: origin?.deviceId ?? null,
           })
           .returning();
         const billed = await postCareEntryLineInTx(tx, { entry, actorUserId: args.actorUserId });

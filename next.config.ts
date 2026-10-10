@@ -16,7 +16,8 @@ import type { NextConfig } from "next";
  * - nosniff: a response is only ever treated as its declared type.
  * - Referrer-Policy: other sites see our origin, never a full URL. The patient
  *   queue link carries its credential in the path, so the path must not leak.
- * - Permissions-Policy: no camera, microphone or location, which nothing here
+ * - Permissions-Policy: the camera for this site only (scanning a bed's QR code
+ *   at the bedside, ADR-022); no microphone or location, which nothing here
  *   uses and nothing injected should get.
  */
 const SECURITY_HEADERS = [
@@ -28,7 +29,7 @@ const SECURITY_HEADERS = [
   { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+  { key: "Permissions-Policy", value: "camera=(self), microphone=(), geolocation=()" },
 ];
 
 const nextConfig: NextConfig = {

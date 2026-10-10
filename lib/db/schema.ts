@@ -1,8 +1,10 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   bigserial,
   boolean,
   check,
+  customType,
   date,
   foreignKey,
   index,
@@ -10,6 +12,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   real,
   smallint,
   text,
@@ -200,6 +203,9 @@ export const hospitals = pgTable('hospitals', {
   /** MRN configuration (0039): optional prefix and the first number issued. Fixed once MRNs exist. */
   mrnPrefix: text('mrn_prefix'),
   mrnStart: integer('mrn_start').notNull().default(10001),
+  /** Text letterhead on printed IPD sheets (0041); the address is the branch's. */
+  registrationNo: text('registration_no'),
+  letterheadPhones: text('letterhead_phones'),
   active: boolean('active').notNull().default(true),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
@@ -383,6 +389,18 @@ export const sessions = pgTable(
     returnHospitalId: uuid('return_hospital_id').references(() => hospitals.id, {
       onDelete: 'set null',
     }),
+    /**
+     * How this person signed in (0042, ADR-022): their own device, or a PIN on
+     * an enrolled ward tablet. Recorded on every entry made in the session.
+     */
+    channel: text('channel').$type<'personal' | 'ward_device'>().notNull().default('personal'),
+    wardDeviceId: uuid('ward_device_id'),
+    /** The browser's `qurio_device` cookie, or the ward device's id. */
+    deviceId: text('device_id'),
+    /** Written at most once a minute; drives the idle lock. */
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+    /** Set when the session locks; cleared by a PIN or password unlock. */
+    lockedAt: timestamp('locked_at', { withTimezone: true }),
     createdAt: createdAt(),
   },
   (t) => [
@@ -442,6 +460,10 @@ export const doctors = pgTable(
     onlineOpensMinutesBefore: integer('online_opens_minutes_before').notNull().default(120),
     /** Unused reserved capacity goes to the shared pool this long after the start; null = manual only. */
     walkInReleaseMinutes: integer('walk_in_release_minutes'),
+    /** Printed under the name on letterheads and signatures (0041). */
+    qualification: text('qualification'),
+    registrationNo: text('registration_no'),
+    onLetterhead: boolean('on_letterhead').notNull().default(false),
     active: boolean('active').notNull().default(true),
     createdAt: createdAt(),
   },
@@ -1810,8 +1832,19 @@ export const recordAccessLogs = pgTable(
       .references(() => patients.id, { onDelete: 'cascade' }),
     encounterId: uuid('encounter_id').references(() => encounters.id, { onDelete: 'cascade' }),
     action: text('action')
-      .$type<'view_history' | 'print_prescription' | 'view_admission' | 'print_ipd_bill'>()
+      .$type<
+        | 'view_history'
+        | 'print_prescription'
+        | 'view_admission'
+        | 'print_ipd_bill'
+        | 'print_ipd_file'
+        | 'view_file_upload'
+        | 'family_unlock'
+      >()
       .notNull(),
+    /** The browser or ward device, and the login session (0041; filled from phase A5). */
+    deviceId: text('device_id'),
+    sessionId: uuid('session_id'),
     createdAt: createdAt(),
   },
   (t) => [
@@ -1936,6 +1969,8 @@ export const admissions = pgTable(
     branchId: uuid('branch_id').notNull(),
     admittingDoctorId: uuid('admitting_doctor_id').notNull(),
     status: admissionStatus('status').notNull().default('awaiting_bed'),
+    /** The IPD No. on every sheet; given with the first bed, never reused (0041). */
+    ipdNumber: integer('ipd_number'),
     reason: text('reason'),
     requestedByUserId: uuid('requested_by_user_id').references(() => users.id, {
       onDelete: 'set null',
@@ -1977,6 +2012,9 @@ export const admissions = pgTable(
     uniqueIndex('admissions_one_live_per_encounter')
       .on(t.encounterId)
       .where(sql`status <> 'cancelled'`),
+    uniqueIndex('admissions_ipd_number_key')
+      .on(t.hospitalId, t.ipdNumber)
+      .where(sql`ipd_number is not null`),
     index('admissions_census_idx')
       .on(t.hospitalId, t.branchId, t.status)
       .where(sql`status in ('awaiting_bed', 'admitted', 'discharge_ready')`),
@@ -2045,6 +2083,9 @@ export const careEntries = pgTable(
       onDelete: 'set null',
     }),
     clientId: uuid('client_id').notNull(),
+    /** Where the entry was made from (0042): a ward tablet or the person's own device. */
+    recordedChannel: text('recorded_channel').$type<'personal' | 'ward_device'>(),
+    recordedDeviceId: text('recorded_device_id'),
     createdAt: createdAt(),
     ...voidColumns(),
   },
@@ -2123,4 +2164,484 @@ export const documentSequences = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [uniqueIndex('document_sequences_key').on(t.hospitalId, t.kind, t.fiscalYear)],
+);
+
+/* ------------------------------------------- IPD sheets plan (0041 onward) */
+
+/**
+ * Each module's state for one hospital (ADR-021). A missing row means the
+ * module's default from lib/modules/registry.ts; the registry, not this table,
+ * is the list of modules.
+ */
+export const hospitalFeatures = pgTable(
+  'hospital_features',
+  {
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    moduleId: text('module_id').notNull(),
+    state: text('state').$type<'on' | 'read_only' | 'off'>().notNull(),
+    rolloutScope: jsonb('rollout_scope')
+      .$type<{ all: true } | { all: false; wardIds: string[] }>()
+      .notNull()
+      .default({ all: true }),
+    stage: text('stage').$type<'observe' | 'warn' | 'enforce'>().notNull().default('observe'),
+    settings: jsonb('settings').$type<Record<string, unknown>>().notNull().default({}),
+    updatedByUserId: uuid('updated_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    updatedAt: updatedAt(),
+  },
+  (t) => [primaryKey({ columns: [t.hospitalId, t.moduleId] })],
+);
+
+/** A staff member accepted a policy, such as the monitoring notice. Append-only (0041). */
+export const policyAcknowledgements = pgTable(
+  'policy_acknowledgements',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    policyKey: text('policy_key').notNull(),
+    policyVersion: text('policy_version').notNull(),
+    locale: text('locale').$type<'en' | 'mr' | 'hi'>().notNull(),
+    channel: text('channel').$type<'ward_device' | 'personal'>(),
+    deviceId: text('device_id'),
+    acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('policy_acknowledgements_once').on(t.hospitalId, t.userId, t.policyKey, t.policyVersion)],
+);
+
+/**
+ * Shared ward tablets (0042, ADR-022). Pending until a tablet types its
+ * one-time code; enrolled from then until revoked or unused for 90 days. The
+ * code and the device cookie are stored only as hashes.
+ */
+export const wardDevices = pgTable(
+  'ward_devices',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull(),
+    name: text('name').notNull(),
+    /** Empty: every ward of the branch. */
+    wardIds: uuid('ward_ids').array().notNull().default(sql`'{}'`),
+    enrolCodeHash: text('enrol_code_hash'),
+    enrolExpiresAt: timestamp('enrol_expires_at', { withTimezone: true }),
+    tokenHash: text('token_hash').unique(),
+    createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    enrolledAt: timestamp('enrolled_at', { withTimezone: true }),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    revokedByUserId: uuid('revoked_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    failedPins: integer('failed_pins').notNull().default(0),
+    failedWindowStartedAt: timestamp('failed_window_started_at', { withTimezone: true }),
+    lockedUntil: timestamp('locked_until', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('ward_devices_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('ward_devices_enrol_code_key').on(t.enrolCodeHash).where(sql`enrol_code_hash is not null`),
+    foreignKey({
+      name: 'ward_devices_branch_fk',
+      columns: [t.hospitalId, t.branchId],
+      foreignColumns: [branches.hospitalId, branches.id],
+    }).onDelete('cascade'),
+  ],
+);
+
+/** One PIN per person per hospital, scrypt-hashed, with its own lock-out (0042). */
+export const staffPins = pgTable(
+  'staff_pins',
+  {
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    pinHash: text('pin_hash').notNull(),
+    failedCount: integer('failed_count').notNull().default(0),
+    lockedUntil: timestamp('locked_until', { withTimezone: true }),
+    setAt: timestamp('set_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [primaryKey({ columns: [t.hospitalId, t.userId] })],
+);
+
+/**
+ * The nursing T.P.R. chart (0043): one row per line of the paper chart.
+ * Partitioned by month on `observed_at` in the database (Drizzle does not need
+ * to know); the primary key and the client-id key therefore include it.
+ * Clinical and void-only, like care_entries.
+ */
+export const chartEntries = pgTable(
+  'chart_entries',
+  {
+    id: uuid('id').notNull().defaultRandom(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull(),
+    admissionId: uuid('admission_id').notNull(),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    templateKey: text('template_key').notNull().default('general_tpr'),
+    templateVersion: smallint('template_version').notNull().default(1),
+    observedAt: timestamp('observed_at', { withTimezone: true }).notNull(),
+    pulse: smallint('pulse'),
+    bpSystolic: smallint('bp_systolic'),
+    bpDiastolic: smallint('bp_diastolic'),
+    spo2: smallint('spo2'),
+    /** °F × 10. */
+    tempFTenths: smallint('temp_f_tenths'),
+    bslMgDl: smallint('bsl_mg_dl'),
+    respRate: smallint('resp_rate'),
+    abdGirthCm: smallint('abd_girth_cm'),
+    onOxygen: boolean('on_oxygen'),
+    consciousness: text('consciousness').$type<'A' | 'C' | 'V' | 'P' | 'U'>(),
+    urineMl: integer('urine_ml'),
+    drainMl: integer('drain_ml'),
+    rtAspirateMl: integer('rt_aspirate_ml'),
+    oralMl: integer('oral_ml'),
+    ivMl: integer('iv_ml'),
+    note: text('note'),
+    extra: jsonb('extra').$type<Record<string, unknown>>().notNull().default({}),
+    source: text('source').$type<'chart' | 'doctor_note'>().notNull().default('chart'),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    recordedChannel: text('recorded_channel').$type<'personal' | 'ward_device'>(),
+    recordedDeviceId: text('recorded_device_id'),
+    recordedSessionId: uuid('recorded_session_id'),
+    clientId: uuid('client_id').notNull(),
+    createdAt: createdAt(),
+    ...voidColumns(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.id, t.observedAt] }),
+    uniqueIndex('chart_entries_client_key').on(t.hospitalId, t.clientId, t.observedAt),
+    index('chart_entries_admission_idx').on(t.admissionId, t.observedAt).where(sql`voided_at is null`),
+    index('chart_entries_branch_idx').on(t.hospitalId, t.branchId, t.observedAt),
+  ],
+);
+
+/** Raw bytes (hashes, signatures), as Buffers. */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => 'bytea' });
+
+/**
+ * The evidence log (0044, IPD sheets plan §7.6): append-only, partitioned by
+ * month on `recorded_at`, filled by capture triggers on the source tables. The
+ * database gives each row its `seq` and `row_hash`; never insert either.
+ * No foreign keys: the evidence outlives the rows it describes.
+ */
+export const acctEvents = pgTable(
+  'acct_events',
+  {
+    seq: bigint('seq', { mode: 'number' }).notNull(),
+    hospitalId: uuid('hospital_id').notNull(),
+    branchId: uuid('branch_id'),
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    actorUserId: uuid('actor_user_id'),
+    witnessUserId: uuid('witness_user_id'),
+    channel: text('channel'),
+    deviceId: text('device_id'),
+    sessionId: uuid('session_id'),
+    action: text('action').notNull(),
+    objectType: text('object_type').notNull(),
+    objectId: text('object_id'),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull().default({}),
+    rowHash: bytea('row_hash').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.seq, t.recordedAt] }),
+    index('acct_events_hospital_seq_idx').on(t.hospitalId, t.seq),
+    index('acct_events_actor_idx').on(t.hospitalId, t.actorUserId, t.seq),
+    index('acct_events_object_idx').on(t.hospitalId, t.objectId).where(sql`object_id is not null`),
+  ],
+);
+
+/** One hourly seal of a hospital's events: Merkle root, chained, signed, anchored. */
+export const acctDigests = pgTable(
+  'acct_digests',
+  {
+    hospitalId: uuid('hospital_id').notNull(),
+    digestNo: bigint('digest_no', { mode: 'number' }).notNull(),
+    seqFrom: bigint('seq_from', { mode: 'number' }).notNull(),
+    seqTo: bigint('seq_to', { mode: 'number' }).notNull(),
+    eventCount: integer('event_count').notNull(),
+    firstRecordedAt: timestamp('first_recorded_at', { withTimezone: true }).notNull(),
+    lastRecordedAt: timestamp('last_recorded_at', { withTimezone: true }).notNull(),
+    merkleRoot: bytea('merkle_root').notNull(),
+    prevHash: bytea('prev_hash').notNull(),
+    digestHash: bytea('digest_hash').notNull(),
+    signature: bytea('signature'),
+    keyId: text('key_id'),
+    sealedAt: timestamp('sealed_at', { withTimezone: true }).notNull().defaultNow(),
+    anchoredAt: timestamp('anchored_at', { withTimezone: true }),
+    anchorRef: text('anchor_ref'),
+  },
+  (t) => [primaryKey({ columns: [t.hospitalId, t.digestNo] })],
+);
+
+/** Each check of the evidence log and what it found (codes and digest numbers only). */
+export const acctVerifications = pgTable(
+  'acct_verifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    hospitalId: uuid('hospital_id').notNull(),
+    ranAt: timestamp('ran_at', { withTimezone: true }).notNull().defaultNow(),
+    ranByUserId: uuid('ran_by_user_id'),
+    source: text('source').$type<'sweep' | 'manual' | 'cli'>().notNull(),
+    ok: boolean('ok').notNull(),
+    fromDigest: bigint('from_digest', { mode: 'number' }),
+    toDigest: bigint('to_digest', { mode: 'number' }),
+    digestsChecked: integer('digests_checked').notNull(),
+    eventsChecked: integer('events_checked').notNull(),
+    problems: jsonb('problems').$type<{ code: string; digestNo: number | null; count?: number }[]>().notNull().default([]),
+  },
+  (t) => [index('acct_verifications_hospital_idx').on(t.hospitalId, t.ranAt)],
+);
+
+/* ---------------------------------------------------------------- stock (0046) */
+
+/**
+ * Risk classes and count-first stock for them (IPD sheets plan B4a, §7.3).
+ * The ledger is append-only and the only way a balance changes: a trigger in
+ * the database applies each movement to `stock_balances`, which the app role
+ * can read but not write. See drizzle/0046_stock.sql.
+ */
+export const riskClasses = pgTable(
+  'risk_classes',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    kind: text('kind').$type<'ndps' | 'psychotropic' | 'high_value' | 'other'>().notNull(),
+    countEvery: text('count_every').$type<'daily' | 'weekly'>().notNull().default('daily'),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('risk_classes_tenant_key').on(t.hospitalId, t.id)],
+);
+
+export const medicineRiskClasses = pgTable(
+  'medicine_risk_classes',
+  {
+    hospitalId: uuid('hospital_id').notNull(),
+    medicineId: uuid('medicine_id').notNull(),
+    riskClassId: uuid('risk_class_id').notNull(),
+    assignedByUserId: uuid('assigned_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    assignedAt: timestamp('assigned_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.hospitalId, t.medicineId] })],
+);
+
+export const stockLocations = pgTable(
+  'stock_locations',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull(),
+    name: text('name').notNull(),
+    kind: text('kind').$type<'main_store' | 'ward_store' | 'lab_store' | 'crash_cart' | 'other'>().notNull(),
+    wardId: uuid('ward_id'),
+    active: boolean('active').notNull().default(true),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('stock_locations_tenant_key').on(t.hospitalId, t.id)],
+);
+
+export const stockBatches = pgTable(
+  'stock_batches',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    medicineId: uuid('medicine_id').notNull(),
+    batchNo: text('batch_no').notNull(),
+    expiryDate: date('expiry_date').notNull(),
+    createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('stock_batches_tenant_key').on(t.hospitalId, t.id)],
+);
+
+export const purchaseReceipts = pgTable(
+  'purchase_receipts',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull(),
+    locationId: uuid('location_id').notNull(),
+    supplierName: text('supplier_name').notNull(),
+    invoiceNo: text('invoice_no').notNull(),
+    invoiceDate: date('invoice_date').notNull(),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+    receivedByUserId: uuid('received_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    clientId: uuid('client_id').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('purchase_receipts_client_key').on(t.hospitalId, t.clientId)],
+);
+
+export const stockTransfers = pgTable(
+  'stock_transfers',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    fromLocationId: uuid('from_location_id').notNull(),
+    toLocationId: uuid('to_location_id').notNull(),
+    status: text('status').$type<'in_transit' | 'received'>().notNull().default('in_transit'),
+    sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
+    sentByUserId: uuid('sent_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    receivedAt: timestamp('received_at', { withTimezone: true }),
+    receivedByUserId: uuid('received_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    clientId: uuid('client_id').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('stock_transfers_client_key').on(t.hospitalId, t.clientId)],
+);
+
+export const stockTransferLines = pgTable('stock_transfer_lines', {
+  id: id(),
+  hospitalId: uuid('hospital_id')
+    .notNull()
+    .references(() => hospitals.id, { onDelete: 'cascade' }),
+  transferId: uuid('transfer_id').notNull(),
+  medicineId: uuid('medicine_id').notNull(),
+  batchId: uuid('batch_id').notNull(),
+  quantitySent: integer('quantity_sent').notNull(),
+  quantityReceived: integer('quantity_received'),
+});
+
+export const stockCounts = pgTable(
+  'stock_counts',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull(),
+    locationId: uuid('location_id').notNull(),
+    status: text('status').$type<'counting' | 'submitted' | 'approved' | 'cancelled'>().notNull().default('counting'),
+    countedByUserId: uuid('counted_by_user_id')
+      .notNull()
+      .references(() => users.id),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    submittedAt: timestamp('submitted_at', { withTimezone: true }),
+    approvedByUserId: uuid('approved_by_user_id').references(() => users.id),
+    approvedAt: timestamp('approved_at', { withTimezone: true }),
+    countedByMover: boolean('counted_by_mover').notNull().default(false),
+    movedDuringCount: boolean('moved_during_count').notNull().default(false),
+    clientId: uuid('client_id').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('stock_counts_client_key').on(t.hospitalId, t.clientId)],
+);
+
+export const stockCountLines = pgTable('stock_count_lines', {
+  id: id(),
+  hospitalId: uuid('hospital_id')
+    .notNull()
+    .references(() => hospitals.id, { onDelete: 'cascade' }),
+  countId: uuid('count_id').notNull(),
+  medicineId: uuid('medicine_id').notNull(),
+  batchId: uuid('batch_id').notNull(),
+  countedQty: integer('counted_qty'),
+  bookQty: integer('book_qty'),
+  usedAllocated: integer('used_allocated').notNull().default(0),
+  variance: integer('variance'),
+  reasonCode: text('reason_code'),
+  reasonText: text('reason_text'),
+  explainedByUserId: uuid('explained_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+});
+
+export const stockCountManualUse = pgTable(
+  'stock_count_manual_use',
+  {
+    hospitalId: uuid('hospital_id').notNull(),
+    countId: uuid('count_id').notNull(),
+    medicineId: uuid('medicine_id').notNull(),
+    usedQty: integer('used_qty').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.countId, t.medicineId] })],
+);
+
+export const stockAdjustments = pgTable(
+  'stock_adjustments',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    locationId: uuid('location_id').notNull(),
+    medicineId: uuid('medicine_id').notNull(),
+    batchId: uuid('batch_id').notNull(),
+    quantity: integer('quantity').notNull(),
+    reasonCode: text('reason_code')
+      .$type<'expired' | 'damaged' | 'returned_to_supplier' | 'found' | 'entry_error' | 'other'>()
+      .notNull(),
+    reasonText: text('reason_text'),
+    status: text('status').$type<'pending' | 'approved' | 'rejected'>().notNull().default('pending'),
+    requestedByUserId: uuid('requested_by_user_id')
+      .notNull()
+      .references(() => users.id),
+    requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+    decidedByUserId: uuid('decided_by_user_id').references(() => users.id),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    clientId: uuid('client_id').notNull(),
+  },
+  (t) => [uniqueIndex('stock_adjustments_client_key').on(t.hospitalId, t.clientId)],
+);
+
+export const stockLedger = pgTable('stock_ledger', {
+  id: id(),
+  hospitalId: uuid('hospital_id')
+    .notNull()
+    .references(() => hospitals.id, { onDelete: 'cascade' }),
+  locationId: uuid('location_id').notNull(),
+  medicineId: uuid('medicine_id').notNull(),
+  batchId: uuid('batch_id').notNull(),
+  kind: text('kind')
+    .$type<'receive' | 'transfer_out' | 'transfer_in' | 'give' | 'waste' | 'return' | 'adjust' | 'count_variance'>()
+    .notNull(),
+  quantity: integer('quantity').notNull(),
+  source: text('source').$type<'app' | 'manual_register'>().notNull().default('app'),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
+  recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+  recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  receiptId: uuid('receipt_id'),
+  transferId: uuid('transfer_id'),
+  countId: uuid('count_id'),
+  adjustmentId: uuid('adjustment_id'),
+  referenceKey: text('reference_key'),
+});
+
+/** Kept by the ledger's trigger; read-only to the app. */
+export const stockBalances = pgTable(
+  'stock_balances',
+  {
+    hospitalId: uuid('hospital_id').notNull(),
+    locationId: uuid('location_id').notNull(),
+    batchId: uuid('batch_id').notNull(),
+    medicineId: uuid('medicine_id').notNull(),
+    quantity: integer('quantity').notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.hospitalId, t.locationId, t.batchId] })],
 );

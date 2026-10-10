@@ -3,11 +3,20 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { WifiOffIcon } from '@/components/icons';
-import { OUTBOX_EVENT, flushOutbox, pendingEntries, type EntryResult } from './outbox';
+import { OUTBOX_EVENT, flushOutbox, pendingEntries } from './outbox';
+import { flushReadings, pendingReadings } from './tpr-outbox';
 import { useOnline } from './use-online';
 
+type Refused = { clientId: string; ok: boolean; error?: string };
+
+/** Each outbox on the phone, flushed together: bedside entries and T.P.R. readings. */
+const OUTBOXES = [
+  { pending: pendingEntries, flush: flushOutbox },
+  { pending: pendingReadings, flush: flushReadings },
+];
+
 /**
- * On every nurse screen: sends whatever is waiting in the phone's outbox —
+ * On every nurse screen: sends whatever is waiting in the phone's outboxes —
  * on load, when the connection returns, and every 30 seconds — and says
  * plainly what is still waiting, or what the server refused and why.
  */
@@ -15,24 +24,29 @@ export function OutboxStatus() {
   const router = useRouter();
   const [waiting, setWaiting] = useState(0);
   const online = useOnline();
-  const [failed, setFailed] = useState<EntryResult[]>([]);
+  const [failed, setFailed] = useState<Refused[]>([]);
 
   const refreshCount = useCallback(async () => {
     try {
-      setWaiting((await pendingEntries()).length);
+      const counts = await Promise.all(OUTBOXES.map((box) => box.pending().then((list) => list.length, () => 0)));
+      setWaiting(counts.reduce((a, b) => a + b, 0));
     } catch {
       setWaiting(0);
     }
   }, []);
 
   const flush = useCallback(async () => {
-    try {
-      const { sent, failed: refused } = await flushOutbox();
-      if (refused.length > 0) setFailed((list) => [...list, ...refused]);
-      if (sent > 0) router.refresh();
-    } catch {
-      // IndexedDB unavailable (private mode): nothing was ever queued.
+    let sentAny = false;
+    for (const box of OUTBOXES) {
+      try {
+        const { sent, failed: refused } = await box.flush();
+        if (refused.length > 0) setFailed((list) => [...list, ...refused]);
+        if (sent > 0) sentAny = true;
+      } catch {
+        // IndexedDB unavailable (private mode): nothing was ever queued.
+      }
     }
+    if (sentAny) router.refresh();
     await refreshCount();
   }, [refreshCount, router]);
 
@@ -73,7 +87,7 @@ export function OutboxStatus() {
           </p>
           <ul className="mt-1 list-disc pl-5">
             {failed.map((entry) => (
-              <li key={entry.clientId}>{entry.ok ? '' : entry.error}</li>
+              <li key={entry.clientId}>{entry.error ?? ''}</li>
             ))}
           </ul>
           <button type="button" onClick={() => setFailed([])} className="mt-2 min-h-11 font-semibold underline">

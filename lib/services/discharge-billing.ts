@@ -213,7 +213,7 @@ export async function getDischargeBillView(args: {
 
       // Bring the room charges up to today before showing a total — unless
       // this is a read-only support session, which writes nothing.
-      if ((header.status === 'admitted' || header.status === 'discharge_ready') && !isRequestReadOnly()) {
+      if ((header.status === 'admitted' || header.status === 'discharge_ready') && !(await isRequestReadOnly())) {
         await postBedDaysForAdmissionInTx(tx, { admissionId: header.id, timezone: header.timezone, now: new Date() });
       }
 

@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { isRequestReadOnly, requestStaffUserId } from './request-context';
+import { requestFacts } from './request-context';
 import * as schema from './schema';
 
 let cachedClient: postgres.Sql | undefined;
@@ -113,6 +113,8 @@ export async function withTenant<T>(
   }
 
   await assertRestrictedRole();
+  // Read before the transaction opens, so no pooled connection waits on it.
+  const facts = await requestFacts();
 
   const t0 = performance.now();
   return getDb().transaction(async (tx) => {
@@ -123,17 +125,22 @@ export async function withTenant<T>(
      * table, so leaving it to whatever the pooled connection last held is the
      * one way this could fail open.
      */
-    const readOnly = options.readOnly ?? isRequestReadOnly();
+    const readOnly = options.readOnly ?? facts.readOnly;
     // Written every time, never left to the pooled connection's last value.
     const clinical = options.clinical === true && !readOnly;
     // Empty whenever there is no staff session, never the pooled connection's last value.
-    const staffUserId = readOnly ? '' : (requestStaffUserId() ?? '');
+    const staffUserId = readOnly ? '' : (facts.staffUserId ?? '');
+    // Where the request came from, for the evidence log's capture triggers (0044). Never used to authorise.
+    const origin = facts.origin;
     await tx.execute(
       sql`select
         set_config('app.hospital_id', ${hospitalId}, true),
         set_config('app.read_only', ${readOnly ? 'true' : 'false'}, true),
         set_config('app.clinical_access', ${clinical ? 'true' : 'false'}, true),
-        set_config('app.staff_user_id', ${staffUserId}, true)`,
+        set_config('app.staff_user_id', ${staffUserId}, true),
+        set_config('app.channel', ${origin?.channel ?? ''}, true),
+        set_config('app.device_id', ${origin?.deviceId ?? ''}, true),
+        set_config('app.session_id', ${origin?.sessionId ?? ''}, true)`,
     );
     const tConfig = performance.now();
     const result = await fn(tx);

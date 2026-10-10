@@ -183,6 +183,11 @@ describe.skipIf(!enabled)('row-level security', () => {
    * login has to be resolvable before any hospital is known, so it cannot be
    * filtered by one. Its hospital_id is the *result* of authenticating, not a
    * key to authorise by, and access to it is confined to lib/services/auth.ts.
+   *
+   * Partitioned tables (0043 on) are checked on the parent, which holds the
+   * policies. Each monthly partition must instead have row-level security
+   * FORCEd with no policy at all: that denies every direct read, so its rows
+   * are reachable only through the parent and the parent's policies.
    */
   it('leaves no tenant table outside row-level security', async () => {
     const unprotected = await admin`
@@ -198,7 +203,7 @@ describe.skipIf(!enabled)('row-level security', () => {
       from pg_class c
       join pg_namespace n on n.oid = c.relnamespace
       where n.nspname = 'public'
-        and c.relkind = 'r'
+        and c.relkind in ('r', 'p')
         and c.relname <> 'sessions'
         and c.relname <> all (${PLATFORM_IDENTITY_TABLES})
         and exists (
@@ -214,6 +219,12 @@ describe.skipIf(!enabled)('row-level security', () => {
               and p.tablename = c.relname
               and p.policyname = 'tenant_isolation'
           )
+        )
+        and not (
+          c.relispartition
+          and c.relrowsecurity
+          and c.relforcerowsecurity
+          and not exists (select 1 from pg_policies p where p.schemaname = 'public' and p.tablename = c.relname)
         )
       order by c.relname
     `;

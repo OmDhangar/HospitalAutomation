@@ -1,6 +1,9 @@
 # IPD MVP: implementation plan for Claude Code
 
-**Status:** ready to build, Stage 1 first. Written 2 Oct 2026.
+**Status:** Stages 1–3 built on `feat/ipd-mvp`. Written 2 Oct 2026.
+**Superseded in part (10 Oct 2026):** [ipd-sheets-plan.md](ipd-sheets-plan.md) (owner-approved for its
+pilot slice) lifts the out-of-scope items marked † below — nursing charts, MAR with due times,
+pharmacy stock for risk-class drugs, bed QR codes — and reverses D-ID and D-DV (ADR-021 to ADR-030).
 **Product plan this implements:** "Qurio HMS v2 — Field-Driven MVP and Stage Plan"
 (https://claude.ai/code/artifact/5933d848-3336-4a04-9ef0-37bd7ade19fc).
 **Product plan last reconciled:** 2 Oct 2026. The product plan is the source of truth for scope and
@@ -64,10 +67,12 @@ Then summarise what changed and tick the task's acceptance list.
 - Photographing or digitising handwritten prescriptions. Removed 2 Oct 2026; digital prescription
   capture will be discussed separately (future roadmap, §13). Doctors keep handwriting.
 - Bed QR codes and wristbands. **Decided 2 Oct 2026: patients are identified by tapping the bed on the
-  ward grid.**
+  ward grid.** † Reversed 10 Oct 2026 for bed QR (ADR-022); tapping the bed still works.
 - Mandatory typed prescriptions. The consultation panel's prescription features stay as they are; the
   only addition near it is the Shift to IPD button (§5.1).
-- Nursing charts, MAR with due times, OT, pharmacy stock, packages, claims.
+- Nursing charts, MAR with due times, OT, pharmacy stock, packages, claims. † Nursing charts, MAR with
+  due times and risk-class stock move to [ipd-sheets-plan.md](ipd-sheets-plan.md) (10 Oct 2026);
+  OT, packages and claims remain out of this plan.
 
 ## 1a. Stages and dates
 
@@ -708,6 +713,10 @@ QR codes and wristbands · nursing charts and medication schedules · pharmacy s
 insurance claim submission · OT and HR modules. Do not add tables or UI for these. Items that may come
 later are listed in §13.
 
+† **10 Oct 2026:** nursing charts, medication schedules (MAR), bed QR codes and pharmacy stock for
+risk-class drugs are now planned in [ipd-sheets-plan.md](ipd-sheets-plan.md), which the owner approved
+for its pilot slice. The rest of this list still stands for this plan.
+
 ---
 
 ## 13. Stage 5 and future roadmap
@@ -718,5 +727,6 @@ kit (ward set-up, starter catalogues, price-list CSV template). No new modules; 
 **Future roadmap (not scheduled, needs its own plan):**
 - ABDM / ABHA / HFR / HPR / NHCX and other government integrations.
 - Digital prescription capture. Removed from the MVP on 2 Oct 2026; to be discussed separately.
-- Bed QR / wristband scanning (D-ID).
+- Bed QR / wristband scanning (D-ID). † Bed QR: now in ipd-sheets-plan.md (pilot slice).
 - Nursing charts, MAR with due times; pharmacy stock; package billing; insurance claim submission.
+  † Charts, MAR and risk-class stock: now in ipd-sheets-plan.md (pilot slice); the rest is its roadmap.

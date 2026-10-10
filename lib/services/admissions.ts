@@ -26,6 +26,7 @@ import { setPayerInTx } from '@/lib/services/encounter-payers';
 import { getEncounterInTx, openEncounterForAppointmentInTx, type EncounterRow } from '@/lib/services/encounters';
 import { recordDepositInTx } from '@/lib/services/patient-billing';
 import { resolvePatientInTx, type PatientInput } from '@/lib/services/patients';
+import { assignIpdNumberInTx } from '@/lib/services/ipd-number';
 
 /**
  * Admissions: Shift to IPD, the admission sheet, transfers, cancellation and
@@ -345,6 +346,7 @@ export async function assignBed(args: {
             updatedAt: now,
           })
           .where(eq(admissions.id, admission.id));
+        await assignIpdNumberInTx(tx, { hospitalId: admission.hospitalId, admissionId: admission.id });
 
         const encounter = await getEncounterInTx(tx, admission.encounterId, { lock: true });
         const depositId = await writeExtrasInTx(tx, { encounter, extras: args.extras ?? {}, actorUserId: args.actorUserId });
@@ -490,6 +492,7 @@ export async function createDirectAdmission(args: {
             fromAt: now,
             assignedByUserId: args.actorUserId,
           });
+          await assignIpdNumberInTx(tx, { hospitalId: args.hospitalId, admissionId: admission.id });
         }
         const depositId = await writeExtrasInTx(tx, { encounter, extras: args.extras ?? {}, actorUserId: args.actorUserId });
         await audit(tx, admission, args.actorUserId, 'ipd.admitted_direct', {

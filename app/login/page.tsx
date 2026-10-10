@@ -1,8 +1,10 @@
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { Alert, Button, Field, Input } from '@/components/ui';
-import { getSession, setSessionCookie } from '@/lib/auth/session';
+import { getSessionState, readDeviceCookie, setSessionCookie } from '@/lib/auth/session';
+import { readWardDeviceCookie } from '@/lib/auth/ward-device-cookie';
 import { clearEvents, clientIp, ipRules, isThrottled, recordEvent } from '@/lib/security/throttle';
-import { login } from '@/lib/services/auth';
+import { login, logout, resolveSession } from '@/lib/services/auth';
 
 const WINDOW_MS = 15 * 60 * 1000;
 
@@ -33,7 +35,7 @@ async function signIn(formData: FormData) {
   ];
   if (await isThrottled(rules)) redirect('/login?error=locked');
 
-  const token = await login(email, password);
+  const token = await login(email, password, { deviceId: await readDeviceCookie() });
   // Deliberately one message for both wrong email and wrong password.
   if (!token) {
     await recordEvent(rules.map((rule) => rule.key));
@@ -42,6 +44,16 @@ async function signIn(formData: FormData) {
 
   await clearEvents([emailRule.key]);
 
+  /**
+   * The hospital may allow a role only on ward tablets (ADR-022). The rule is
+   * enforced when a session resolves; resolving here turns it into a sentence
+   * instead of a silent bounce back to this page.
+   */
+  if (!(await resolveSession(token))) {
+    await logout(token);
+    redirect('/login?error=mode');
+  }
+
   await setSessionCookie(token);
   redirect('/dashboard');
 }
@@ -49,8 +61,13 @@ async function signIn(formData: FormData) {
 export default async function LoginPage({
   searchParams,
 }: PageProps<'/login'>) {
-  if (await getSession()) redirect('/dashboard');
-  const { error } = await searchParams;
+  const { error, staff } = await searchParams;
+  const current = await getSessionState();
+  if (current?.locked) redirect(current.channel === 'ward_device' ? '/ward-device' : '/unlock');
+  if (current) redirect(current.channel === 'ward_device' ? '/ipd/ward' : '/dashboard');
+  // An enrolled ward tablet opens on "Who is recording?", unless someone asked for the email sign-in.
+  const onTablet = Boolean(await readWardDeviceCookie());
+  if (onTablet && staff !== '1') redirect('/ward-device');
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-ink-100 px-4 py-12">
@@ -70,6 +87,10 @@ export default async function LoginPage({
           {error === 'locked' ? (
             <Alert tone="error">
               Too many failed attempts. Wait 15 minutes and try again.
+            </Alert>
+          ) : error === 'mode' ? (
+            <Alert tone="error">
+              Your hospital has set your login to work on the ward tablet only. Use the tablet and your PIN.
             </Alert>
           ) : error ? (
             <Alert tone="error">Incorrect email or password.</Alert>
@@ -99,6 +120,12 @@ export default async function LoginPage({
             Sign in
           </Button>
         </form>
+
+        {onTablet ? (
+          <Link href="/ward-device" className="mt-4 block text-center text-sm font-semibold text-brand-700">
+            This is a ward tablet: Who is recording?
+          </Link>
+        ) : null}
 
         <p className="mt-6 text-center text-xs text-ink-400">
           Patients do not need an account. They open their queue link directly.

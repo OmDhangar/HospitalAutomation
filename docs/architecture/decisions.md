@@ -281,3 +281,156 @@ the ward grid already shows who is in which bed.
 **Why:** a token served first for a legitimate reason looked like it had jumped lower tokens. Examples are an
 arrived later token, a priority patient and an emergency; for instance, "Now serving 31" with 29 and 30 waiting.
 Call numbers only ever count up, so the order patients see is the order they are seen in.
+
+
+### ADR-021 · IPD paper sheets ship as switchable modules from one registry
+*Oct 2026 · IPD sheets plan §4*
+
+**Decision:** Every new IPD capability (TPR chart, MAR, stock, accountability detectors, consents
+and the rest) is a module declared once in `lib/modules/registry.ts`. Each hospital has a row per
+module in `hospital_features` with a state (`on`, `read_only`, `off`), a rollout scope (all wards or
+named wards) and a stage (`observe`, `warn`, `enforce`). Pages, route handlers and server actions
+check the module on the server; a test fails if a module route skips the check. Tabs, print lists,
+nav, checklists and reports are generated from the registry. Modules talk through small typed ports
+and in-transaction events, never by importing each other's services. Turning a module off hides it
+and blocks its API; it never deletes data, and the owner's whole-file print still includes old
+records. A plan downgrade uses `read_only` (ADR-017).
+
+**Why:** hospitals want different features, and rollout must go ward by ward with a way back. One
+list avoids hand-maintained menus drifting from what the server allows.
+
+### ADR-022 · Bed QR codes are back, and ward devices sign people in with a PIN (reverses D-ID, D-DV)
+*Oct 2026 · IPD sheets plan §5*
+
+**Decision:** Two staff access modes, both always available unless the owner turns one off per
+role:
+- **Ward device:** a tablet enrolled once by the owner stays enrolled (never signed out for being
+  unused; ends on revoke or after 90 days without use). Each person unlocks it with their own
+  4-digit PIN; the PIN session locks after 10 minutes idle and is capped at 24 hours. Switch user is
+  always visible. Entries are attributed to the PIN-verified person, never the device.
+- **Personal login:** password (TOTP for owners and admins). Clinical roles lock after 15 minutes
+  idle and after 5 minutes in the background; the lock is held on the server.
+- Every entry records the channel (`ward_device` or `personal`), device and session.
+- Each bed gets a printable QR code that opens that bed's file after login. Risk-class medicines
+  given from a personal phone need a bed or wristband scan.
+
+**Why:** the pilot's main complaint is that there is no device where the work happens. D-ID (no
+QR) and D-DV (no PIN, 2-3 Oct 2026) assumed every nurse would use her own phone; field feedback and
+the drug-diversion problem (ADR-027) need both shared tablets and proof of presence.
+
+### ADR-023 · Roles become configurable and scoped to branch, department and ward
+*Oct 2026 · IPD sheets plan §4.3-4.4 (roadmap after the pilot slice)*
+
+**Decision:** Move from the four-value `staff_role` enum to per-hospital roles built from templates,
+assigned with a scope (branch, department or ward). Clinical tables carry `branch_id` with a
+restrictive RLS policy. Break-glass access needs a reason, lasts 60 minutes and is reviewed. The old
+`can(role, perm)` stays as a shim until a production shadow run shows no differences for two weeks
+and a role x permission x scope matrix test passes for two releases; a flag switches back.
+
+**Why:** multispecialty hospitals need ward- and department-level access, and new roles (lab,
+pharmacist, quality officer) should not need enum migrations.
+
+### ADR-024 · Clinical data moves to India (Mumbai), starting with a small S0 stack
+*Oct 2026 · IPD sheets plan §9*
+
+**Decision:** Move the database from Neon Singapore to India before the pilot's new IPD data is
+created. Stage S0: the app on an India VPS and either the smallest managed PostgreSQL in Mumbai or
+PostgreSQL on the VPS with WAL archiving; encrypted backups in S3 Mumbai with a copy in Hyderabad;
+monthly restore drills. Cut over by logical replication with a short write pause that the offline
+outbox absorbs. Move to S1, S2 and S3 at the triggers in the plan; contracts never promise more
+uptime than the current stage supports (S0 99.0%, S1 99.5%, S2 99.9%).
+
+**Why:** hospitals, auditors and schemes expect India residency, and the move is cheapest while the
+data is small. Neon has no India region.
+
+### ADR-025 · Migration runner v2: one migration per transaction, idempotent SQL, expand/contract
+*Oct 2026 · IPD sheets plan §9.3-9.4*
+
+**Decision:** Replace drizzle's `migrate()` (all pending migrations in one transaction) with a
+runner that applies each migration in its own transaction with `lock_timeout`, supports
+no-transaction files for `CREATE INDEX CONCURRENTLY`, and keeps the same `__drizzle_migrations`
+history. New migrations must be idempotent and are run twice in CI. Changes are expand-only within a
+release; backfills run in batches outside migrations; drops happen in a later contract release.
+
+**Why:** at production size one long transaction holds locks across several migrations, and a
+failure mid-way must be safe to re-run.
+
+### ADR-026 · Doctor notes and orders: typed by the doctor, or transcribed and countersigned
+*Oct 2026 · IPD sheets plan §1 (partly reverses ADR-018's "doctors will not type")*
+
+**Decision:** A doctor may type notes and orders, or a nurse or RMO enters them as "told by Dr X".
+A transcribed entry is flagged until the named doctor countersigns it with one tap; only that
+doctor's linked login can countersign. Unsigned orders show their age (red after 24 hours).
+
+**Why:** some doctors will not type, but orders must be digital for the MAR, time-critical alerts
+and drug accountability.
+
+### ADR-027 · Accountability: an append-only evidence log with anchored digests, and detectors that raise leads
+*Oct 2026 · IPD sheets plan §7*
+
+**Decision:** Every clinical, stock and due-outcome write, every login and PIN event, and every read
+of accountability data is written to `acct_events`, which the application role can only insert and
+select. Hourly Merkle digests are signed and copied to write-once storage (S3 Object Lock) that
+neither the app nor hospital admins can rewrite; a verification job alerts on any mismatch.
+Detectors run on a schedule, start in observe mode with a learning period, and raise flags for human
+review. Flags are leads, never findings; staff can see and explain their own flags once a case is
+opened. Quality-only signals (late time-critical doses) go to the nursing superintendent, not into
+fraud cases.
+
+**Why:** the pilot doctor reports fake medication entries used to divert drugs. Evidence has to be
+trustworthy for everyone, including owners and us, and fair to staff.
+
+### ADR-028 · Risk-class medicines need a witness, an order link and daily blind counts
+*Oct 2026 · IPD sheets plan §7.2-7.3*
+
+**Decision:** Each hospital keeps its own list of risk-class medicines. For them: a Given must link
+to an active signed order; a second person witnesses give and waste, either on the shared ward
+device with their own PIN or by approving a request in their own session (never by typing their PIN
+on someone else's phone); stock is counted blind every day by someone who did not issue it, and
+variances need a reason and a different approver. Each control rolls out observe, then warn, then
+enforce.
+
+**Why:** these are the standard controls against diversion, and NDPS and Schedule H1 records come
+from the same ledger. Register formats stay "draft" until legal review confirms them.
+
+### ADR-029 · MAR with a shared due engine and time-critical alerts
+*Oct 2026 · IPD sheets plan §7.10, §8*
+
+**Decision:** Orders become a MAR with due times. One pure due engine (`lib/domain/due.ts`, also run
+on the phone) computes due instances for medicines and timed tasks from the order's clock times or
+interval, a two-sided window and the late-dose policy (clock: keep; interval: shift). Only medicines
+the hospital's doctor has signed off as time-critical alert; alerts are in-app only, escalate to the
+ward in-charge and then the doctor on call, and never carry patient data in notifications. Future due
+instances are computed, not stored; only outcomes and escalations are written.
+
+**Why:** some injections (for example every 12 hours) must be given on time, and NABH expects a MAR.
+Computing instances keeps writes low and keeps settings live without per-day copies.
+
+### ADR-030 · Patient messages carry only a link; the PIN never travels on WhatsApp
+*Oct 2026 · IPD sheets plan §16*
+
+**Decision:** IPD sends at most two WhatsApp utility messages per admission: the family status link
+(only with a signed family-sharing consent and opt-in) and the final-bill link. Message bodies hold
+the hospital name and a link only, never a name, amount or diagnosis. The PIN is printed on the
+admission or discharge slip. Each message is sent exactly once (`admission_messages` unique per
+admission and kind). The old `/b` running-bill link is retired into the PIN-protected family page.
+IPD messages are counted per admission, separately from the OPD canary.
+
+**Why:** Meta bills every business message, and patient data must not sit in WhatsApp chats.
+
+### ADR-031 · Per-request facts are kept per request, not only in AsyncLocalStorage
+*10 Oct 2026 · found while building the evidence log (phase A6-min)*
+
+**Decision:** The read-only flag, the staff user and the request's session, channel and device
+(`lib/db/request-context.ts`) are stored in a record per web request, found by Next's per-request
+`headers()` object (registered by `lib/auth/session.ts`). An explicit `withRequestContext` (tests,
+the worker, scripts) still wins. The readers are async; `withTenant` reads them once, before it
+opens its transaction. `getSessionState` and `getSession` re-mark the record in every caller.
+
+**Why:** the facts used to be set with `AsyncLocalStorage.enterWith` deep inside session
+resolution. Under Next.js that never reached the page, route or action that resolved the session,
+and React's `cache()` hid it from every branch but the first. So no browser request carried its
+session, channel or device (none was ever recorded on an entry or access-log row), its staff user
+(the identity definer functions saw none), or — for a support session — its read-only flag at the
+database (the app's own checks still refused writes). Tests passed because they always set the
+context explicitly; `lib/db/__tests__/request-context.test.ts` now also covers the per-request path.

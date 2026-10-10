@@ -4,8 +4,10 @@ import { Suspense } from 'react';
 import { ToastProvider } from '@/components/toast';
 import { ImpersonationBanner } from '@/components/impersonation-banner';
 import { MobileNav, type NavItem } from '@/components/mobile-nav';
+import { SessionGuard } from '@/components/session-guard';
 import { getSession, requireSession } from '@/lib/auth/session';
 import { can, homePathFor } from '@/lib/domain/permissions';
+import { switchUserAction } from '../ward-device/actions';
 import { signOutAction } from './dashboard/actions';
 
 /**
@@ -23,6 +25,14 @@ async function AppHeader() {
    * password that quietly becomes the account's permanent one.
    */
   if (session.mustChangePassword) redirect('/change-password');
+
+  /**
+   * On a shared ward tablet the person "switches user" instead of signing out:
+   * the tablet stays enrolled and goes back to "Who is recording?" (ADR-022).
+   */
+  const onTablet = session.channel === 'ward_device';
+  const endSession = onTablet ? switchUserAction : signOutAction;
+  const endLabel = onTablet ? 'Switch user' : 'Sign out';
 
   const navItems: NavItem[] = [];
 
@@ -48,11 +58,20 @@ async function AppHeader() {
     );
   }
 
+  // The evidence log (plan §7.6); next to Activity for the owner.
+  if (can(session.role, 'acct.view')) {
+    const at = navItems.findIndex((item) => item.href === '/audit');
+    navItems.splice(at === -1 ? navItems.length : at + 1, 0, { label: 'Accountability', href: '/accountability' });
+  }
+
   // Hidden while impersonating: the console is not reachable from a support
   // session by design, so offering the link would only produce a dead end.
   if (session.isPlatformAdmin && session.impersonatedByUserId === null) {
     navItems.push({ label: 'Platform', href: '/admin' });
   }
+
+  // A ward tablet is for the ward only; proxy.ts and the capped role enforce it, this keeps the menu honest.
+  if (onTablet) navItems.splice(0, navItems.length, ...navItems.filter((item) => item.href === '/ipd'));
 
   return (
     <header className="sticky top-0 z-40 border-b border-ink-200 bg-white shadow-xs">
@@ -84,28 +103,41 @@ async function AppHeader() {
               {session.role}
             </p>
           </div>
-          <Link
-            href="/change-password"
-            className="hidden rounded-lg px-3 py-1.5 text-sm font-medium text-ink-600 transition-colors hover:bg-ink-100 sm:block"
-          >
-            Password
-          </Link>
-          <form action={signOutAction} className="hidden sm:block">
+          {!onTablet ? (
+            <Link
+              href="/account"
+              className="hidden rounded-lg px-3 py-1.5 text-sm font-medium text-ink-600 transition-colors hover:bg-ink-100 sm:block"
+            >
+              My login
+            </Link>
+          ) : null}
+          <form action={endSession} className={onTablet ? undefined : 'hidden sm:block'}>
             <button
               type="submit"
-              className="rounded-lg px-3 py-1.5 text-sm font-medium text-ink-600 transition-colors hover:bg-ink-100 cursor-pointer"
+              className={
+                onTablet
+                  ? 'min-h-11 rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white shadow-xs hover:bg-brand-700 cursor-pointer'
+                  : 'rounded-lg px-3 py-1.5 text-sm font-medium text-ink-600 transition-colors hover:bg-ink-100 cursor-pointer'
+              }
             >
-              Sign out
+              {endLabel}
             </button>
           </form>
 
           {/* Mobile Hamburger Navigation */}
-          <MobileNav
-            items={[...navItems, { label: 'Change password', href: '/change-password' }]}
-            userName={session.name}
-            userRole={session.role}
-            hospitalName={session.hospitalName}
-            signOutAction={signOutAction}
+          {!onTablet ? (
+            <MobileNav
+              items={[...navItems, { label: 'My login and PIN', href: '/account' }]}
+              userName={session.name}
+              userRole={session.role}
+              hospitalName={session.hospitalName}
+              signOutAction={endSession}
+            />
+          ) : null}
+          <SessionGuard
+            idleMs={session.screenLock.idleMs}
+            backgroundMs={session.screenLock.backgroundMs}
+            channel={session.channel}
           />
         </div>
       </div>
