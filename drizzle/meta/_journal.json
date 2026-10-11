@@ -351,6 +351,13 @@
       "when": 1790740000000,
       "tag": "0050_mar_stock",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1790830000000,
+      "tag": "0051_allergy_medrec",
+      "breakpoints": true
     }
   ]
 }

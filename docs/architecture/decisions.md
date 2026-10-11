@@ -526,3 +526,24 @@ reach the ledger exactly once for the counts to mean anything; a short list keep
 and owned instead of silently failing. Keeping the ledger free of patient ids keeps it out of the
 clinical key: the patient-wise register joins the doses (clinical) to the ledger by reference.
 
+### ADR-036 · Allergies belong to the patient; a match asks for a reason, it never blocks
+*11 Oct 2026 · IPD sheets plan B2 (§8)*
+
+**Decision:** Allergies are stored per patient (`patient_allergies`), not per stay, so they follow the
+patient into every admission; "asked: none known" and "could not ask" are separate review rows, so
+the file can say *not asked yet* instead of implying "none". When a doctor writes a medicine line,
+it is matched against the patient's medicine allergies by the same medicine, the allergy's words in
+the medicine's name or generic name, or the same drug class from a small class map (penicillins,
+cephalosporins, sulfa, NSAIDs, aspirin). A match refuses the line until the doctor writes why to go
+ahead; the matches and the reason are kept on the line (a CHECK requires the reason) and audited.
+Allergies recorded after a line was written still show on it. The matching is labelled decision
+support, not an interaction database. Medication reconciliation keeps the home medicines and the
+discharge list as items with a doctor's decision, completed by a doctor's own login (append-only
+sign-offs; the latest counts); the discharge list is started from the active card lines and the
+home medicines continued or held. Deposit alerts are computed on read from the bill lines and
+payments (D-DEP: 80% of the deposit used, or more than ₹5,000 owed; both hospital settings).
+
+**Why:** a hard block on a name match would stop legitimate care (test doses, no alternative) and
+teach staff to work around it; a written reason keeps the decision with the doctor and on record.
+A per-stay allergy list would be re-asked and re-typed every admission and miss old reactions.
+

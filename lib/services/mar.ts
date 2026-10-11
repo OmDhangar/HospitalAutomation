@@ -63,6 +63,8 @@ import { chartDayWindow } from '@/lib/domain/tpr';
 import type { ModuleStage } from '@/lib/modules/registry';
 import { BILLABLE_ADMISSION_STATUSES, postCareEntryLineInTx, voidCareEntryLineInTx } from '@/lib/services/ipd-billing';
 import { drawInTx, isStockedInTx, putBackInTx, wardStoresInTx } from '@/lib/services/mar-stock';
+import { activeAllergiesInTx } from '@/lib/services/allergy';
+import { matchAllergies, matchText, type AllergyMatch } from '@/lib/domain/allergy';
 import { verifyWitnessPin, type WardDevice } from '@/lib/services/staff-access';
 
 /**
@@ -75,6 +77,16 @@ import { verifyWitnessPin, type WardDevice } from '@/lib/services/staff-access';
  */
 
 export { MarError };
+
+/**
+ * B2: the medicine matches the patient's allergies and no reason was given
+ * for going ahead. Carries the matches so the screen can show them and ask.
+ */
+export class AllergyMatchError extends MarError {
+  constructor(readonly matches: AllergyMatch[]) {
+    super(`Allergy: ${matches.map(matchText).join('; ')}. Write why it is still to be given, or choose another medicine.`);
+  }
+}
 
 const clinical = { clinical: true } as const;
 const CLINICAL_PERSON_ROLES: readonly StaffRole[] = ['owner', 'doctor', 'nurse'];
@@ -175,8 +187,12 @@ export async function createOrder(args: {
   clientId: string;
   actor: Actor;
   mayTranscribe: boolean;
+  /** B2: why to go ahead although the medicine matches an allergy (required when it does). */
+  allergyOverride?: string | null;
+  /** B2: whether the allergy check is in use (module `allergy`); on by default. */
+  allergyCheck?: boolean;
   now?: Date;
-}): Promise<{ orderId: string; transcribed: boolean }> {
+}): Promise<{ orderId: string; transcribed: boolean; allergyMatches: string[] }> {
   const now = args.now ?? new Date();
   return withTenant(
     args.hospitalId,
@@ -187,7 +203,7 @@ export async function createOrder(args: {
         .where(eq(treatmentOrders.clientId, args.clientId));
       if (existing) {
         if (existing.admissionId !== args.admissionId) throw new MarError('That line belongs to another patient');
-        return { orderId: existing.id, transcribed: existing.transcribed };
+        return { orderId: existing.id, transcribed: existing.transcribed, allergyMatches: [] };
       }
 
       const admission = await admissionInBedInTx(tx, args.admissionId);
@@ -201,14 +217,25 @@ export async function createOrder(args: {
 
       let description: string;
       let medicineId: string | null = null;
+      let allergyMatches: string[] = [];
+      let allergyOverride: string | null = null;
       if (args.input.kind === 'medicine') {
         const [medicine] = await tx
-          .select({ id: medicines.id, name: medicines.name, strength: medicines.strength, form: medicines.form, active: medicines.active })
+          .select({ id: medicines.id, name: medicines.name, genericName: medicines.genericName, strength: medicines.strength, form: medicines.form, active: medicines.active })
           .from(medicines)
           .where(eq(medicines.id, args.input.medicineId));
         if (!medicine?.active) throw new MarError('That medicine is not in the list');
         description = medicineLabel(medicine);
         medicineId = medicine.id;
+        // B2: decision support. A match needs the doctor's reason to go ahead; it is kept on the line.
+        if (args.allergyCheck !== false) {
+          const matches = matchAllergies(await activeAllergiesInTx(tx, admission.patientId), medicine);
+          if (matches.length > 0) {
+            allergyOverride = args.allergyOverride?.replace(/\s+/g, ' ').trim().slice(0, 200) || null;
+            if (!allergyOverride || allergyOverride.length < 3) throw new AllergyMatchError(matches);
+            allergyMatches = matches.map(matchText);
+          }
+        }
       } else {
         description = args.input.description;
       }
@@ -240,13 +267,25 @@ export async function createOrder(args: {
           orderedAt: now,
           enteredByUserId: args.actor.userId,
           transcribed,
+          allergyMatches: allergyMatches.length > 0 ? allergyMatches : null,
+          allergyOverrideReason: allergyMatches.length > 0 ? allergyOverride : null,
           recordedChannel: origin?.channel ?? args.actor.channel,
           recordedDeviceId: origin?.deviceId ?? null,
           recordedSessionId: origin?.sessionId ?? null,
           clientId: args.clientId,
         })
         .returning({ id: treatmentOrders.id });
-      return { orderId: row.id, transcribed };
+      if (allergyMatches.length > 0) {
+        await audit(tx, {
+          hospitalId: args.hospitalId,
+          actorUserId: args.actor.userId,
+          action: 'mar.allergy_override',
+          objectType: 'treatment_order',
+          objectId: row.id,
+          metadata: { matches: allergyMatches.length },
+        });
+      }
+      return { orderId: row.id, transcribed, allergyMatches };
     },
     clinical,
   );
@@ -1653,6 +1692,9 @@ export type CardOrder = {
   status: OrderStatus;
   risk: { className: string; kind: string; needsWitness: boolean } | null;
   dosesRecorded: number;
+  /** B2: the allergies matched when the line was written, and why the doctor went ahead. */
+  allergyMatches: string[];
+  allergyOverrideReason: string | null;
 };
 
 export type CardDose = {
@@ -1730,6 +1772,8 @@ export async function getTreatmentCard(args: {
           tcBefore: medicines.tcWindowBeforeMin,
           tcAfter: medicines.tcWindowAfterMin,
           dosesRecorded: sql<number>`(select count(*)::int from mar_administrations m where m.order_id = ${treatmentOrders.id} and m.voided_at is null)`,
+          allergyMatches: treatmentOrders.allergyMatches,
+          allergyOverrideReason: treatmentOrders.allergyOverrideReason,
         })
         .from(treatmentOrders)
         .innerJoin(doctors, eq(doctors.id, treatmentOrders.orderingDoctorId))
@@ -1825,6 +1869,8 @@ export async function getTreatmentCard(args: {
             status,
             risk: risk ? { className: o.riskName!, kind: o.riskKind!, needsWitness: needsWitness(risk, o.route) } : null,
             dosesRecorded: o.dosesRecorded,
+            allergyMatches: o.allergyMatches ?? [],
+            allergyOverrideReason: o.allergyOverrideReason,
           };
         })
         .sort((a, b) => statusRank[a.status] - statusRank[b.status] || a.orderedAt.getTime() - b.orderedAt.getTime());

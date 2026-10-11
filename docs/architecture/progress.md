@@ -571,3 +571,33 @@ scroll at 375 px).
 **Not applied to production:** 0050 is for the owner to apply (`npm run db:migrate:plan` first).
 **Not done in B4b:** recording doses offline; the statutory NDPS and H1 register formats (D-DRUG);
 detectors beyond D13 and cases (B6); stock for medicines outside a risk class (B4-full).
+
+**B2 allergies, medication reconciliation, deposit alerts (11 Oct 2026), migration 0051 (ADR-036):**
+- Modules `allergy`, `med_reconciliation`, `deposit_alert` (off by default; Settings → Modules).
+- **Allergies** (tab "Allergies"): substance, kind (medicine/food/other), severity, reaction, who said
+  so; drug class found from the name. "No known drug allergies" (refused while one is on record) and
+  "Could not ask" (with why). A banner on every tab of the patient file — red with the allergies,
+  green when none known, amber when not asked — and allergies on every printed sheet's patient strip.
+- **The check on the treatment card:** writing a medicine that matches an allergy shows the match and
+  asks why; "Add anyway" keeps the reason on the line (and `mar.allergy_override` in the audit log).
+  Lines written before an allergy was recorded show a warning to check with the doctor.
+- **Home medicines** (tab): at admission the patient's home medicines with source and the doctor's
+  decision (continue / hold / stop / change, with why for the last three) and "Complete admission
+  reconciliation" (or "takes nothing at home"); at discharge "Start from the card" lists every active
+  medicine line and the home medicines continued or held, each decided (continue / change / stop),
+  plus new ones with how long; completed by a doctor. Prints as "Medication reconciliation".
+- **Deposit alerts** (IPD → Deposits, and on the patient summary for the desk): charges at 80% of what
+  was paid, or more than ₹5,000 owed; the owner changes both.
+- Guards: allergies and reconciliation medicines struck out, never edited or deleted; reviews and
+  sign-offs append-only; a line that matched an allergy must carry the reason. Evidence: family
+  "Allergies and home medicines".
+
+**Verified:** typecheck, lint; unit tests (class map with Indian brand names, matching, banner status,
+reconciliation progress, deposit thresholds); `allergy-medrec.integration.test.ts` (6) and the MAR,
+stock, due, evidence and RLS suites; migration lint and a second run of 0051. Browser check on the
+demo hospital: an allergy recorded (banner turns red on every tab), a Ceftriaxone line refused with
+"Cephalosporins (severe; same class)" and added with a reason, the earlier Ceftriaxone lines flagged,
+a home medicine held with a reason and the reconciliation completed, the discharge list started from
+the card; deposits page; no sideways scroll at 390 px.
+**Not applied to production:** 0051 is for the owner to apply (`npm run db:migrate:plan` first).
+

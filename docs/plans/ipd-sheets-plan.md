@@ -1003,7 +1003,7 @@ change with what the pilot teaches.
 |---|---|---|---|
 | A4-full | Roles/scopes, branch RLS + benchmark (§4.3), break-glass, access reviews, `authz_v2` shadow (§4.4) | 0048 | 5 |
 | A7 | File storage + scanner | 0049 | 2 |
-| B2 | Allergy, medication reconciliation, deposit alerts | 0050 | 2.5 |
+| B2 | Allergy, medication reconciliation, deposit alerts. **Built 11 Oct 2026** (migration 0051; see progress.md) | 0051 | 2.5 |
 | B3-full | MAR for all drugs, timed tasks, dose guard everywhere | (0045/0046 expand) | 3 |
 | B4-full | Stock for all tracked items, NDPS/H1 register reports | (0047 expand) | 2 |
 | B5 | Discharge summary | 0051 | 3 |

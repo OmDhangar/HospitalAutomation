@@ -230,6 +230,17 @@ const LABELS: Record<string, string> = {
   'on_call_assignment.created': 'Doctor on call added',
   'on_call_assignment.changed': 'Doctor on call removed',
   'mar.time_critical_set': 'Medicine marked time-critical (or not)',
+  'mar.allergy_override': 'Medicine written despite an allergy',
+  'patient_allergy.created': 'Allergy recorded',
+  'patient_allergy.voided': 'Allergy struck out',
+  'patient_allergy.changed': 'Allergy struck out',
+  'allergy_review.created': 'Allergies asked about',
+  'allergy.struck_out': 'Allergy struck out',
+  'med_rec_item.created': 'Medicine listed for reconciliation',
+  'med_rec_item.changed': 'Reconciliation decision',
+  'med_rec_item.voided': 'Reconciliation medicine struck out',
+  'med_rec_signoff.created': 'Reconciliation completed',
+  'billing.deposit_alert_settings': 'Deposit alert limits changed',
   'mar.due_settings': 'Dose windows or escalation changed',
   'mar.ward_in_charge': 'Ward in-charge set',
   'mar.bed_code_wrong': 'Wrong bed code entered',
@@ -253,6 +264,7 @@ export const EVENT_FAMILIES = {
     label: 'Treatment and MAR',
     prefixes: ['treatment_order', 'mar_', 'mar.', 'witness_request', 'presence_proof', 'due_', 'time_critical', 'on_call'],
   },
+  allergies: { label: 'Allergies and home medicines', prefixes: ['patient_allergy', 'allergy_review', 'allergy.', 'med_rec_'] },
   tests: { label: 'Tests and follow-up', prefixes: ['test_', 'service_point', 'tests.'] },
   records: { label: 'Records opened', prefixes: ['record_access.'] },
   access: { label: 'Sign-in and access', prefixes: ['auth.', 'support.', 'policy_acknowledgement.'] },
@@ -396,6 +408,15 @@ export function eventDetail(action: string, payload: Record<string, unknown>): s
       if (stock) parts.push(stock === 'posted' ? 'off stock' : stock === 'short' ? 'not off stock (store short)' : 'stock put back');
       return parts.filter(Boolean).join(' · ') || null;
     }
+    case 'patient_allergy.created':
+      return [text('category'), text('drug_class'), text('severity'), text('source')].filter(Boolean).join(' · ') || null;
+    case 'allergy_review.created':
+      return text('outcome') === 'nkda' ? 'no known drug allergies' : text('outcome') === 'unable' ? 'could not ask' : 'allergy recorded';
+    case 'med_rec_item.created':
+    case 'med_rec_item.changed':
+      return [text('phase'), text('source'), text('decision')].filter(Boolean).join(' · ') || null;
+    case 'med_rec_signoff.created':
+      return [text('phase'), `${num('items') ?? 0} medicines`, payload.none_at_home === true ? 'takes nothing at home' : null].filter(Boolean).join(' · ');
     case 'mar_waste.created':
     case 'mar_waste.changed': {
       const units = num('units');

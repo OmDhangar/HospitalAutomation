@@ -3,6 +3,9 @@ import { PrintLetterhead } from '@/components/print/letterhead';
 import { PrintSheetHeader, type SheetPatient } from '@/components/print/sheet-header';
 import { TprSheetPages } from '@/components/print/tpr-sheet';
 import { TreatmentSheet } from '@/components/print/treatment-sheet';
+import { MedRecSheet } from '@/components/print/medrec-sheet';
+import { getMedRec } from '@/lib/services/medrec';
+import { getAllergies } from '@/lib/services/allergy';
 import { requireModule } from '@/lib/auth/modules';
 import { requireSession } from '@/lib/auth/session';
 import { formatRupees } from '@/lib/domain/billing';
@@ -10,7 +13,7 @@ import { PAYER_KIND_LABELS } from '@/lib/domain/payer';
 import { can } from '@/lib/domain/permissions';
 import { formatIndianPhone } from '@/lib/domain/phone';
 import { chartDayOf, isChartDay } from '@/lib/domain/tpr';
-import { printSheetsFor } from '@/lib/modules/registry';
+import { moduleAllows, printSheetsFor } from '@/lib/modules/registry';
 import { getAdmissionSummary, type AdmissionSummary } from '@/lib/services/ipd-census';
 import { getLetterhead } from '@/lib/services/letterhead';
 import { logRecordAccess } from '@/lib/services/record-access';
@@ -95,6 +98,17 @@ export default async function PatientFilePrintPage({ params, searchParams }: Pag
     });
   }
 
+  const medrec = sheets.some((sheet) => sheet.id === 'medicines') ? await getMedRec(session.hospitalId, admissionId) : null;
+  // B2: the patient's allergies on every printed sheet.
+  const allergyView = moduleAllows(states, 'allergy', 'read') ? await getAllergies(session.hospitalId, admission.patientId) : null;
+  const allergies = !allergyView
+    ? null
+    : allergyView.allergies.length > 0
+      ? allergyView.allergies.map((a) => `${a.substance}${a.severity === 'severe' ? ' (severe)' : ''}`).join(', ')
+      : allergyView.status.kind === 'nkda'
+        ? 'No known drug allergies'
+        : 'Not asked';
+
   const patient: SheetPatient = {
     name: admission.patientName,
     age: admission.age,
@@ -104,6 +118,7 @@ export default async function PatientFilePrintPage({ params, searchParams }: Pag
     wardBed: admission.bed ? `${admission.bed.wardName} · Bed ${admission.bed.label}` : null,
     admittedAt: admission.admittedAt,
     doctorName: admission.doctorName,
+    allergies,
   };
 
   return (
@@ -136,6 +151,7 @@ export default async function PatientFilePrintPage({ params, searchParams }: Pag
               <PrintSheetHeader patient={patient} timezone={session.timezone} />
               {sheet.id === 'cover' ? <CoverSheet admission={admission} timezone={session.timezone} /> : null}
               {sheet.id === 'treatment' && treatment ? <TreatmentSheet card={treatment} timezone={session.timezone} /> : null}
+              {sheet.id === 'medicines' && medrec ? <MedRecSheet view={medrec} timezone={session.timezone} /> : null}
             </article>
           ),
         )}

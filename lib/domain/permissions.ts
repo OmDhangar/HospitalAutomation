@@ -154,6 +154,18 @@ const PERMISSIONS = {
   'ipd.dueQuality': ['owner'],
 
   /**
+   * Allergies and medication reconciliation (B2). Any clinical person records
+   * an allergy or the patient's home medicines (the nurse usually asks first);
+   * the decisions on each medicine and completing the reconciliation are a
+   * doctor's (the service checks the signer is linked to a doctor). The
+   * deposit alert is the desk's, like the money it is about.
+   */
+  'ipd.allergy': ['owner', 'doctor', 'nurse'],
+  'ipd.medrecRecord': ['owner', 'doctor', 'nurse'],
+  'ipd.medrecDecide': ['owner', 'doctor'],
+  'ipd.depositAlerts': ['owner', 'receptionist'],
+
+  /**
    * Test orders and follow-up (IPD sheets plan C4a). The doctor sends a
    * patient for tests from OPD (on the ward it stays `ipd.orderTests`). Any
    * staff member can be assigned to a lab or room and work its list — the

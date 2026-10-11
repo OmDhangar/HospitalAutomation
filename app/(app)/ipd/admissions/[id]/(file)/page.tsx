@@ -3,7 +3,10 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Alert, Button, Card, CardHeader, EmptyState, Field, Input, cn } from '@/components/ui';
 import { AlertTriangleIcon, BedIcon, SyringeIcon } from '@/components/icons';
+import { getModuleStatesForRequest } from '@/lib/auth/modules';
 import { requireSession } from '@/lib/auth/session';
+import { depositAlert, depositAlertSettingsFrom } from '@/lib/domain/discharge-bill';
+import { moduleAllows } from '@/lib/modules/registry';
 import { formatRupees } from '@/lib/domain/billing';
 import { isLateRecording } from '@/lib/domain/care-entry';
 import { can } from '@/lib/domain/permissions';
@@ -45,6 +48,12 @@ export default async function AdmissionPage({ params, searchParams }: PageProps<
     showMoney ? getEncounterSettlement(session.hospitalId, admission.encounterId) : Promise.resolve(null),
   ]);
 
+  // B2: ask for more deposit when the charges have used most of it, or too much is owed.
+  const states = showMoney ? await getModuleStatesForRequest(session.hospitalId) : null;
+  const deposit =
+    states && settlement && moduleAllows(states, 'deposit_alert', 'read') && admission.status !== 'discharged'
+      ? depositAlert({ totalPaise: settlement.totalPaise, paidPaise: settlement.paidPaise, settings: depositAlertSettingsFrom(states.get('deposit_alert')?.settings) })
+      : null;
   const live = entries.filter((entry) => !entry.voidedAt);
   const unpricedCount = live.filter((entry) => entry.unpriced).length;
   const days = groupByDay(entries, session.timezone);
@@ -109,6 +118,15 @@ export default async function AdmissionPage({ params, searchParams }: PageProps<
             </Link>
           ) : null}
         </div>
+      ) : null}
+
+      {deposit ? (
+        <Alert tone="warn">
+          <span className="font-semibold">Ask for more deposit:</span>{' '}
+          {deposit.reason === 'owed'
+            ? `${formatRupees(deposit.balancePaise)} is owed over what was paid.`
+            : `the charges have used ${deposit.usedPct}% of what was paid.`}
+        </Alert>
       ) : null}
 
       {showMoney && unpricedCount > 0 ? (

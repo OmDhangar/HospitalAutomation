@@ -80,6 +80,10 @@ export type CardOrderView = {
   status: OrderStatus;
   risk: { className: string; needsWitness: boolean } | null;
   dosesRecorded: number;
+  /** B2: allergies matched when written (with the doctor's reason), and those that match now. */
+  allergyMatches: string[];
+  allergyOverrideReason: string | null;
+  allergyNow: string[];
 };
 
 export type CardDoseView = {
@@ -266,6 +270,9 @@ function NewLine(props: {
   const [intervalHours, setIntervalHours] = useState('6');
   const [firstDueAt, setFirstDueAt] = useState(() => localInput(new Date()));
   const [latePolicy, setLatePolicy] = useState<'keep' | 'shift'>('keep');
+  // B2: the medicine matched an allergy; the doctor writes why before saving again.
+  const [allergyWarning, setAllergyWarning] = useState<string | null>(null);
+  const [allergyOverride, setAllergyOverride] = useState('');
 
   const onFrequency = (value: string) => {
     setFrequency(value);
@@ -278,6 +285,8 @@ function NewLine(props: {
 
   const reset = () => {
     setMedicine(null);
+    setAllergyWarning(null);
+    setAllergyOverride('');
     setDose('');
     setFrequency('');
     setInstructions('');
@@ -310,8 +319,8 @@ function NewLine(props: {
         onSubmit={(e) => {
           e.preventDefault();
           props.act(
-            () =>
-              createOrderDynamic({
+            async () => {
+              const res = await createOrderDynamic({
                 admissionId: props.admissionId,
                 clientId,
                 orderingDoctorId: doctorId,
@@ -328,7 +337,11 @@ function NewLine(props: {
                 intervalHours,
                 firstDueAt: timingMode === 'interval' || timingMode === 'once' ? new Date(firstDueAt).toISOString() : '',
                 latePolicy,
-              }),
+                allergyOverride: allergyWarning ? allergyOverride : undefined,
+              });
+              if (!res.ok && res.allergy) setAllergyWarning(res.allergy);
+              return res;
+            },
             reset,
           );
         }}
@@ -366,7 +379,14 @@ function NewLine(props: {
                 </button>
               </p>
             ) : (
-              <MedicinePicker canQuickAdd={props.canQuickAdd} onPick={(m) => setMedicine({ id: m.id, label: m.label })} />
+              <MedicinePicker
+                canQuickAdd={props.canQuickAdd}
+                onPick={(m) => {
+                  setMedicine({ id: m.id, label: m.label });
+                  setAllergyWarning(null);
+                  setAllergyOverride('');
+                }}
+              />
             )}
             <div className="grid gap-3 sm:grid-cols-3">
               <label className="block text-sm font-medium text-ink-700">
@@ -490,8 +510,25 @@ function NewLine(props: {
             ))}
           </select>
         </label>
+        {allergyWarning && kind === 'medicine' ? (
+          <div className="space-y-2 rounded-xl bg-red-50 p-3 ring-1 ring-red-200">
+            <p className="text-sm font-semibold text-red-800">{allergyWarning}</p>
+            <label className="block text-sm font-medium text-ink-700">
+              Why give it anyway (kept on the line)
+              <input
+                value={allergyOverride}
+                onChange={(e) => setAllergyOverride(e.target.value)}
+                required
+                minLength={3}
+                maxLength={200}
+                placeholder="e.g. Test dose given, no reaction; benefit outweighs risk"
+                className={field}
+              />
+            </label>
+          </div>
+        ) : null}
         <Button type="submit" variant="primary" className="h-11" isLoading={props.pending} disabled={kind === 'medicine' && !medicine}>
-          Add to the card
+          {allergyWarning && kind === 'medicine' ? 'Add anyway' : 'Add to the card'}
         </Button>
       </form>
     </Card>
@@ -551,6 +588,12 @@ function OrderLine(props: {
             </p>
           ) : null}
           {order.timingText ? <p className="text-xs font-medium text-ink-700">Due: {order.timingText}</p> : null}
+          {order.allergyNow.length > 0 || order.allergyMatches.length > 0 ? (
+            <p className="mt-1 rounded-lg bg-red-50 px-2 py-1 text-xs font-semibold text-red-800 ring-1 ring-red-200">
+              ⚠ Allergy: {(order.allergyNow.length > 0 ? order.allergyNow : order.allergyMatches).join('; ')}
+              {order.allergyOverrideReason ? <span className="font-normal"> · doctor: “{order.allergyOverrideReason}”</span> : <span className="font-normal"> · recorded after this line was written: check with the doctor</span>}
+            </p>
+          ) : null}
           <p className="text-xs text-ink-500">
             {order.doctorName}
             {order.transcribed ? ` · written by ${order.enteredBy ?? 'staff'} (telephone/verbal)` : ''} ·{' '}

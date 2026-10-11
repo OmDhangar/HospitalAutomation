@@ -20,12 +20,13 @@ import {
   strikeOutOrder,
   strikeOutWaste,
   witnessOnDevice,
+  AllergyMatchError,
   type Actor,
 } from '@/lib/services/mar';
 import { resolveWardDevice } from '@/lib/services/staff-access';
 import { getMarConfig, snoozeDue } from '@/lib/services/due';
 import type { DueContext } from '@/lib/services/mar';
-import { marPostsStock } from '@/lib/modules/registry';
+import { marPostsStock, moduleAllows } from '@/lib/modules/registry';
 
 /**
  * The treatment card's actions (IPD sheets plan B3-min). Each returns a
@@ -34,7 +35,8 @@ import { marPostsStock } from '@/lib/modules/registry';
  * countersign, strike out or witness a particular line is the service's.
  */
 
-export type Result = { ok: true; message: string } | { ok: false; error: string };
+/** `allergy`: the line matched the patient's allergies (B2); write a reason and save again. */
+export type Result = { ok: true; message: string } | { ok: false; error: string; allergy?: string };
 
 const ok = (message: string): Result => ({ ok: true, message });
 
@@ -70,6 +72,7 @@ async function run(fn: () => Promise<Result>): Promise<Result> {
   try {
     return await fn();
   } catch (err) {
+    if (err instanceof AllergyMatchError) return { ok: false, error: 'Allergy: write why before saving', allergy: err.message };
     if (err instanceof MarError || err instanceof ModuleUnavailableError) return { ok: false, error: err.message };
     console.error('[mar] action failed', err);
     return { ok: false, error: 'Could not save. Try again.' };
@@ -95,6 +98,8 @@ export async function createOrderDynamic(args: {
   intervalHours?: string;
   firstDueAt?: string;
   latePolicy?: string;
+  /** B2: why to go ahead although the medicine matches an allergy. */
+  allergyOverride?: string;
 }): Promise<Result> {
   return run(async () => {
     const session = await requireWritableSession();
@@ -111,6 +116,8 @@ export async function createOrderDynamic(args: {
       clientId: args.clientId,
       actor: actorOf(session),
       mayTranscribe,
+      allergyOverride: args.allergyOverride || null,
+      allergyCheck: moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'allergy', 'read'),
     });
     return ok(transcribed ? 'Written. It waits for the doctor’s countersign.' : 'Added to the treatment card');
   });

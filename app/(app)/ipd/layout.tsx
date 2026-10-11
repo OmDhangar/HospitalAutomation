@@ -38,6 +38,10 @@ export default async function IpdLayout({ children }: LayoutProps<'/ipd'>) {
   if (can(session.role, 'ipd.dueQuality') && moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'mar', 'read')) {
     tabs.push({ label: 'Dose timing', href: '/ipd/quality' });
   }
+  // Deposit alerts (B2), for the desk.
+  if (can(session.role, 'ipd.depositAlerts') && moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'deposit_alert', 'read')) {
+    tabs.push({ label: 'Deposits', href: '/ipd/deposits' });
+  }
   if (can(session.role, 'ipd.configure')) tabs.push({ label: 'Set up', href: '/settings/ipd' });
 
   // Treatment card (B3-min): doses waiting for my witness, and telephone orders waiting for my countersign.

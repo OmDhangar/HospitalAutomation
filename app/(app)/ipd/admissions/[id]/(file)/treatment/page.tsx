@@ -10,6 +10,8 @@ import { marPostsStock, moduleAllows } from '@/lib/modules/registry';
 import { getTreatmentCard, listDeviceWitnessRequests, listOrderingDoctors, listWardStoresFor, listWastes, listWitnessCandidates } from '@/lib/services/mar';
 import { listPinPeople, resolveWardDevice } from '@/lib/services/staff-access';
 import { getAdmissionDue } from '@/lib/services/due';
+import { getAllergies } from '@/lib/services/allergy';
+import { matchAllergies, matchText } from '@/lib/domain/allergy';
 import { timingText } from '@/lib/domain/due';
 import { loadAdmission } from '../data';
 import { TreatmentCard } from './treatment-card';
@@ -54,6 +56,8 @@ export default async function TreatmentPage({ params, searchParams }: PageProps<
     listWastes({ hospitalId: session.hospitalId, admissionId: id, from: window.from, to: window.to }),
     stockOn && canRecord ? listWardStoresFor(session.hospitalId, id) : Promise.resolve([]),
   ]);
+  // B2: allergies recorded after a line was written still show on it.
+  const allergyList = moduleAllows(states, 'allergy', 'read') ? (await getAllergies(session.hospitalId, admission.patientId)).allergies : [];
   const myDoctor = doctors.find((d) => d.userId === session.userId);
   // Opened from the due board: this line's dose at this due time.
   const focus =
@@ -150,6 +154,12 @@ export default async function TreatmentPage({ params, searchParams }: PageProps<
           status: o.status,
           risk: o.risk ? { className: o.risk.className, needsWitness: o.risk.needsWitness } : null,
           dosesRecorded: o.dosesRecorded,
+          allergyMatches: o.allergyMatches,
+          allergyOverrideReason: o.allergyOverrideReason,
+          allergyNow:
+            o.kind === 'medicine' && o.status !== 'struck_out' && o.status !== 'stopped'
+              ? matchAllergies(allergyList, { id: o.medicineId, name: o.description }).map(matchText)
+              : [],
         }))}
         doses={card.doses.map((d) => ({
           id: d.id,
