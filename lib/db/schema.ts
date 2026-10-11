@@ -28,6 +28,7 @@ import type { TaskKind, TimingMode } from '@/lib/domain/due';
 import type { AllergyCategory, AllergySeverity, AllergySource, DrugClass } from '@/lib/domain/allergy';
 import type { MedRecDecision, MedRecPhase, MedRecSource } from '@/lib/domain/medrec';
 import type { Complaint, GeneralExam, NoteKind, NoteVitals, SystemicExam } from '@/lib/domain/notes';
+import type { SummaryContent } from '@/lib/domain/discharge-summary';
 import { APPOINTMENT_STATUSES, QUEUE_ACTIONS } from '@/lib/domain/types';
 
 /**
@@ -2865,6 +2866,48 @@ export const ipdNotes = pgTable(
     ...voidColumns(),
   },
   (t) => [uniqueIndex('ipd_notes_client_key').on(t.hospitalId, t.clientId)],
+);
+
+/** Clinical. The discharge summary being written: one per stay, outside the record (0053). */
+export const dischargeSummaryDrafts = pgTable(
+  'discharge_summary_drafts',
+  {
+    hospitalId: uuid('hospital_id').notNull(),
+    admissionId: uuid('admission_id').notNull(),
+    content: jsonb('content').$type<SummaryContent>().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedByUserId: uuid('updated_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  },
+  (t) => [primaryKey({ columns: [t.hospitalId, t.admissionId] })],
+);
+
+/** Clinical. Each finalised version of a discharge summary; never edited, only countersigned (0053). */
+export const dischargeSummaries = pgTable(
+  'discharge_summaries',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id').notNull(),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    version: smallint('version').notNull(),
+    supersedesId: uuid('supersedes_id'),
+    content: jsonb('content').$type<SummaryContent>().notNull(),
+    doctorId: uuid('doctor_id').notNull(),
+    finalisedAt: timestamp('finalised_at', { withTimezone: true }).notNull().defaultNow(),
+    finalisedByUserId: uuid('finalised_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    transcribed: boolean('transcribed').notNull(),
+    signedAt: timestamp('signed_at', { withTimezone: true }),
+    signedByUserId: uuid('signed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    changeReason: text('change_reason'),
+    recordedChannel: text('recorded_channel').$type<'personal' | 'ward_device'>(),
+    recordedDeviceId: text('recorded_device_id'),
+    recordedSessionId: uuid('recorded_session_id'),
+    clientId: uuid('client_id').notNull(),
+  },
+  (t) => [uniqueIndex('discharge_summaries_client_key').on(t.hospitalId, t.clientId)],
 );
 
 /** Clinical. What a patient reacts to, per patient (follows them into every stay); void-only (0051). */

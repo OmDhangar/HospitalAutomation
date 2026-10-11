@@ -5,6 +5,8 @@ import { TprSheetPages } from '@/components/print/tpr-sheet';
 import { TreatmentSheet } from '@/components/print/treatment-sheet';
 import { MedRecSheet } from '@/components/print/medrec-sheet';
 import { NotesSheet } from '@/components/print/notes-sheet';
+import { SummarySheet } from '@/components/print/summary-sheet';
+import { getSummaryView } from '@/lib/services/discharge-summary';
 import { listNotes } from '@/lib/services/notes';
 import { getMedRec } from '@/lib/services/medrec';
 import { getAllergies } from '@/lib/services/allergy';
@@ -100,6 +102,11 @@ export default async function PatientFilePrintPage({ params, searchParams }: Pag
     });
   }
 
+  const summary =
+    sheets.some((sheet) => sheet.id === 'discharge_summary') && admission.status !== 'awaiting_bed' && admission.status !== 'cancelled'
+      ? await getSummaryView({ hospitalId: session.hospitalId, admissionId, timezone: session.timezone })
+      : null;
+  const summaryDate = (at: Date) => at.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: session.timezone });
   const notes = sheets.some((sheet) => sheet.id === 'notes') ? await listNotes(session.hospitalId, admissionId) : null;
   const medrec = sheets.some((sheet) => sheet.id === 'medicines') ? await getMedRec(session.hospitalId, admissionId) : null;
   // B2: the patient's allergies on every printed sheet.
@@ -156,6 +163,19 @@ export default async function PatientFilePrintPage({ params, searchParams }: Pag
               {sheet.id === 'treatment' && treatment ? <TreatmentSheet card={treatment} timezone={session.timezone} /> : null}
               {sheet.id === 'medicines' && medrec ? <MedRecSheet view={medrec} timezone={session.timezone} /> : null}
               {sheet.id === 'notes' && notes ? <NotesSheet notes={notes} timezone={session.timezone} /> : null}
+              {sheet.id === 'discharge_summary' && summary ? (
+                <SummarySheet
+                  content={summary.current?.content ?? summary.draft}
+                  signed={Boolean(summary.current?.signedAt)}
+                  footer={
+                    summary.current
+                      ? `Version ${summary.current.version} · ${summary.current.doctorName}${
+                          summary.current.signedAt ? ` · signed ${summaryDate(summary.current.signedAt)}` : ' · waiting for signature'
+                        }`
+                      : 'Draft — not finalised'
+                  }
+                />
+              ) : null}
             </article>
           ),
         )}

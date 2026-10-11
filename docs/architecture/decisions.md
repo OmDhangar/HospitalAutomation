@@ -563,3 +563,22 @@ confirmed. When the chart module is off for the ward, the vitals stay on the not
 reading the nurses and the early-warning score should see, and an unchanged prefill must not create
 a duplicate.
 
+### ADR-038 · Discharge summary: a free draft outside the record, numbered signed versions in it
+*11 Oct 2026 · IPD sheets plan B5*
+
+**Decision:** The summary being written lives in `discharge_summary_drafts` (one per stay, edited
+freely, not the record). The draft starts from the record deterministically — no AI: diagnosis from
+the case sheet's "Case of" (else the admission reason), complaints, history and findings from the
+case sheet, investigations from the test orders, treatment given from the card, the course from the
+progress notes, and the medicines from the completed discharge reconciliation (else the active card
+lines, marked "not reconciled"); follow-up, diet and warning signs start from plain defaults.
+"Fill again from the record" refreshes only the record's sections. Finalising writes
+`discharge_summaries` version n (never edited; version 2+ supersedes the previous with a reason):
+signed at once from the responsible doctor's own login, otherwise waiting for that doctor's
+signature (banner). Anything not signed prints with DRAFT and "NOT SIGNED"; sharing (C5) will offer
+only a signed version.
+
+**Why:** doctors edit a summary many times before it is right, and a half-written draft must never
+be mistaken for the record; once handed over, a summary must stay exactly as signed, so a correction
+is a new, explained version.
+

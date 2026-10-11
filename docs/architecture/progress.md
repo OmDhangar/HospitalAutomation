@@ -624,3 +624,24 @@ vitals; the printed sheet. The NAD buttons were first inside their label, which 
 screen readers; moved out.
 **Not applied to production:** 0052 is for the owner to apply (`npm run db:migrate:plan` first).
 
+**B5 discharge summary (11 Oct 2026), migration 0053 (ADR-038):**
+- Module `discharge_summary` (off by default), tab "Discharge summary", print sheet "Discharge summary".
+- Draft built from the record (case sheet, tests, treatment card, progress notes, discharge
+  reconciliation), every section editable: how the patient left (improved / on request / DAMA /
+  referred / death), diagnosis, complaints, history, findings, investigations, course, treatment
+  given, procedures, condition at discharge, medicines to continue (table), follow-up, diet, "come
+  back at once if". Save draft; Fill again from the record.
+- Finalise: version 1, 2, …; signed when the doctor named finalises, else it waits for their
+  signature (IPD banner "discharge summaries waiting for your signature"); version 2+ says what
+  changed. Unsigned prints with a DRAFT watermark and "NOT SIGNED".
+- Permissions `ipd.summary` (doctor), `ipd.summaryTranscribe` (nurse). Evidence: "Doctor's notes and
+  summaries".
+
+**Verified:** typecheck, lint; unit tests (deterministic draft, reconciled vs card medicines, test
+statuses, finalising rules, refresh keeps the doctor's words); `discharge-summary.integration.test.ts`
+(4: draft from the record, saved outside it, refreshed after the reconciliation, finalised by a
+nurse and signed only by the named doctor, version 2 with a reason, guards, evidence); migration lint
+and a second run of 0053. Browser check on the demo hospital: a nurse (390 px) edits and finalises,
+the print shows DRAFT; the doctor signs from the banner; the print is clean.
+**Not applied to production:** 0053 is for the owner to apply (`npm run db:migrate:plan` first).
+

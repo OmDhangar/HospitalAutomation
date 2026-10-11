@@ -165,6 +165,12 @@ const PERMISSIONS = {
    * (signed) or transcribed by a nurse/RMO for the doctor, who countersigns
    * (`ipd.countersign`; the service checks it is that doctor's own login).
    */
+  /**
+   * The discharge summary (B5): the doctor finalises and signs; a nurse or RMO
+   * may prepare it and finalise it for the doctor, who signs it after.
+   */
+  'ipd.summary': ['owner', 'doctor'],
+  'ipd.summaryTranscribe': ['owner', 'nurse'],
   'ipd.notes': ['owner', 'doctor'],
   'ipd.notesTranscribe': ['owner', 'nurse'],
   'ipd.allergy': ['owner', 'doctor', 'nurse'],

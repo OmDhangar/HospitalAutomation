@@ -1006,7 +1006,7 @@ change with what the pilot teaches.
 | B2 | Allergy, medication reconciliation, deposit alerts. **Built 11 Oct 2026** (migration 0051; see progress.md) | 0051 | 2.5 |
 | B3-full | MAR for all drugs, timed tasks, dose guard everywhere | (0045/0046 expand) | 3 |
 | B4-full | Stock for all tracked items, NDPS/H1 register reports | (0047 expand) | 2 |
-| B5 | Discharge summary | 0051 | 3 |
+| B5 | Discharge summary. **Built 11 Oct 2026** (migration 0053; see progress.md) | 0053 | 3 |
 | B6 | Detectors v1 (basic tier incl. D15, D16) + rollups + cases | 0052 | 4 |
 | C1 | Billing sheet + category bill | 0053 | 3 |
 | C2 | Consents | 0054 | 3 |

@@ -231,6 +231,8 @@ const LABELS: Record<string, string> = {
   'on_call_assignment.changed': 'Doctor on call removed',
   'mar.time_critical_set': 'Medicine marked time-critical (or not)',
   'mar.allergy_override': 'Medicine written despite an allergy',
+  'discharge_summary.created': 'Discharge summary finalised',
+  'discharge_summary.changed': 'Discharge summary signed',
   'ipd_note.created': 'Doctor’s note written',
   'ipd_note.changed': 'Doctor’s note countersigned',
   'ipd_note.voided': 'Doctor’s note struck out',
@@ -267,7 +269,7 @@ export const EVENT_FAMILIES = {
     label: 'Treatment and MAR',
     prefixes: ['treatment_order', 'mar_', 'mar.', 'witness_request', 'presence_proof', 'due_', 'time_critical', 'on_call'],
   },
-  notes: { label: 'Doctor’s notes', prefixes: ['ipd_note'] },
+  notes: { label: 'Doctor’s notes and summaries', prefixes: ['ipd_note', 'discharge_summary'] },
   allergies: { label: 'Allergies and home medicines', prefixes: ['patient_allergy', 'allergy_review', 'allergy.', 'med_rec_'] },
   tests: { label: 'Tests and follow-up', prefixes: ['test_', 'service_point', 'tests.'] },
   records: { label: 'Records opened', prefixes: ['record_access.'] },
@@ -412,6 +414,10 @@ export function eventDetail(action: string, payload: Record<string, unknown>): s
       if (stock) parts.push(stock === 'posted' ? 'off stock' : stock === 'short' ? 'not off stock (store short)' : 'stock put back');
       return parts.filter(Boolean).join(' · ') || null;
     }
+    case 'discharge_summary.created':
+    case 'discharge_summary.changed':
+      return [`version ${num('version') ?? 1}`, payload.transcribed === true ? 'finalised for the doctor' : 'finalised by the doctor', text('signed_by_user_id') ? 'signed' : 'not signed yet']
+        .join(' · ');
     case 'ipd_note.created':
     case 'ipd_note.changed':
       return [text('kind') === 'admission' ? 'case sheet' : 'progress note', payload.transcribed === true ? 'transcribed' : 'signed', text('countersigned_by_user_id') ? 'countersigned' : null, text('chart_entry_id') ? 'vitals on the chart' : null]

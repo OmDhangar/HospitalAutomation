@@ -9,6 +9,7 @@ import { moduleAllows } from '@/lib/modules/registry';
 import { countMyWitnessRequests, listAwaitingCountersign } from '@/lib/services/mar';
 import { myEscalations } from '@/lib/services/due';
 import { listNotesAwaitingCountersign } from '@/lib/services/notes';
+import { listSummariesToSign } from '@/lib/services/discharge-summary';
 import { readWardDeviceCookie } from '@/lib/auth/ward-device-cookie';
 import { resolveWardDevice } from '@/lib/services/staff-access';
 
@@ -57,6 +58,11 @@ export default async function IpdLayout({ children }: LayoutProps<'/ipd'>) {
   const notesToSign =
     can(session.role, 'ipd.countersign') && !session.readOnly && moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'doctor_notes', 'read')
       ? await listNotesAwaitingCountersign({ hospitalId: session.hospitalId, userId: session.userId })
+      : [];
+  // Discharge summaries (B5) finalised for me, waiting for my signature.
+  const summariesToSign =
+    can(session.role, 'ipd.summary') && !session.readOnly && moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'discharge_summary', 'read')
+      ? await listSummariesToSign({ hospitalId: session.hospitalId, userId: session.userId })
       : [];
   // Late time-critical doses (B3b): by ward and level, never the patient or the drug (no PHI in a banner).
   const device = marOn && session.channel === 'ward_device' ? await resolveWardDevice(await readWardDeviceCookie()) : null;
@@ -130,6 +136,14 @@ export default async function IpdLayout({ children }: LayoutProps<'/ipd'>) {
           className="flex min-h-12 items-center justify-between rounded-xl bg-amber-50 px-4 text-sm font-semibold text-amber-950 ring-1 ring-amber-200"
         >
           {notesToSign.length} note{notesToSign.length === 1 ? '' : 's'} written for you, waiting for your countersign <span aria-hidden>→</span>
+        </Link>
+      ) : null}
+      {summariesToSign.length > 0 ? (
+        <Link
+          href={`/ipd/admissions/${summariesToSign[0].admissionId}/discharge-summary`}
+          className="flex min-h-12 items-center justify-between rounded-xl bg-amber-50 px-4 text-sm font-semibold text-amber-950 ring-1 ring-amber-200"
+        >
+          {summariesToSign.length} discharge summar{summariesToSign.length === 1 ? 'y' : 'ies'} waiting for your signature <span aria-hidden>→</span>
         </Link>
       ) : null}
       {children}

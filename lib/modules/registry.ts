@@ -136,6 +136,21 @@ export const MODULES = [
     defaultState: 'off',
   },
   {
+    id: 'discharge_summary',
+    title: 'Discharge summary',
+    description:
+      'Drafted from the record (case sheet, tests, treatment, discharge medicines), edited by the doctor, finalised and signed as numbered versions. Unsigned prints as DRAFT.',
+    tier: 'basic',
+    core: false,
+    dependsOn: ['patient_file'],
+    uses: ['doctor_notes', 'med_reconciliation', 'mar', 'test_follow_up'],
+    routes: ['/ipd/admissions/[id]/(file)/discharge-summary'],
+    fileTabs: [{ slug: 'discharge-summary', label: 'Discharge summary', permission: 'ipd.view', order: 90 }],
+    printSheets: [{ id: 'discharge_summary', label: 'Discharge summary', permission: 'ipd.view', order: 90 }],
+    hasStages: false,
+    defaultState: 'off',
+  },
+  {
     id: 'allergy',
     title: 'Allergies',
     description:
