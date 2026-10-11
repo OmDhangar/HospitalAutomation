@@ -160,6 +160,13 @@ const PERMISSIONS = {
    * doctor's (the service checks the signer is linked to a doctor). The
    * deposit alert is the desk's, like the money it is about.
    */
+  /**
+   * The doctor's case sheet and progress notes (C3): written by the doctor
+   * (signed) or transcribed by a nurse/RMO for the doctor, who countersigns
+   * (`ipd.countersign`; the service checks it is that doctor's own login).
+   */
+  'ipd.notes': ['owner', 'doctor'],
+  'ipd.notesTranscribe': ['owner', 'nurse'],
   'ipd.allergy': ['owner', 'doctor', 'nurse'],
   'ipd.medrecRecord': ['owner', 'doctor', 'nurse'],
   'ipd.medrecDecide': ['owner', 'doctor'],

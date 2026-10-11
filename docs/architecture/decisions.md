@@ -547,3 +547,19 @@ payments (D-DEP: 80% of the deposit used, or more than ₹5,000 owed; both hospi
 teach staff to work around it; a written reason keeps the decision with the doctor and on record.
 A per-stay allergy list would be re-asked and re-typed every admission and miss old reactions.
 
+### ADR-037 · Doctor's notes write their vitals to the chart, once
+*11 Oct 2026 · IPD sheets plan C3*
+
+**Decision:** The case sheet and progress notes are one table (`ipd_notes`) in the paper's sections,
+one live case sheet per stay (partial unique index), struck out never edited. A note written from
+the named doctor's own login is signed; a nurse/RMO may transcribe it for the doctor, and only that
+doctor's login countersigns. The O/E vitals start from the latest chart reading within 2 hours of
+the time seen: if the doctor keeps them the note links that reading; if they change them (or there
+is none) the note writes one `chart_entries` row with `source = 'doctor_note'` in the same
+transaction and links it. Striking out the note voids a reading it wrote, never one it only
+confirmed. When the chart module is off for the ward, the vitals stay on the note only.
+
+**Why:** two places holding the same vitals drift; a doctor re-measuring at the bedside is a real
+reading the nurses and the early-warning score should see, and an unchanged prefill must not create
+a duplicate.
+

@@ -601,3 +601,26 @@ a home medicine held with a reason and the reconciliation completed, the dischar
 the card; deposits page; no sideways scroll at 390 px.
 **Not applied to production:** 0051 is for the owner to apply (`npm run db:migrate:plan` first).
 
+**C3 doctor's notes (11 Oct 2026), migration 0052 (ADR-037):**
+- Module `doctor_notes` (off by default), tab "Doctor's notes" and print sheet "Case sheet and
+  progress notes".
+- **Case sheet** once per stay: Case of, C/O (each complaint with since when), H/O, P/H, O/E general
+  signs (pallor, icterus, cyanosis, clubbing, lymphadenopathy, oedema, other) and vitals, S/E (CNS,
+  RS, P/A, CVS, with an NAD button each), Adv. **Progress notes**: progress, vitals, S/E, Adv.
+- **Signed or countersigned:** from the named doctor's login it is signed; a nurse writes it for the
+  doctor and it waits for that doctor's countersign (banner in IPD: "notes written for you").
+- **Vitals and the chart:** prefilled from a reading under 2 hours old; kept → linked; changed or
+  none → one chart reading from the note. Strike-out takes a reading it wrote with it.
+- Permissions `ipd.notes`, `ipd.notesTranscribe` (countersign is `ipd.countersign`). Evidence family
+  "Doctor's notes".
+
+**Verified:** typecheck, lint; unit tests (sections, vitals parsing, confirm/write/none);
+`notes.integration.test.ts` (5: case sheet once, vitals written to the chart, recent reading
+confirmed vs changed, chart off, transcribed note countersigned only by the named doctor,
+strike-out with and without its reading, guards, evidence) and the chart and RLS suites; migration
+lint and a second run of 0052. Browser check on the demo hospital: a nurse (390 px) transcribes the
+case sheet; the doctor sees it waiting for countersign; a progress note starts from the charted
+vitals; the printed sheet. The NAD buttons were first inside their label, which renamed them for
+screen readers; moved out.
+**Not applied to production:** 0052 is for the owner to apply (`npm run db:migrate:plan` first).
+

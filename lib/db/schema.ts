@@ -27,6 +27,7 @@ import type { ControlFlag, DoseState, ReasonCode, Route, WasteReason } from '@/l
 import type { TaskKind, TimingMode } from '@/lib/domain/due';
 import type { AllergyCategory, AllergySeverity, AllergySource, DrugClass } from '@/lib/domain/allergy';
 import type { MedRecDecision, MedRecPhase, MedRecSource } from '@/lib/domain/medrec';
+import type { Complaint, GeneralExam, NoteKind, NoteVitals, SystemicExam } from '@/lib/domain/notes';
 import { APPOINTMENT_STATUSES, QUEUE_ACTIONS } from '@/lib/domain/types';
 
 /**
@@ -2824,6 +2825,46 @@ export const treatmentOrders = pgTable(
     uniqueIndex('treatment_orders_tenant_key').on(t.hospitalId, t.id),
     uniqueIndex('treatment_orders_client_key').on(t.hospitalId, t.clientId),
   ],
+);
+
+/** Clinical. The doctor's case sheet (one per stay) and progress notes; struck out, never edited (0052). */
+export const ipdNotes = pgTable(
+  'ipd_notes',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull(),
+    admissionId: uuid('admission_id').notNull(),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    kind: text('kind').$type<NoteKind>().notNull(),
+    seenAt: timestamp('seen_at', { withTimezone: true }).notNull(),
+    caseOf: text('case_of'),
+    complaints: jsonb('complaints').$type<Complaint[]>().notNull().default([]),
+    history: text('history'),
+    pastHistory: text('past_history'),
+    generalExam: jsonb('general_exam').$type<GeneralExam>().notNull().default({}),
+    vitals: jsonb('vitals').$type<NoteVitals>().notNull().default({}),
+    systemicExam: jsonb('systemic_exam').$type<SystemicExam>().notNull().default({}),
+    progress: text('progress'),
+    advice: text('advice'),
+    seenByDoctorId: uuid('seen_by_doctor_id').notNull(),
+    chartEntryId: uuid('chart_entry_id'),
+    chartObservedAt: timestamp('chart_observed_at', { withTimezone: true }),
+    writtenByUserId: uuid('written_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    transcribed: boolean('transcribed').notNull(),
+    countersignedAt: timestamp('countersigned_at', { withTimezone: true }),
+    countersignedByUserId: uuid('countersigned_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    recordedChannel: text('recorded_channel').$type<'personal' | 'ward_device'>(),
+    recordedDeviceId: text('recorded_device_id'),
+    recordedSessionId: uuid('recorded_session_id'),
+    clientId: uuid('client_id').notNull(),
+    ...voidColumns(),
+  },
+  (t) => [uniqueIndex('ipd_notes_client_key').on(t.hospitalId, t.clientId)],
 );
 
 /** Clinical. What a patient reacts to, per patient (follows them into every stay); void-only (0051). */

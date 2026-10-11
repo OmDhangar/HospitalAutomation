@@ -121,6 +121,21 @@ export const MODULES = [
     defaultState: 'off',
   },
   {
+    id: 'doctor_notes',
+    title: 'Doctor’s notes',
+    description:
+      'The case sheet at admission (Case of, C/O, H/O, P/H, O/E, S/E, Adv) and daily progress notes, typed by the doctor or transcribed by a nurse and countersigned. Vitals on the note go on the T.P.R. chart.',
+    tier: 'basic',
+    core: false,
+    dependsOn: ['patient_file'],
+    uses: ['charts'],
+    routes: ['/ipd/admissions/[id]/(file)/notes'],
+    fileTabs: [{ slug: 'notes', label: 'Doctor’s notes', permission: 'ipd.view', order: 8 }],
+    printSheets: [{ id: 'notes', label: 'Case sheet and progress notes', permission: 'ipd.view', order: 8 }],
+    hasStages: false,
+    defaultState: 'off',
+  },
+  {
     id: 'allergy',
     title: 'Allergies',
     description:

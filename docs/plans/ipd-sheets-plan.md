@@ -1010,7 +1010,7 @@ change with what the pilot teaches.
 | B6 | Detectors v1 (basic tier incl. D15, D16) + rollups + cases | 0052 | 4 |
 | C1 | Billing sheet + category bill | 0053 | 3 |
 | C2 | Consents | 0054 | 3 |
-| C3 | Doctor notes + initial assessments | 0055 | 3 |
+| C3 | Doctor notes + initial assessments. **Built 11 Oct 2026** (case sheet and progress notes, migration 0052; see progress.md) | 0052 | 3 |
 | C4b [Rev 5.1] | Typed lab and radiology results, report files, lab detectors (C4a is in the pilot slice) | — | 3 |
 | **C5** | **Family page `/f` + final-bill WhatsApp message (§16)** | 0057 | 3 |
 | C6 | Readiness, leakage, handover, EWS | 0058 | 4 |

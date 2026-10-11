@@ -4,6 +4,8 @@ import { PrintSheetHeader, type SheetPatient } from '@/components/print/sheet-he
 import { TprSheetPages } from '@/components/print/tpr-sheet';
 import { TreatmentSheet } from '@/components/print/treatment-sheet';
 import { MedRecSheet } from '@/components/print/medrec-sheet';
+import { NotesSheet } from '@/components/print/notes-sheet';
+import { listNotes } from '@/lib/services/notes';
 import { getMedRec } from '@/lib/services/medrec';
 import { getAllergies } from '@/lib/services/allergy';
 import { requireModule } from '@/lib/auth/modules';
@@ -98,6 +100,7 @@ export default async function PatientFilePrintPage({ params, searchParams }: Pag
     });
   }
 
+  const notes = sheets.some((sheet) => sheet.id === 'notes') ? await listNotes(session.hospitalId, admissionId) : null;
   const medrec = sheets.some((sheet) => sheet.id === 'medicines') ? await getMedRec(session.hospitalId, admissionId) : null;
   // B2: the patient's allergies on every printed sheet.
   const allergyView = moduleAllows(states, 'allergy', 'read') ? await getAllergies(session.hospitalId, admission.patientId) : null;
@@ -152,6 +155,7 @@ export default async function PatientFilePrintPage({ params, searchParams }: Pag
               {sheet.id === 'cover' ? <CoverSheet admission={admission} timezone={session.timezone} /> : null}
               {sheet.id === 'treatment' && treatment ? <TreatmentSheet card={treatment} timezone={session.timezone} /> : null}
               {sheet.id === 'medicines' && medrec ? <MedRecSheet view={medrec} timezone={session.timezone} /> : null}
+              {sheet.id === 'notes' && notes ? <NotesSheet notes={notes} timezone={session.timezone} /> : null}
             </article>
           ),
         )}
