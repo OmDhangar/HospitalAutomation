@@ -15,11 +15,13 @@ import {
   NOT_GIVEN,
   REASONS,
   ROUTES,
+  WASTE_REASONS,
   type ControlFlag,
   type DoseState,
   type NotGivenChoice,
   type ReasonCode,
   type Route,
+  type WasteReason,
 } from '@/lib/domain/mar';
 import type { OrderStatus } from '@/lib/domain/mar';
 import { STATUS_TEXT, TASK_KINDS, minutesToClock, suggestTiming, type InstanceStatus, type TaskKind } from '@/lib/domain/due';
@@ -33,7 +35,9 @@ import {
   stopOrderDynamic,
   strikeOutDoseDynamic,
   strikeOutOrderDynamic,
+  strikeOutWasteDynamic,
   taskDoneDynamic,
+  wasteDynamic,
   witnessOnDeviceDynamic,
   type Result,
 } from './actions';
@@ -95,6 +99,27 @@ export type CardDoseView = {
   voided: boolean;
   voidReason: string | null;
   pendingRequest: { method: 'ward_device' | 'approval'; witnessName: string | null } | null;
+  /** B4b: taken off a store, short (to be taken off by hand), or put back after a strike-out. */
+  stockStatus: 'posted' | 'short' | 'reversed' | null;
+};
+
+/** A risk-class medicine wasted (B4b): witnessed before it comes off stock. */
+export type CardWasteView = {
+  id: string;
+  orderId: string;
+  occurredAt: string;
+  units: number;
+  amount: string | null;
+  reasonLabel: string;
+  reasonText: string | null;
+  recordedBy: string | null;
+  recordedByUserId: string | null;
+  witnessStatus: 'awaiting' | 'witnessed';
+  witnessedBy: string | null;
+  stockStatus: 'posted' | 'short' | 'reversed' | null;
+  voided: boolean;
+  voidReason: string | null;
+  pendingRequest: { method: 'ward_device' | 'approval'; witnessName: string | null } | null;
 };
 
 export type DeviceRequestView = { id: string; description: string; dose: string | null; actorUserId: string; actorName: string; occurredAt: string };
@@ -131,6 +156,10 @@ export function TreatmentCard(props: {
   devicePeople: Person[];
   /** Opened from the due board: this line's Give, at this due time. */
   focus: { orderId: string; dueAt: string } | null;
+  /** B4b: risk-class doses come off the ward's stores here; which ones (to choose when more than one). */
+  stockOn: boolean;
+  stores: { id: string; name: string }[];
+  wastes: CardWasteView[];
 }) {
   const toast = useToast();
   const router = useRouter();
@@ -155,6 +184,11 @@ export function TreatmentCard(props: {
     for (const d of props.doses) map.set(d.orderId, [...(map.get(d.orderId) ?? []), d]);
     return map;
   }, [props.doses]);
+  const wastesOf = useMemo(() => {
+    const map = new Map<string, CardWasteView[]>();
+    for (const w of props.wastes) map.set(w.orderId, [...(map.get(w.orderId) ?? []), w]);
+    return map;
+  }, [props.wastes]);
 
   const live = props.orders.filter((o) => o.status === 'active' || o.status === 'awaiting_countersign');
   const ended = props.orders.filter((o) => o.status === 'stopped' || o.status === 'struck_out');
@@ -184,7 +218,7 @@ export function TreatmentCard(props: {
         ) : (
           <ul className="divide-y divide-ink-100">
             {live.map((order) => (
-              <OrderLine key={order.id} {...props} order={order} doses={dosesOf.get(order.id) ?? []} act={act} pending={pending} time={time} />
+              <OrderLine key={order.id} {...props} order={order} doses={dosesOf.get(order.id) ?? []} wastes={wastesOf.get(order.id) ?? []} act={act} pending={pending} time={time} />
             ))}
           </ul>
         )}
@@ -195,7 +229,7 @@ export function TreatmentCard(props: {
           <CardHeader title="Stopped and struck out" hint={`${ended.length}`} />
           <ul className="divide-y divide-ink-100">
             {ended.map((order) => (
-              <OrderLine key={order.id} {...props} order={order} doses={dosesOf.get(order.id) ?? []} act={act} pending={pending} time={time} />
+              <OrderLine key={order.id} {...props} order={order} doses={dosesOf.get(order.id) ?? []} wastes={wastesOf.get(order.id) ?? []} act={act} pending={pending} time={time} />
             ))}
           </ul>
         </Card>
@@ -480,6 +514,9 @@ function OrderLine(props: {
   enforce: boolean;
   witnessCandidates: Person[];
   focus: { orderId: string; dueAt: string } | null;
+  stockOn: boolean;
+  stores: { id: string; name: string }[];
+  wastes: CardWasteView[];
   act: Act;
   pending: boolean;
   time: (iso: string) => string;
@@ -488,7 +525,7 @@ function OrderLine(props: {
   // Opened from the board: only while that due time is still open on this sheet.
   const focused =
     props.focus?.orderId === order.id && props.canRecord && order.instances.some((i) => i.dueAt === props.focus!.dueAt && !i.recorded) ? props.focus.dueAt : null;
-  const [panel, setPanel] = useState<'give' | 'not' | 'done' | 'stop' | null>(focused ? (order.kind === 'task' ? 'done' : 'give') : null);
+  const [panel, setPanel] = useState<'give' | 'not' | 'done' | 'stop' | 'waste' | null>(focused ? (order.kind === 'task' ? 'done' : 'give') : null);
   const live = order.status === 'active' || order.status === 'awaiting_countersign';
   const mine = order.doctorUserId === props.myUserId;
 
@@ -553,10 +590,13 @@ function OrderLine(props: {
         <p className="text-xs font-medium text-amber-800">The next dose comes close after a late one — check with the doctor.</p>
       ) : null}
 
-      {props.doses.length > 0 ? (
+      {props.doses.length > 0 || props.wastes.length > 0 ? (
         <ul className="space-y-1">
           {props.doses.map((d) => (
             <DoseRow key={d.id} dose={d} {...props} />
+          ))}
+          {props.wastes.map((w) => (
+            <WasteRow key={w.id} waste={w} {...props} />
           ))}
         </ul>
       ) : null}
@@ -581,6 +621,11 @@ function OrderLine(props: {
               <Button type="button" variant="secondary" className="h-11" onClick={() => setPanel(panel === 'not' ? null : 'not')}>
                 Not given
               </Button>
+              {order.risk ? (
+                <Button type="button" variant={panel === 'waste' ? 'primary' : 'ghost'} className="h-11" onClick={() => setPanel(panel === 'waste' ? null : 'waste')}>
+                  Waste
+                </Button>
+              ) : null}
             </>
           ) : null}
           {order.status === 'awaiting_countersign' && props.canCountersign && mine ? (
@@ -612,6 +657,7 @@ function OrderLine(props: {
       {panel === 'give' ? <GiveForm {...props} initialDue={focused} onDone={() => setPanel(null)} /> : null}
       {panel === 'not' ? <NotGivenForm {...props} initialDue={focused} onDone={() => setPanel(null)} /> : null}
       {panel === 'done' ? <TaskDoneForm {...props} initialDue={focused} onDone={() => setPanel(null)} /> : null}
+      {panel === 'waste' ? <WasteForm {...props} onDone={() => setPanel(null)} /> : null}
       {panel === 'stop' ? (
         <form
           className="flex flex-wrap items-end gap-2"
@@ -742,6 +788,7 @@ function DoseRow(props: {
         <span className={cn(d.voided && 'line-through')}>
           <strong className="tabular-nums">{props.time(d.occurredAt)}</strong> <span aria-hidden>{DOSE_MARK[d.state]}</span> {DOSE_STATES[d.state]}
           {d.dose ? ` · ${d.dose}` : ''}
+          {d.state === 'given' && d.quantity !== null && d.quantity > 1 ? ` · ${d.quantity} units` : ''}
           {d.reasonCode && d.state !== 'given' ? ` · ${REASONS[d.reasonCode]}` : ''}
           {d.reasonText ? ` — “${d.reasonText}”` : ''}
           <span className="text-ink-500"> · {d.recordedBy ?? 'staff'}</span>
@@ -776,6 +823,10 @@ function DoseRow(props: {
       {d.flags.length > 0 ? (
         <p className="mt-0.5 text-xs font-medium text-amber-800">⚑ {d.flags.map((f) => CONTROL_FLAGS[f]).join(' · ')}</p>
       ) : null}
+      {d.stockStatus === 'short' && !d.voided ? (
+        <p className="mt-0.5 text-xs font-medium text-amber-800">Not taken off stock: the ward’s store did not hold enough. The stock in-charge takes it off by hand.</p>
+      ) : null}
+      {d.stockStatus === 'reversed' ? <p className="text-xs">Put back on the store’s stock.</p> : null}
       {d.voided ? <p className="text-xs">Struck out: {d.voidReason}</p> : null}
       {asking ? (
         <form
@@ -812,6 +863,8 @@ function GiveForm(props: {
   channel: 'personal' | 'ward_device';
   enforce: boolean;
   witnessCandidates: Person[];
+  stockOn: boolean;
+  stores: { id: string; name: string }[];
   initialDue: string | null;
   time: (iso: string) => string;
   act: Act;
@@ -837,6 +890,7 @@ function GiveForm(props: {
   const late = openedAt - new Date(at).getTime() > LATE_ENTRY_MS;
   const needsCode = Boolean(order.risk) && props.channel === 'personal';
   const needsWitnessPick = Boolean(order.risk?.needsWitness) && props.channel === 'personal';
+  const stockTracked = Boolean(order.risk) && props.stockOn;
 
   return (
     <form
@@ -861,6 +915,7 @@ function GiveForm(props: {
               witnessUserId: String(form.get('witness') ?? ''),
               dueAt: due.dueAt || undefined,
               timingReason: String(form.get('timingReason') ?? ''),
+              storeId: String(form.get('store') ?? ''),
             });
           },
           () => {
@@ -881,10 +936,24 @@ function GiveForm(props: {
           <input name="dose" defaultValue={order.dose ?? ''} maxLength={40} className={field} />
         </label>
         <label className="block text-sm font-medium text-ink-700">
-          Units billed
+          {stockTracked ? 'Units (billed, off stock)' : 'Units billed'}
           <input name="quantity" type="number" inputMode="numeric" min={0} max={100} defaultValue={1} className={field} />
         </label>
       </div>
+      {stockTracked && props.stores.length > 1 ? (
+        <label className="block text-sm font-medium text-ink-700">
+          Taken from
+          <select name="store" defaultValue={props.stores[0].id} className={field}>
+            {props.stores.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : stockTracked && props.stores.length === 1 ? (
+        <p className="text-xs text-ink-600">Comes off {props.stores[0].name}’s stock, earliest expiry first.</p>
+      ) : null}
       {offWindow ? (
         <label className="block text-sm font-medium text-amber-900">
           {offWindow === 'late' ? 'Given after its window' : 'Given before its window'}: why? {props.enforce ? '' : '(asked; not required yet)'}
@@ -1016,7 +1085,7 @@ function DeviceWitness(props: {
           <li key={r.id} className="space-y-2 px-4 py-3 sm:px-5">
             <p className="text-sm">
               <strong>{r.description}</strong>
-              {r.dose ? ` · ${r.dose}` : ''} · given {props.time(r.occurredAt)} by {r.actorName}
+              {r.dose ? ` · ${r.dose}` : ''} · {r.dose?.startsWith('Waste:') ? 'wasted' : 'given'} {props.time(r.occurredAt)} by {r.actorName}
             </p>
             <form
               className="flex flex-wrap items-end gap-2"
@@ -1065,3 +1134,217 @@ function DeviceWitness(props: {
     </Card>
   );
 }
+
+function WasteRow(props: {
+  waste: CardWasteView;
+  admissionId: string;
+  isOwner: boolean;
+  myUserId: string;
+  channel: 'personal' | 'ward_device';
+  canRecord: boolean;
+  witnessCandidates: Person[];
+  act: Act;
+  pending: boolean;
+  time: (iso: string) => string;
+}) {
+  const w = props.waste;
+  const [asking, setAsking] = useState(false);
+  const mine = w.recordedByUserId === props.myUserId;
+  const what = [w.units > 0 ? `${w.units} unit${w.units === 1 ? '' : 's'}` : null, w.amount].filter(Boolean).join(' · ');
+  return (
+    <li className={cn('rounded-lg px-3 py-2 text-sm', w.voided ? 'bg-ink-50 text-ink-400' : 'bg-red-50/60')}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className={cn(w.voided && 'line-through')}>
+          <strong className="tabular-nums">{props.time(w.occurredAt)}</strong> Wasted · {what} · {w.reasonLabel}
+          {w.reasonText ? ` — “${w.reasonText}”` : ''}
+          <span className="text-ink-500"> · {w.recordedBy ?? 'staff'}</span>
+          {w.witnessStatus === 'witnessed' ? <span className="text-emerald-800"> · witnessed by {w.witnessedBy}</span> : null}
+          {w.witnessStatus === 'awaiting' && !w.voided ? (
+            <span className="font-medium text-amber-800">
+              {' '}
+              · waiting for witness{w.pendingRequest ? (w.pendingRequest.witnessName ? ` (${w.pendingRequest.witnessName})` : ' on the tablet') : ''} — not off stock yet
+            </span>
+          ) : null}
+        </span>
+        {!w.voided && props.canRecord && (mine || props.isOwner) ? (
+          <span className="flex gap-1">
+            {w.witnessStatus === 'awaiting' && mine && !w.pendingRequest ? (
+              <button type="button" className="min-h-11 rounded-lg px-2 text-xs font-medium text-brand-700 hover:bg-white" onClick={() => setAsking(!asking)}>
+                Ask witness
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="min-h-11 rounded-lg px-2 text-xs font-medium text-ink-500 hover:bg-white hover:text-ink-900"
+              onClick={() => {
+                const reason = window.prompt('Why strike out this waste? (recorded in error)');
+                if (reason) props.act(() => strikeOutWasteDynamic({ admissionId: props.admissionId, wasteId: w.id, reason }));
+              }}
+            >
+              Strike out
+            </button>
+          </span>
+        ) : null}
+      </div>
+      {w.stockStatus === 'short' && !w.voided ? <p className="mt-0.5 text-xs font-medium text-amber-800">Not taken off stock yet: the store did not hold it.</p> : null}
+      {w.stockStatus === 'reversed' ? <p className="text-xs">Put back on the store’s stock.</p> : null}
+      {w.voided ? <p className="text-xs">Struck out: {w.voidReason}</p> : null}
+      {asking ? (
+        <form
+          className="mt-2 flex flex-wrap items-end gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const witnessUserId = String(new FormData(e.currentTarget).get('witness') ?? '');
+            props.act(() => askWitnessAgainDynamic({ admissionId: props.admissionId, wasteId: w.id, witnessUserId }), () => setAsking(false));
+          }}
+        >
+          <WitnessSelect channel={props.channel} people={props.witnessCandidates} />
+          <Button type="submit" variant="primary" className="h-11" isLoading={props.pending}>
+            Ask
+          </Button>
+        </form>
+      ) : null}
+    </li>
+  );
+}
+
+function WitnessSelect(props: { channel: 'personal' | 'ward_device'; people: Person[] }) {
+  return (
+    <label className="block min-w-0 flex-1 text-sm font-medium text-ink-700">
+      Witness
+      <select name="witness" defaultValue="" required={props.channel !== 'ward_device'} className={field}>
+        {props.channel === 'ward_device' ? <option value="">Someone here, on this tablet</option> : <option value="">Choose</option>}
+        {props.people.map((p) => (
+          <option key={p.userId} value={p.userId}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+/**
+ * Waste of a risk-class medicine (B4b, D-WITNESS): what, why, and a second
+ * person. Whole units (a broken ampoule) come off the store once witnessed;
+ * the rest of an opened ampoule only records the amount — its dose already
+ * took the ampoule off stock.
+ */
+function WasteForm(props: {
+  order: CardOrderView;
+  admissionId: string;
+  channel: 'personal' | 'ward_device';
+  doses: CardDoseView[];
+  witnessCandidates: Person[];
+  stockOn: boolean;
+  stores: { id: string; name: string }[];
+  time: (iso: string) => string;
+  act: Act;
+  pending: boolean;
+  onDone: () => void;
+}) {
+  const [clientId, setClientId] = useState(() => crypto.randomUUID());
+  const [at, setAt] = useState(() => localInput(new Date()));
+  const [reason, setReason] = useState<WasteReason>('remainder');
+  const gives = props.doses.filter((d) => d.state === 'given' && !d.voided);
+  const remainder = reason === 'remainder';
+  return (
+    <form
+      className="space-y-3 rounded-xl bg-red-50/60 p-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const form = new FormData(e.currentTarget);
+        props.act(
+          () =>
+            wasteDynamic({
+              admissionId: props.admissionId,
+              orderId: props.order.id,
+              marId: String(form.get('dose') ?? ''),
+              clientId,
+              occurredAt: new Date(at).toISOString(),
+              reason,
+              reasonText: String(form.get('reasonText') ?? ''),
+              units: remainder ? '0' : String(form.get('units') ?? ''),
+              amount: String(form.get('amount') ?? ''),
+              storeId: String(form.get('store') ?? ''),
+              witnessUserId: String(form.get('witness') ?? ''),
+            }),
+          () => {
+            setClientId(crypto.randomUUID());
+            props.onDone();
+          },
+        );
+      }}
+    >
+      <p className="text-sm font-semibold text-ink-900">Waste of {props.order.description}</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="block text-sm font-medium text-ink-700">
+          Why
+          <select value={reason} onChange={(e) => setReason(e.target.value as WasteReason)} className={field}>
+            {(Object.keys(WASTE_REASONS) as WasteReason[]).map((r) => (
+              <option key={r} value={r}>
+                {WASTE_REASONS[r]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-sm font-medium text-ink-700">
+          When
+          <input type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} required className={field} />
+        </label>
+        {!remainder ? (
+          <label className="block text-sm font-medium text-ink-700">
+            Whole units wasted{props.stockOn ? ' (come off stock once witnessed)' : ''}
+            <input name="units" type="number" inputMode="numeric" min={1} max={100} defaultValue={1} required className={field} />
+          </label>
+        ) : null}
+        <label className="block text-sm font-medium text-ink-700">
+          Amount discarded {remainder ? '' : '(optional)'}
+          <input name="amount" maxLength={40} required={remainder} placeholder="e.g. 6 mg (0.6 ml)" className={field} />
+        </label>
+        {gives.length > 0 ? (
+          <label className="block text-sm font-medium text-ink-700">
+            Left over from the dose {remainder ? '' : '(optional)'}
+            <select name="dose" defaultValue={remainder ? gives[gives.length - 1].id : ''} className={field}>
+              <option value="">—</option>
+              {gives.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {props.time(d.occurredAt)}
+                  {d.dose ? ` · ${d.dose}` : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        {!remainder && props.stockOn && props.stores.length > 1 ? (
+          <label className="block text-sm font-medium text-ink-700">
+            From the store
+            <select name="store" defaultValue={props.stores[0].id} className={field}>
+              {props.stores.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        {reason === 'other' ? (
+          <label className="block text-sm font-medium text-ink-700 sm:col-span-2">
+            What happened
+            <input name="reasonText" required maxLength={200} className={field} />
+          </label>
+        ) : null}
+      </div>
+      <WitnessSelect channel={props.channel} people={props.witnessCandidates} />
+      <p className="text-xs text-ink-600">
+        {props.channel === 'ward_device'
+          ? 'After saving, the witness confirms on this tablet with their own PIN.'
+          : 'The witness confirms from their own login. Nothing comes off stock until they do.'}
+      </p>
+      <Button type="submit" variant="primary" className="h-11" isLoading={props.pending}>
+        Save waste
+      </Button>
+    </form>
+  );
+}
+

@@ -527,3 +527,47 @@ prompt; the round-list print and the quality page.
 **Not done in B3b:** recording doses offline (the board reads offline; recording waits for the
 outbox to take MAR rows), push notifications to phones (banners and the board chime only), witness at
 waste and the stock posting (B4b), the clinical sign-off of the real list (legal item L8), L5.
+
+**B4b treatment card → stock ledger (11 Oct 2026), migration 0050 (ADR-035):**
+- **Doses come off stock:** where the treatment card and stock are both in use for a ward, a
+  risk-class give takes its units off the ward's store (or the store the nurse picks when the ward
+  has more than one), earliest unexpired batch first, in the dose's own transaction, once per retry
+  (`stock_ledger` source `mar`, reference `mar:<dose>:<n>`). A store that cannot cover it leaves the
+  dose saved and marked short; the stock page lists it under "From the treatment card" with "Take
+  off stock" from any store that holds it.
+- **Strike-out puts stock back:** `reversal` rows, one per row taken, referenced so it happens once.
+- **Waste** (`mar_wastes`): "Waste" on a risk-class line: why (rest of an opened ampoule, broken,
+  dropped, contaminated, drawn up not given, expired, other), whole units and/or the amount, the dose
+  it came from, and a witness — on the tablet with their PIN or by approval from their own login
+  (`witness_requests.action = 'waste'`). Nothing comes off stock until it is witnessed; a remainder
+  only records the amount. Waste waiting over 15 minutes is listed on the stock page.
+- **Counts:** at a store whose ward posts from the card, the count asks no "used since last count"
+  (any typed figure is ignored), and giving doses does not bar a nurse from counting it.
+- **Reconciliation** (store → Reconcile): per batch over chart days, opening + received + from
+  stores − sent/returned − given (card) − given (register) − wasted + put back ± adjustments ± count
+  differences = closing, from the ledger.
+- **Patient-wise register** (Stock → Patient-wise register): every give and waste of one medicine
+  with patient, IPD No., units, batches, store, who gave it and the witness; struck-out rows crossed
+  out. Draft layout until the statutory format is confirmed (D-DRUG).
+- **D13 in observe:** "Repeated differences" for approvers: a store, counter or shift with differences
+  on two or more counts in 7 days. No alert, no case (B6).
+- Guards in the database: the stock state of a dose or waste only moves forward (short → posted,
+  posted → reversed), a waste is never edited or deleted, a reversal must name what it reverses,
+  every card posting carries its reference, and a witness request names a dose or a waste, never
+  both. Evidence: `mar_waste.*`, stock movements "from the treatment card", stock state on doses.
+
+**Verified:** typecheck, lint on the changed files; 858 unit tests (FEFO draw, reconciliation
+identity, D13 grouping, waste input); `mar-stock.integration.test.ts` (9: FEFO and once-per-retry,
+never an expired batch, no posting when stock is off or not risk-class, short then taken off by
+hand, strike-out put back once, waste only after the witness by approval and on the tablet, counts
+without the "used" figure, reconciliation equal to the books, the patient-wise register, the guards
+and the evidence log) and the MAR, stock, due, evidence, care-entry, security and RLS suites (113);
+migration lint and a second run of 0050. Browser check on the demo hospital: a nurse (390 px) gives
+morphine from the General Ward store with the bed code and a witness, wastes a broken ampoule, and
+gives 9 when the store holds 5 (saved, marked short); the owner witnesses the dose and the waste on
+/ipd/witness, sees the short dose on the stock page, is refused taking it off a store that does not
+hold enough, and opens the store's movements, the reconciliation and the register (no sideways
+scroll at 375 px).
+**Not applied to production:** 0050 is for the owner to apply (`npm run db:migrate:plan` first).
+**Not done in B4b:** recording doses offline; the statutory NDPS and H1 register formats (D-DRUG);
+detectors beyond D13 and cases (B6); stock for medicines outside a risk class (B4-full).

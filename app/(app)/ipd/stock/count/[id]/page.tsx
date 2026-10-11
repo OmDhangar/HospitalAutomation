@@ -7,7 +7,8 @@ import { requireSession } from '@/lib/auth/session';
 import { can } from '@/lib/domain/permissions';
 import { VARIANCE_REASONS, expiryStatus } from '@/lib/domain/stock';
 import { serviceDateIn } from '@/lib/domain/time';
-import { getCount, listMedicinesForStock } from '@/lib/services/stock';
+import { marPostsStock } from '@/lib/modules/registry';
+import { getCount, listLocations, listMedicinesForStock } from '@/lib/services/stock';
 import { approveCountAction, explainDifferenceAction, saveCountAction } from '../../actions';
 
 export const metadata = { title: 'Count · Stock' };
@@ -24,7 +25,7 @@ const box =
  */
 export default async function CountPage({ params, searchParams }: PageProps<'/ipd/stock/count/[id]'>) {
   const session = await requireSession();
-  await requireModule(session, 'stock');
+  const states = await requireModule(session, 'stock');
   if (!can(session.role, 'stock.view')) notFound();
   const { id } = await params;
   const query = await searchParams;
@@ -32,6 +33,9 @@ export default async function CountPage({ params, searchParams }: PageProps<'/ip
   if (!count) notFound();
 
   const today = serviceDateIn(session.timezone);
+  // B4b: a store whose ward gives from the treatment card has every dose in the books already: no "used" figure.
+  const location = (await listLocations(session.hospitalId, { includeInactive: true })).find((l) => l.id === count.locationId);
+  const marPosts = marPostsStock(states, location?.wardId ?? null);
   const counter = count.countedByUserId === session.userId;
   const writable = !session.readOnly;
   const counting = count.status === 'counting';
@@ -114,7 +118,11 @@ export default async function CountPage({ params, searchParams }: PageProps<'/ip
             )}
           </Card>
 
-          {medicines.length > 0 ? (
+          {marPosts ? (
+            <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+              Doses and waste on this ward come off the books from the treatment card, so there is no “used” figure to copy from the register.
+            </p>
+          ) : medicines.length > 0 ? (
             <Card>
               <CardHeader title="Used since the last count" hint="From the paper drug register, per medicine. Leave empty if none was used." />
               <ul className="divide-y divide-ink-100">
@@ -185,7 +193,11 @@ export default async function CountPage({ params, searchParams }: PageProps<'/ip
           <Card>
             <CardHeader
               title="Shelf against the books"
-              hint="Expected = books − used (from the register, earliest expiry first). Difference = counted − expected."
+              hint={
+                marPosts
+                  ? 'The books already take off every dose and waste from the treatment card. Difference = counted − books.'
+                  : 'Expected = books − used (from the register, earliest expiry first). Difference = counted − expected.'
+              }
             />
             <div className="overflow-x-auto">
               <table className="w-full min-w-[34rem] text-sm">

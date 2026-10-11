@@ -7,11 +7,15 @@ import { requireWritableSession } from '@/lib/auth/session';
 import { can, type Permission } from '@/lib/domain/permissions';
 import { StockError, isAdjustReason, parseQuantity } from '@/lib/domain/stock';
 import { serviceDateIn } from '@/lib/domain/time';
+import { marPostsStock } from '@/lib/modules/registry';
+import { MarError, postShortByHand } from '@/lib/services/mar';
 import {
   approveCount,
   cancelCount,
   decideAdjustment,
   explainDifference,
+  getCount,
+  listLocations,
   receiveStock,
   receiveTransfer,
   requestAdjustment,
@@ -49,9 +53,15 @@ async function attempt<T>(path: string, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (err) {
-    if (err instanceof StockError) back(path, { error: err.message });
+    if (err instanceof StockError || err instanceof MarError) back(path, { error: err.message });
     throw err;
   }
+}
+
+/** B4b: does this store's ward give its doses from the treatment card (so its count asks no "used" figure)? */
+async function storeMarPosts(hospitalId: string, locationId: string): Promise<boolean> {
+  const location = (await listLocations(hospitalId, { includeInactive: true })).find((l) => l.id === locationId);
+  return marPostsStock(await getModuleStatesForRequest(hospitalId), location?.wardId ?? null);
 }
 
 /* -------------------------------------------------------------- receive */
@@ -166,11 +176,13 @@ export async function saveCountAction(form: FormData) {
       };
     }
   });
-  await attempt(path, () => saveCount({ hospitalId: session.hospitalId, countId, actorUserId: session.userId, counted, manualUse, found }));
+  const count = await getCount(session.hospitalId, countId);
+  const marPosts = count ? await storeMarPosts(session.hospitalId, count.locationId) : false;
+  await attempt(path, () => saveCount({ hospitalId: session.hospitalId, countId, actorUserId: session.userId, counted, manualUse, found, marPosts }));
 
   const intent = text(form, 'intent');
   if (intent === 'submit') {
-    const { differences } = await attempt(path, () => submitCount({ hospitalId: session.hospitalId, countId, actorUserId: session.userId }));
+    const { differences } = await attempt(path, () => submitCount({ hospitalId: session.hospitalId, countId, actorUserId: session.userId, marPosts }));
     back(path, { saved: differences === 0 ? 'Submitted. Everything matches the books.' : `Submitted. ${differences} line${differences === 1 ? ' differs' : 's differ'} — say why below.` });
   }
   if (intent === 'cancel') {
@@ -236,3 +248,16 @@ export async function decideAdjustmentAction(form: FormData) {
   await attempt(BASE, () => decideAdjustment({ hospitalId: session.hospitalId, adjustmentId: text(form, 'adjustmentId'), approve, actorUserId: session.userId }));
   back(BASE, { saved: approve ? 'Adjustment approved and posted' : 'Adjustment rejected' });
 }
+
+/* -------------------------------------------------------------- from the treatment card (B4b) */
+
+/** A dose or waste no store could cover, taken off a store by hand once it holds it. */
+export async function postShortAction(form: FormData) {
+  const session = await authorize('stock.move');
+  const kind = text(form, 'kind') === 'waste' ? 'waste' : 'dose';
+  await attempt(BASE, () =>
+    postShortByHand({ hospitalId: session.hospitalId, kind, id: text(form, 'id'), locationId: text(form, 'locationId'), actorUserId: session.userId }),
+  );
+  back(BASE, { saved: kind === 'dose' ? 'Dose taken off stock' : 'Waste taken off stock' });
+}
+

@@ -103,7 +103,7 @@ export default async function IpdLayout({ children }: LayoutProps<'/ipd'>) {
       ))}
       {toWitness > 0 ? (
         <Link href="/ipd/witness" className="flex min-h-12 items-center justify-between rounded-xl bg-amber-100 px-4 text-sm font-semibold text-amber-950 ring-1 ring-amber-300">
-          {toWitness} dose{toWitness === 1 ? '' : 's'} waiting for your witness <span aria-hidden>→</span>
+          {toWitness === 1 ? '1 dose or waste' : `${toWitness} doses or wastes`} waiting for your witness <span aria-hidden>→</span>
         </Link>
       ) : null}
       {toCountersign.length > 0 ? (

@@ -23,7 +23,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { STAFF_ROLES } from '@/lib/domain/permissions';
 import type { CallOutcome, ClockFrom, ClosingOutcome, ServicePointKind, TestOrderStatus } from '@/lib/domain/test-orders';
-import type { ControlFlag, DoseState, ReasonCode, Route } from '@/lib/domain/mar';
+import type { ControlFlag, DoseState, ReasonCode, Route, WasteReason } from '@/lib/domain/mar';
 import type { TaskKind, TimingMode } from '@/lib/domain/due';
 import { APPOINTMENT_STATUSES, QUEUE_ACTIONS } from '@/lib/domain/types';
 
@@ -2634,10 +2634,11 @@ export const stockLedger = pgTable('stock_ledger', {
   medicineId: uuid('medicine_id').notNull(),
   batchId: uuid('batch_id').notNull(),
   kind: text('kind')
-    .$type<'receive' | 'transfer_out' | 'transfer_in' | 'give' | 'waste' | 'return' | 'adjust' | 'count_variance'>()
+    .$type<'receive' | 'transfer_out' | 'transfer_in' | 'give' | 'waste' | 'return' | 'adjust' | 'count_variance' | 'reversal'>()
     .notNull(),
   quantity: integer('quantity').notNull(),
-  source: text('source').$type<'app' | 'manual_register'>().notNull().default('app'),
+  /** 'mar': posted by the treatment card (0050), with a reference key per batch row. */
+  source: text('source').$type<'app' | 'manual_register' | 'mar'>().notNull().default('app'),
   occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
   recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
   recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
@@ -2851,6 +2852,9 @@ export const marAdministrations = pgTable(
     delayMin: integer('delay_min'),
     timingReason: text('timing_reason'),
     controlFlags: text('control_flags').array().$type<ControlFlag[]>().notNull().default(sql`'{}'::text[]`),
+    /** Taken off a store (0050): null when there is nothing to take off. */
+    stockStatus: text('stock_status').$type<StockPostStatus>(),
+    stockLocationId: uuid('stock_location_id'),
     recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
     recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     recordedChannel: text('recorded_channel').$type<'personal' | 'ward_device'>(),
@@ -2863,6 +2867,46 @@ export const marAdministrations = pgTable(
   (t) => [primaryKey({ columns: [t.id, t.occurredAt] })],
 );
 
+export type StockPostStatus = 'posted' | 'short' | 'reversed';
+
+/** Clinical. A risk-class medicine wasted (broken, left over, not used), witnessed before it comes off stock (0050). */
+export const marWastes = pgTable(
+  'mar_wastes',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull(),
+    admissionId: uuid('admission_id').notNull(),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    orderId: uuid('order_id').notNull(),
+    medicineId: uuid('medicine_id').notNull(),
+    marId: uuid('mar_id'),
+    marOccurredAt: timestamp('mar_occurred_at', { withTimezone: true }),
+    locationId: uuid('location_id'),
+    units: smallint('units').notNull(),
+    amount: text('amount'),
+    reasonCode: text('reason_code').$type<WasteReason>().notNull(),
+    reasonText: text('reason_text'),
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+    witnessStatus: text('witness_status').$type<'awaiting' | 'witnessed'>().notNull().default('awaiting'),
+    witnessedByUserId: uuid('witnessed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    witnessedAt: timestamp('witnessed_at', { withTimezone: true }),
+    stockStatus: text('stock_status').$type<StockPostStatus>(),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    recordedChannel: text('recorded_channel').$type<'personal' | 'ward_device'>(),
+    recordedDeviceId: text('recorded_device_id'),
+    recordedSessionId: uuid('recorded_session_id'),
+    clientId: uuid('client_id').notNull(),
+    createdAt: createdAt(),
+    ...voidColumns(),
+  },
+  (t) => [uniqueIndex('mar_wastes_client_key').on(t.hospitalId, t.clientId)],
+);
+
 /** Clinical. A second person confirming a risk-class give; decided once (trigger). */
 export const witnessRequests = pgTable('witness_requests', {
   id: id(),
@@ -2870,9 +2914,11 @@ export const witnessRequests = pgTable('witness_requests', {
     .notNull()
     .references(() => hospitals.id, { onDelete: 'cascade' }),
   admissionId: uuid('admission_id').notNull(),
-  marId: uuid('mar_id').notNull(),
-  marOccurredAt: timestamp('mar_occurred_at', { withTimezone: true }).notNull(),
-  action: text('action').$type<'give'>().notNull().default('give'),
+  /** A give names its dose; a waste (0050) names its waste. */
+  marId: uuid('mar_id'),
+  marOccurredAt: timestamp('mar_occurred_at', { withTimezone: true }),
+  wasteId: uuid('waste_id'),
+  action: text('action').$type<'give' | 'waste'>().notNull().default('give'),
   actorUserId: uuid('actor_user_id')
     .notNull()
     .references(() => users.id),

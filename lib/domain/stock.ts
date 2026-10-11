@@ -40,6 +40,7 @@ export const LEDGER_KIND_LABELS = {
   return: 'Returned to supplier',
   adjust: 'Adjusted',
   count_variance: 'Count difference',
+  reversal: 'Put back (struck out)',
 } as const;
 export type LedgerKind = keyof typeof LEDGER_KIND_LABELS;
 
@@ -209,3 +210,151 @@ export function adjustmentQuantity(reason: AdjustReason, direction: 'in' | 'out'
   }
   return direction === 'out' ? -quantity : quantity;
 }
+
+/* ---------------------------------------------------------------- doses (B4b) */
+
+/**
+ * Which batches a dose of `units` comes from: earliest expiry first, across
+ * batches if one runs out. All or nothing: null when the store does not hold
+ * enough, so a dose is never half taken off stock.
+ */
+export function planDraw<T extends BatchOnHand>(batches: readonly T[], units: number): { batchId: string; quantity: number }[] | null {
+  if (units <= 0) return [];
+  const { byBatch, unallocated } = allocateUse(batches, units);
+  if (unallocated > 0) return null;
+  return fefo(batches)
+    .filter((b) => byBatch.has(b.batchId))
+    .map((b) => ({ batchId: b.batchId, quantity: byBatch.get(b.batchId)! }));
+}
+
+/** The ledger reference of one batch row of a dose or waste, and of the row that puts it back. */
+export const doseReference = (marId: string, n: number) => `mar:${marId}:${n}`;
+export const wasteReference = (wasteId: string, n: number) => `waste:${wasteId}:${n}`;
+export const reversalReference = (ledgerId: string) => `rev:${ledgerId}`;
+
+/* ---------------------------------------------------------------- reconciliation */
+
+export type ReconMovement = { batchId: string; kind: LedgerKind; source: 'app' | 'manual_register' | 'mar'; quantity: number; occurredAt: Date };
+
+export type ReconLine = {
+  batchId: string;
+  opening: number;
+  received: number;
+  transferredIn: number;
+  sentOut: number;
+  givenMar: number;
+  givenRegister: number;
+  wasted: number;
+  returned: number;
+  adjusted: number;
+  countDifference: number;
+  putBack: number;
+  closing: number;
+};
+
+/**
+ * Plan §7.3: expected = opening + received − issued − given − wasted ±
+ * adjustments, per batch, over a period. Built from the ledger alone, so the
+ * closing figure always equals the opening plus every movement (asserted by
+ * the tests), and given-by-MAR is kept apart from the paper register's figure.
+ * Outgoing columns are positive numbers.
+ */
+export function reconcile(movements: readonly ReconMovement[], from: Date, to: Date): ReconLine[] {
+  const lines = new Map<string, ReconLine>();
+  const line = (batchId: string) => {
+    let l = lines.get(batchId);
+    if (!l) {
+      l = { batchId, opening: 0, received: 0, transferredIn: 0, sentOut: 0, givenMar: 0, givenRegister: 0, wasted: 0, returned: 0, adjusted: 0, countDifference: 0, putBack: 0, closing: 0 };
+      lines.set(batchId, l);
+    }
+    return l;
+  };
+  for (const m of movements) {
+    if (m.occurredAt >= to) continue;
+    const l = line(m.batchId);
+    if (m.occurredAt < from) {
+      l.opening += m.quantity;
+      continue;
+    }
+    switch (m.kind) {
+      case 'receive':
+        l.received += m.quantity;
+        break;
+      case 'transfer_in':
+        l.transferredIn += m.quantity;
+        break;
+      case 'transfer_out':
+        l.sentOut -= m.quantity;
+        break;
+      case 'give':
+        if (m.source === 'manual_register') l.givenRegister -= m.quantity;
+        else l.givenMar -= m.quantity;
+        break;
+      case 'waste':
+        l.wasted -= m.quantity;
+        break;
+      case 'return':
+        l.returned -= m.quantity;
+        break;
+      case 'adjust':
+        l.adjusted += m.quantity;
+        break;
+      case 'count_variance':
+        l.countDifference += m.quantity;
+        break;
+      case 'reversal':
+        l.putBack += m.quantity;
+        break;
+    }
+  }
+  for (const l of lines.values()) {
+    l.closing =
+      l.opening + l.received + l.transferredIn - l.sentOut - l.givenMar - l.givenRegister - l.wasted - l.returned + l.adjusted + l.countDifference + l.putBack;
+  }
+  return [...lines.values()].filter((l) => l.opening !== 0 || l.closing !== 0 || hasMovement(l));
+}
+
+const hasMovement = (l: ReconLine) =>
+  l.received || l.transferredIn || l.sentOut || l.givenMar || l.givenRegister || l.wasted || l.returned || l.adjusted || l.countDifference || l.putBack;
+
+/* ---------------------------------------------------------------- D13 */
+
+export type VarianceEvent = { countId: string; locationId: string; countedByUserId: string; approvedAt: Date; shift: 'morning' | 'evening' | 'night' };
+
+export type RecurrenceFlag = { on: 'location' | 'person' | 'shift'; key: string; counts: number; latest: Date };
+
+/** The shift a moment falls in, by the hospital's clock: 8–14 morning, 14–20 evening, 20–8 night. */
+export function shiftOf(at: Date, timezone: string): 'morning' | 'evening' | 'night' {
+  const hour = Number(new Intl.DateTimeFormat('en-GB', { hour: '2-digit', hourCycle: 'h23', timeZone: timezone }).format(at));
+  if (hour >= 8 && hour < 14) return 'morning';
+  if (hour >= 14 && hour < 20) return 'evening';
+  return 'night';
+}
+
+/**
+ * D13, count variance recurrence (plan §7.5): two or more counts with a
+ * difference in 7 days on the same store, by the same counter, or in the same
+ * shift. Observe only: listed for the owner, never an alert.
+ */
+export function varianceRecurrence(events: readonly VarianceEvent[], now: Date, windowDays = 7): RecurrenceFlag[] {
+  const since = now.getTime() - windowDays * 86_400_000;
+  const recent = events.filter((e) => e.approvedAt.getTime() >= since);
+  const flags: RecurrenceFlag[] = [];
+  const group = (on: RecurrenceFlag['on'], keyOf: (e: VarianceEvent) => string) => {
+    const byKey = new Map<string, VarianceEvent[]>();
+    for (const e of recent) {
+      const key = keyOf(e);
+      const list = byKey.get(key) ?? [];
+      if (!list.some((x) => x.countId === e.countId)) list.push(e);
+      byKey.set(key, list);
+    }
+    for (const [key, list] of byKey) {
+      if (list.length >= 2) flags.push({ on, key, counts: list.length, latest: new Date(Math.max(...list.map((e) => e.approvedAt.getTime()))) });
+    }
+  };
+  group('location', (e) => e.locationId);
+  group('person', (e) => e.countedByUserId);
+  group('shift', (e) => e.shift);
+  return flags.sort((a, b) => b.latest.getTime() - a.latest.getTime());
+}
+

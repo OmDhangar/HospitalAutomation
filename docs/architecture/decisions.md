@@ -503,3 +503,26 @@ timing is reported per ward and hour as a staffing signal (`due_rollups_daily`),
 ISO 18004 worked example and decoded by jsQR in tests), not a dependency. Scanning uses the browser's
 `BarcodeDetector` where present; typing the code always works.
 
+### ADR-035 · Doses post to stock in the dose's own transaction; short is saved, never refused
+*11 Oct 2026 · IPD sheets plan B4b (§7.2, §7.3, D-WITNESS)*
+
+**Decision:** A risk-class dose given from the treatment card is taken off the ward's store in the
+same transaction as the dose: earliest unexpired batch first, across batches if needed, all or
+nothing, one ledger row per batch with the reference `mar:<dose>:<n>` (unique in the database, so a
+retried save cannot take stock twice). If the store cannot cover it — or another give took the
+last ampoule a moment earlier (a savepoint catches the balance CHECK) — the dose is still saved,
+marked `stock_status = 'short'`, and listed on the stock page for someone to take off a store by
+hand. A struck-out dose is put back by `reversal` rows referenced to the rows it took. Waste
+(`mar_wastes`) always needs a witness through the same witness requests as a give, and nothing
+comes off stock until the witness confirms it; the rest of an opened ampoule records the amount
+only, since its dose already took the ampoule. Posting happens only where both the treatment card
+and stock are in use for the ward (`marPostsStock`); there, counts stop asking for the paper
+register's "used" figure and giving doses no longer counts as having moved the store's stock (it is
+not issuing). D13 runs in observe: stores, counters and shifts with differences on two or more
+counts in 7 days are listed for approvers, with no alert and no case.
+
+**Why:** the books must never block or delay a dose (§7.2: never delays care), yet every dose has to
+reach the ledger exactly once for the counts to mean anything; a short list keeps the gap visible
+and owned instead of silently failing. Keeping the ledger free of patient ids keeps it out of the
+clinical key: the patient-wise register joins the doses (clinical) to the ledger by reference.
+

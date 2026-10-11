@@ -324,6 +324,15 @@ export function moduleAllows(
   return scope.wardIds.includes(wardId);
 }
 
+/**
+ * B4b: a ward's risk-class doses and wastes post to the stock ledger from the
+ * treatment card when both the card and stock are in use there. Its store's
+ * counts then stop asking for the paper register's "used" figure.
+ */
+export function marPostsStock(states: ModuleStates, wardId: string | null): boolean {
+  return wardId !== null && moduleAllows(states, 'mar', 'write', wardId) && moduleAllows(states, 'stock', 'write', wardId);
+}
+
 /** The patient-file tabs this role sees, in paper order. */
 export function fileTabsFor(states: ModuleStates, role: StaffRole): FileTab[] {
   return MODULES.filter((def) => moduleAllows(states, def.id, 'read'))

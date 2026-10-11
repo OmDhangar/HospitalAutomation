@@ -216,6 +216,9 @@ const LABELS: Record<string, string> = {
   'mar_administration.created': 'Dose recorded',
   'mar_administration.changed': 'Dose witnessed or flagged',
   'mar_administration.voided': 'Dose struck out',
+  'mar_waste.created': 'Waste recorded',
+  'mar_waste.changed': 'Waste witnessed or taken off stock',
+  'mar_waste.voided': 'Waste struck out',
   'witness_request.created': 'Witness asked for',
   'witness_request.changed': 'Witness decided',
   'presence_proof.created': 'Bed code entered at the bedside',
@@ -358,11 +361,13 @@ export function eventDetail(action: string, payload: Record<string, unknown>): s
         return: 'returned',
         adjust: 'adjusted',
         count_variance: 'count difference',
+        reversal: 'put back',
       };
       const quantity = num('quantity');
       const kind = text('kind');
       const parts = [kind ? (kinds[kind] ?? kind) : null, quantity === null ? null : `${quantity > 0 ? '+' : ''}${quantity}`];
       if (text('source') === 'manual_register') parts.push('from the paper register');
+      if (text('source') === 'mar') parts.push('from the treatment card');
       return parts.filter(Boolean).join(' · ') || null;
     }
     case 'stock_count.changed':
@@ -387,7 +392,22 @@ export function eventDetail(action: string, payload: Record<string, unknown>): s
       if (witness && witness !== 'not_needed') parts.push(`witness ${witness}`);
       const flags = Array.isArray(payload.control_flags) ? (payload.control_flags as string[]) : [];
       if (flags.length) parts.push(`flags: ${flags.join(', ')}`);
+      const stock = text('stock_status');
+      if (stock) parts.push(stock === 'posted' ? 'off stock' : stock === 'short' ? 'not off stock (store short)' : 'stock put back');
       return parts.filter(Boolean).join(' · ') || null;
+    }
+    case 'mar_waste.created':
+    case 'mar_waste.changed': {
+      const units = num('units');
+      const stock = text('stock_status');
+      return [
+        units ? `${units} unit${units === 1 ? '' : 's'}` : 'remainder',
+        text('reason_code'),
+        text('witness_status') === 'witnessed' ? 'witnessed' : 'awaiting witness',
+        stock === 'posted' ? 'off stock' : stock === 'short' ? 'not off stock (store short)' : stock === 'reversed' ? 'stock put back' : null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
     }
     case 'due_escalation.created':
     case 'due_escalation.changed':
@@ -396,7 +416,7 @@ export function eventDetail(action: string, payload: Record<string, unknown>): s
         .join(' · ');
     case 'witness_request.created':
     case 'witness_request.changed':
-      return [text('method') === 'ward_device' ? 'on the ward tablet' : 'by approval', text('status')].filter(Boolean).join(' · ');
+      return [text('action') === 'waste' ? 'for waste' : null, text('method') === 'ward_device' ? 'on the ward tablet' : 'by approval', text('status')].filter(Boolean).join(' · ');
     case 'test_order.created':
     case 'test_order.changed': {
       const status = text('status');
