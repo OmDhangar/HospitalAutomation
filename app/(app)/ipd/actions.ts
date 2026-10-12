@@ -27,6 +27,18 @@ import {
 import { formatUndoToken, idList, isId, parseUndoToken } from '@/lib/domain/undo';
 import { PatientBillingError } from '@/lib/services/patient-billing';
 import { DoctorIpdError, orderTests } from '@/lib/services/doctor-ipd';
+import { withTenant } from '@/lib/db';
+import { admissions, doctors } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
+import {
+  recordAllergyAssessment,
+  saveRoundDraft,
+  type AllergenItem,
+} from '@/lib/services/ipd-rounding-cockpit';
+import {
+  signRoundOrders,
+  type OrderResolution,
+} from '@/lib/services/ipd-medication-orders';
 
 /**
  * The desk's IPD actions (IPD plan §5.3–5.5, task T1.6). Form posts that
@@ -319,3 +331,93 @@ export async function undoIpdAction(form: FormData) {
   }
   go(back, { saved: message });
 }
+
+/* ---------------------------------------------------- doctor rounding cockpit */
+
+export async function recordAllergyAssessmentAction(args: {
+  admissionId: string;
+  status: 'unreviewed' | 'nkda' | 'allergies_documented';
+  allergens?: Array<string | AllergenItem>;
+  doctorId?: string;
+}): Promise<{ ok: boolean; status: string }> {
+  const session = await authorize('ipd.prescribe');
+  const res = await recordAllergyAssessment({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    status: args.status,
+    allergens: args.allergens,
+    doctorId: args.doctorId,
+    actorUserId: session.userId,
+  });
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  return { ok: true, status: res.status };
+}
+
+async function resolveDoctorId(
+  hospitalId: string,
+  userId: string,
+  admissionId: string,
+  requestedDoctorId?: string,
+): Promise<string> {
+  if (requestedDoctorId) return requestedDoctorId;
+  return withTenant(hospitalId, async (tx) => {
+    const [linked] = await tx
+      .select({ id: doctors.id })
+      .from(doctors)
+      .where(eq(doctors.userId, userId));
+    if (linked) return linked.id;
+    const [adm] = await tx
+      .select({ docId: admissions.admittingDoctorId })
+      .from(admissions)
+      .where(eq(admissions.id, admissionId));
+    if (adm?.docId) return adm.docId;
+    throw new Error('No doctor associated with this round');
+  });
+}
+
+export async function saveRoundDraftAction(args: {
+  admissionId: string;
+  notes?: string;
+  doctorId?: string;
+}): Promise<{ ok: boolean; roundId: string }> {
+  const session = await authorize('ipd.prescribe');
+  const docId = await resolveDoctorId(session.hospitalId, session.userId, args.admissionId, args.doctorId);
+
+  const res = await saveRoundDraft({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    doctorId: docId,
+    authorUserId: session.userId,
+    notes: args.notes,
+  });
+
+  revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  return { ok: true, roundId: res.roundId };
+}
+
+export async function signRoundOrdersAction(args: {
+  admissionId: string;
+  notes: string;
+  resolutions: OrderResolution[];
+  doctorId?: string;
+}): Promise<{ ok: boolean; roundId: string; signedOrderIds: string[] }> {
+  const session = await authorize('ipd.prescribe');
+  const docId = await resolveDoctorId(session.hospitalId, session.userId, args.admissionId, args.doctorId);
+
+  const res = await signRoundOrders({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    doctorId: docId,
+    authorUserId: session.userId,
+    notes: args.notes,
+    resolutions: args.resolutions,
+  });
+
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  revalidatePath('/ipd/my-patients');
+  return { ok: true, roundId: res.roundId, signedOrderIds: res.signedOrderIds };
+}
+
+
