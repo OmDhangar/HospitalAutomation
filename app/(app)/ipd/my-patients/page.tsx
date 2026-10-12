@@ -78,6 +78,12 @@ export default async function MyPatientsPage({ searchParams }: PageProps<'/ipd/m
                   </Link>
                   {writable ? (
                     <div className="grid grid-cols-2 gap-2 p-4">
+                      <Link
+                        href={`/ipd/admissions/${patient.admissionId}/rounds`}
+                        className="col-span-2 flex min-h-11 items-center justify-center rounded-lg bg-brand-50 text-sm font-semibold text-brand-900 ring-1 ring-inset ring-brand-300 hover:bg-brand-100"
+                      >
+                        Start Round / Review Orders →
+                      </Link>
                       <form action={setDischargeReadyAction}>
                         <input type="hidden" name="admissionId" value={patient.admissionId} />
                         <input type="hidden" name="ready" value={ready ? 'false' : 'true'} />

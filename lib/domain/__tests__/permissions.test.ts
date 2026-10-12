@@ -75,6 +75,23 @@ describe('clinical permissions', () => {
   });
 });
 
+describe('ipd prescribing and administration permissions', () => {
+  it('lets doctors and owners prescribe IPD orders, but never nurses or receptionists', () => {
+    expect(can('doctor', 'ipd.prescribe' as any)).toBe(true);
+    expect(can('owner', 'ipd.prescribe' as any)).toBe(true);
+    expect(can('nurse', 'ipd.prescribe' as any)).toBe(false);
+    expect(can('receptionist', 'ipd.prescribe' as any)).toBe(false);
+  });
+
+  it('lets nurses, doctors and owners administer medications at bedside, but never receptionists', () => {
+    expect(can('nurse', 'ipd.administer' as any)).toBe(true);
+    expect(can('doctor', 'ipd.administer' as any)).toBe(true);
+    expect(can('owner', 'ipd.administer' as any)).toBe(true);
+    expect(can('receptionist', 'ipd.administer' as any)).toBe(false);
+  });
+});
+
+
 describe('dashboardViewFor', () => {
   it('always puts a doctor in the doctor view', () => {
     expect(dashboardViewFor('doctor', null)).toBe('doctor');

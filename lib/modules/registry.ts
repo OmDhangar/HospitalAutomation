@@ -59,8 +59,11 @@ export const MODULES = [
     core: true,
     dependsOn: [],
     uses: [],
-    routes: ['/ipd', '/api/ipd', '/print/ipd-bill', '/settings/ipd'],
-    fileTabs: [{ slug: '', label: 'Summary', permission: 'ipd.view', order: 0 }],
+    routes: ['/ipd', '/api/ipd', '/print/ipd-bill', '/settings/ipd', '/ipd/admissions/[id]/(file)/rounds'],
+    fileTabs: [
+      { slug: '', label: 'Summary', permission: 'ipd.view', order: 0 },
+      { slug: 'rounds', label: 'Doctor rounds', permission: 'ipd.view', order: 5 },
+    ],
     printSheets: [],
     hasStages: false,
     defaultState: 'on',

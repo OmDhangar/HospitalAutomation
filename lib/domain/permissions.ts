@@ -99,6 +99,10 @@ const PERMISSIONS = {
   'ipd.orderTests': ['owner', 'doctor'],
   /** Review, finalise and print the discharge bill. */
   'ipd.discharge': ['owner', 'receptionist'],
+  /** Sign daily clinical rounds and author/modify/discontinue inpatient medication orders. */
+  'ipd.prescribe': ['owner', 'doctor'],
+  /** Record bedside medication administration, exceptions, and corrections on the eMAR. */
+  'ipd.administer': ['owner', 'nurse', 'doctor'],
   /** Wards, beds, ward devices and nurse PINs. Prices stay `billing.price`. */
   'ipd.configure': ['owner'],
   /**
