@@ -527,3 +527,121 @@ prompt; the round-list print and the quality page.
 **Not done in B3b:** recording doses offline (the board reads offline; recording waits for the
 outbox to take MAR rows), push notifications to phones (banners and the board chime only), witness at
 waste and the stock posting (B4b), the clinical sign-off of the real list (legal item L8), L5.
+
+**B4b treatment card → stock ledger (11 Oct 2026), migration 0050 (ADR-035):**
+- **Doses come off stock:** where the treatment card and stock are both in use for a ward, a
+  risk-class give takes its units off the ward's store (or the store the nurse picks when the ward
+  has more than one), earliest unexpired batch first, in the dose's own transaction, once per retry
+  (`stock_ledger` source `mar`, reference `mar:<dose>:<n>`). A store that cannot cover it leaves the
+  dose saved and marked short; the stock page lists it under "From the treatment card" with "Take
+  off stock" from any store that holds it.
+- **Strike-out puts stock back:** `reversal` rows, one per row taken, referenced so it happens once.
+- **Waste** (`mar_wastes`): "Waste" on a risk-class line: why (rest of an opened ampoule, broken,
+  dropped, contaminated, drawn up not given, expired, other), whole units and/or the amount, the dose
+  it came from, and a witness — on the tablet with their PIN or by approval from their own login
+  (`witness_requests.action = 'waste'`). Nothing comes off stock until it is witnessed; a remainder
+  only records the amount. Waste waiting over 15 minutes is listed on the stock page.
+- **Counts:** at a store whose ward posts from the card, the count asks no "used since last count"
+  (any typed figure is ignored), and giving doses does not bar a nurse from counting it.
+- **Reconciliation** (store → Reconcile): per batch over chart days, opening + received + from
+  stores − sent/returned − given (card) − given (register) − wasted + put back ± adjustments ± count
+  differences = closing, from the ledger.
+- **Patient-wise register** (Stock → Patient-wise register): every give and waste of one medicine
+  with patient, IPD No., units, batches, store, who gave it and the witness; struck-out rows crossed
+  out. Draft layout until the statutory format is confirmed (D-DRUG).
+- **D13 in observe:** "Repeated differences" for approvers: a store, counter or shift with differences
+  on two or more counts in 7 days. No alert, no case (B6).
+- Guards in the database: the stock state of a dose or waste only moves forward (short → posted,
+  posted → reversed), a waste is never edited or deleted, a reversal must name what it reverses,
+  every card posting carries its reference, and a witness request names a dose or a waste, never
+  both. Evidence: `mar_waste.*`, stock movements "from the treatment card", stock state on doses.
+
+**Verified:** typecheck, lint on the changed files; 858 unit tests (FEFO draw, reconciliation
+identity, D13 grouping, waste input); `mar-stock.integration.test.ts` (9: FEFO and once-per-retry,
+never an expired batch, no posting when stock is off or not risk-class, short then taken off by
+hand, strike-out put back once, waste only after the witness by approval and on the tablet, counts
+without the "used" figure, reconciliation equal to the books, the patient-wise register, the guards
+and the evidence log) and the MAR, stock, due, evidence, care-entry, security and RLS suites (113);
+migration lint and a second run of 0050. Browser check on the demo hospital: a nurse (390 px) gives
+morphine from the General Ward store with the bed code and a witness, wastes a broken ampoule, and
+gives 9 when the store holds 5 (saved, marked short); the owner witnesses the dose and the waste on
+/ipd/witness, sees the short dose on the stock page, is refused taking it off a store that does not
+hold enough, and opens the store's movements, the reconciliation and the register (no sideways
+scroll at 375 px).
+**Not applied to production:** 0050 is for the owner to apply (`npm run db:migrate:plan` first).
+**Not done in B4b:** recording doses offline; the statutory NDPS and H1 register formats (D-DRUG);
+detectors beyond D13 and cases (B6); stock for medicines outside a risk class (B4-full).
+
+**B2 allergies, medication reconciliation, deposit alerts (11 Oct 2026), migration 0051 (ADR-036):**
+- Modules `allergy`, `med_reconciliation`, `deposit_alert` (off by default; Settings → Modules).
+- **Allergies** (tab "Allergies"): substance, kind (medicine/food/other), severity, reaction, who said
+  so; drug class found from the name. "No known drug allergies" (refused while one is on record) and
+  "Could not ask" (with why). A banner on every tab of the patient file — red with the allergies,
+  green when none known, amber when not asked — and allergies on every printed sheet's patient strip.
+- **The check on the treatment card:** writing a medicine that matches an allergy shows the match and
+  asks why; "Add anyway" keeps the reason on the line (and `mar.allergy_override` in the audit log).
+  Lines written before an allergy was recorded show a warning to check with the doctor.
+- **Home medicines** (tab): at admission the patient's home medicines with source and the doctor's
+  decision (continue / hold / stop / change, with why for the last three) and "Complete admission
+  reconciliation" (or "takes nothing at home"); at discharge "Start from the card" lists every active
+  medicine line and the home medicines continued or held, each decided (continue / change / stop),
+  plus new ones with how long; completed by a doctor. Prints as "Medication reconciliation".
+- **Deposit alerts** (IPD → Deposits, and on the patient summary for the desk): charges at 80% of what
+  was paid, or more than ₹5,000 owed; the owner changes both.
+- Guards: allergies and reconciliation medicines struck out, never edited or deleted; reviews and
+  sign-offs append-only; a line that matched an allergy must carry the reason. Evidence: family
+  "Allergies and home medicines".
+
+**Verified:** typecheck, lint; unit tests (class map with Indian brand names, matching, banner status,
+reconciliation progress, deposit thresholds); `allergy-medrec.integration.test.ts` (6) and the MAR,
+stock, due, evidence and RLS suites; migration lint and a second run of 0051. Browser check on the
+demo hospital: an allergy recorded (banner turns red on every tab), a Ceftriaxone line refused with
+"Cephalosporins (severe; same class)" and added with a reason, the earlier Ceftriaxone lines flagged,
+a home medicine held with a reason and the reconciliation completed, the discharge list started from
+the card; deposits page; no sideways scroll at 390 px.
+**Not applied to production:** 0051 is for the owner to apply (`npm run db:migrate:plan` first).
+
+**C3 doctor's notes (11 Oct 2026), migration 0052 (ADR-037):**
+- Module `doctor_notes` (off by default), tab "Doctor's notes" and print sheet "Case sheet and
+  progress notes".
+- **Case sheet** once per stay: Case of, C/O (each complaint with since when), H/O, P/H, O/E general
+  signs (pallor, icterus, cyanosis, clubbing, lymphadenopathy, oedema, other) and vitals, S/E (CNS,
+  RS, P/A, CVS, with an NAD button each), Adv. **Progress notes**: progress, vitals, S/E, Adv.
+- **Signed or countersigned:** from the named doctor's login it is signed; a nurse writes it for the
+  doctor and it waits for that doctor's countersign (banner in IPD: "notes written for you").
+- **Vitals and the chart:** prefilled from a reading under 2 hours old; kept → linked; changed or
+  none → one chart reading from the note. Strike-out takes a reading it wrote with it.
+- Permissions `ipd.notes`, `ipd.notesTranscribe` (countersign is `ipd.countersign`). Evidence family
+  "Doctor's notes".
+
+**Verified:** typecheck, lint; unit tests (sections, vitals parsing, confirm/write/none);
+`notes.integration.test.ts` (5: case sheet once, vitals written to the chart, recent reading
+confirmed vs changed, chart off, transcribed note countersigned only by the named doctor,
+strike-out with and without its reading, guards, evidence) and the chart and RLS suites; migration
+lint and a second run of 0052. Browser check on the demo hospital: a nurse (390 px) transcribes the
+case sheet; the doctor sees it waiting for countersign; a progress note starts from the charted
+vitals; the printed sheet. The NAD buttons were first inside their label, which renamed them for
+screen readers; moved out.
+**Not applied to production:** 0052 is for the owner to apply (`npm run db:migrate:plan` first).
+
+**B5 discharge summary (11 Oct 2026), migration 0053 (ADR-038):**
+- Module `discharge_summary` (off by default), tab "Discharge summary", print sheet "Discharge summary".
+- Draft built from the record (case sheet, tests, treatment card, progress notes, discharge
+  reconciliation), every section editable: how the patient left (improved / on request / DAMA /
+  referred / death), diagnosis, complaints, history, findings, investigations, course, treatment
+  given, procedures, condition at discharge, medicines to continue (table), follow-up, diet, "come
+  back at once if". Save draft; Fill again from the record.
+- Finalise: version 1, 2, …; signed when the doctor named finalises, else it waits for their
+  signature (IPD banner "discharge summaries waiting for your signature"); version 2+ says what
+  changed. Unsigned prints with a DRAFT watermark and "NOT SIGNED".
+- Permissions `ipd.summary` (doctor), `ipd.summaryTranscribe` (nurse). Evidence: "Doctor's notes and
+  summaries".
+
+**Verified:** typecheck, lint; unit tests (deterministic draft, reconciled vs card medicines, test
+statuses, finalising rules, refresh keeps the doctor's words); `discharge-summary.integration.test.ts`
+(4: draft from the record, saved outside it, refreshed after the reconciliation, finalised by a
+nurse and signed only by the named doctor, version 2 with a reason, guards, evidence); migration lint
+and a second run of 0053. Browser check on the demo hospital: a nurse (390 px) edits and finalises,
+the print shows DRAFT; the doctor signs from the banner; the print is clean.
+**Not applied to production:** 0053 is for the owner to apply (`npm run db:migrate:plan` first).
+

@@ -15,6 +15,8 @@ export type SheetPatient = {
   wardBed: string | null;
   admittedAt: Date | null;
   doctorName: string;
+  /** B2: "Penicillin (severe), Sulfa", "None known", or null when allergies are not in use. */
+  allergies?: string | null;
 };
 
 export function PrintSheetHeader({
@@ -47,6 +49,7 @@ export function PrintSheetHeader({
     ['Admitted', patient.admittedAt ? dateTime(patient.admittedAt) : '—'],
     ['Consultant', doctorDisplayName(patient.doctorName)],
   ];
+  if (patient.allergies) cells.push(['Allergies', patient.allergies]);
   if (sheetDate) {
     cells.push(['Date', sheetDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: timezone })]);
   }
@@ -54,7 +57,7 @@ export function PrintSheetHeader({
   return (
     <dl className="grid grid-cols-4 gap-x-4 gap-y-1 border-b border-ink-400 py-2">
       {cells.map(([label, value]) => (
-        <div key={label} className={label === 'Name' ? 'col-span-2' : undefined}>
+        <div key={label} className={label === 'Name' || label === 'Allergies' ? 'col-span-2' : undefined}>
           <dt className="text-[10px] uppercase tracking-wide text-ink-500">{label}</dt>
           <dd className="numeric font-semibold">{value}</dd>
         </div>

@@ -503,3 +503,82 @@ timing is reported per ward and hour as a staffing signal (`due_rollups_daily`),
 ISO 18004 worked example and decoded by jsQR in tests), not a dependency. Scanning uses the browser's
 `BarcodeDetector` where present; typing the code always works.
 
+### ADR-035 · Doses post to stock in the dose's own transaction; short is saved, never refused
+*11 Oct 2026 · IPD sheets plan B4b (§7.2, §7.3, D-WITNESS)*
+
+**Decision:** A risk-class dose given from the treatment card is taken off the ward's store in the
+same transaction as the dose: earliest unexpired batch first, across batches if needed, all or
+nothing, one ledger row per batch with the reference `mar:<dose>:<n>` (unique in the database, so a
+retried save cannot take stock twice). If the store cannot cover it — or another give took the
+last ampoule a moment earlier (a savepoint catches the balance CHECK) — the dose is still saved,
+marked `stock_status = 'short'`, and listed on the stock page for someone to take off a store by
+hand. A struck-out dose is put back by `reversal` rows referenced to the rows it took. Waste
+(`mar_wastes`) always needs a witness through the same witness requests as a give, and nothing
+comes off stock until the witness confirms it; the rest of an opened ampoule records the amount
+only, since its dose already took the ampoule. Posting happens only where both the treatment card
+and stock are in use for the ward (`marPostsStock`); there, counts stop asking for the paper
+register's "used" figure and giving doses no longer counts as having moved the store's stock (it is
+not issuing). D13 runs in observe: stores, counters and shifts with differences on two or more
+counts in 7 days are listed for approvers, with no alert and no case.
+
+**Why:** the books must never block or delay a dose (§7.2: never delays care), yet every dose has to
+reach the ledger exactly once for the counts to mean anything; a short list keeps the gap visible
+and owned instead of silently failing. Keeping the ledger free of patient ids keeps it out of the
+clinical key: the patient-wise register joins the doses (clinical) to the ledger by reference.
+
+### ADR-036 · Allergies belong to the patient; a match asks for a reason, it never blocks
+*11 Oct 2026 · IPD sheets plan B2 (§8)*
+
+**Decision:** Allergies are stored per patient (`patient_allergies`), not per stay, so they follow the
+patient into every admission; "asked: none known" and "could not ask" are separate review rows, so
+the file can say *not asked yet* instead of implying "none". When a doctor writes a medicine line,
+it is matched against the patient's medicine allergies by the same medicine, the allergy's words in
+the medicine's name or generic name, or the same drug class from a small class map (penicillins,
+cephalosporins, sulfa, NSAIDs, aspirin). A match refuses the line until the doctor writes why to go
+ahead; the matches and the reason are kept on the line (a CHECK requires the reason) and audited.
+Allergies recorded after a line was written still show on it. The matching is labelled decision
+support, not an interaction database. Medication reconciliation keeps the home medicines and the
+discharge list as items with a doctor's decision, completed by a doctor's own login (append-only
+sign-offs; the latest counts); the discharge list is started from the active card lines and the
+home medicines continued or held. Deposit alerts are computed on read from the bill lines and
+payments (D-DEP: 80% of the deposit used, or more than ₹5,000 owed; both hospital settings).
+
+**Why:** a hard block on a name match would stop legitimate care (test doses, no alternative) and
+teach staff to work around it; a written reason keeps the decision with the doctor and on record.
+A per-stay allergy list would be re-asked and re-typed every admission and miss old reactions.
+
+### ADR-037 · Doctor's notes write their vitals to the chart, once
+*11 Oct 2026 · IPD sheets plan C3*
+
+**Decision:** The case sheet and progress notes are one table (`ipd_notes`) in the paper's sections,
+one live case sheet per stay (partial unique index), struck out never edited. A note written from
+the named doctor's own login is signed; a nurse/RMO may transcribe it for the doctor, and only that
+doctor's login countersigns. The O/E vitals start from the latest chart reading within 2 hours of
+the time seen: if the doctor keeps them the note links that reading; if they change them (or there
+is none) the note writes one `chart_entries` row with `source = 'doctor_note'` in the same
+transaction and links it. Striking out the note voids a reading it wrote, never one it only
+confirmed. When the chart module is off for the ward, the vitals stay on the note only.
+
+**Why:** two places holding the same vitals drift; a doctor re-measuring at the bedside is a real
+reading the nurses and the early-warning score should see, and an unchanged prefill must not create
+a duplicate.
+
+### ADR-038 · Discharge summary: a free draft outside the record, numbered signed versions in it
+*11 Oct 2026 · IPD sheets plan B5*
+
+**Decision:** The summary being written lives in `discharge_summary_drafts` (one per stay, edited
+freely, not the record). The draft starts from the record deterministically — no AI: diagnosis from
+the case sheet's "Case of" (else the admission reason), complaints, history and findings from the
+case sheet, investigations from the test orders, treatment given from the card, the course from the
+progress notes, and the medicines from the completed discharge reconciliation (else the active card
+lines, marked "not reconciled"); follow-up, diet and warning signs start from plain defaults.
+"Fill again from the record" refreshes only the record's sections. Finalising writes
+`discharge_summaries` version n (never edited; version 2+ supersedes the previous with a reason):
+signed at once from the responsible doctor's own login, otherwise waiting for that doctor's
+signature (banner). Anything not signed prints with DRAFT and "NOT SIGNED"; sharing (C5) will offer
+only a signed version.
+
+**Why:** doctors edit a summary many times before it is right, and a half-written draft must never
+be mistaken for the record; once handed over, a summary must stay exactly as signed, so a correction
+is a new, explained version.
+

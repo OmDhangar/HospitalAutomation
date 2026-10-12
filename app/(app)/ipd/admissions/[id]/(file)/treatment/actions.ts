@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { ModuleUnavailableError, assertModule, getModuleStatesForRequest } from '@/lib/auth/modules';
 import { requireWritableSession } from '@/lib/auth/session';
 import { readWardDeviceCookie } from '@/lib/auth/ward-device-cookie';
-import { MarError, isNotGivenChoice, parseOrder } from '@/lib/domain/mar';
+import { MarError, isNotGivenChoice, parseOrder, parseWaste } from '@/lib/domain/mar';
 import { can, type Permission } from '@/lib/domain/permissions';
 import {
   askWitnessAgain,
@@ -14,15 +14,19 @@ import {
   recordGive,
   recordNotGiven,
   recordTaskDone,
+  recordWaste,
   stopOrder,
   strikeOutDose,
   strikeOutOrder,
+  strikeOutWaste,
   witnessOnDevice,
+  AllergyMatchError,
   type Actor,
 } from '@/lib/services/mar';
 import { resolveWardDevice } from '@/lib/services/staff-access';
 import { getMarConfig, snoozeDue } from '@/lib/services/due';
 import type { DueContext } from '@/lib/services/mar';
+import { marPostsStock, moduleAllows } from '@/lib/modules/registry';
 
 /**
  * The treatment card's actions (IPD sheets plan B3-min). Each returns a
@@ -31,7 +35,8 @@ import type { DueContext } from '@/lib/services/mar';
  * countersign, strike out or witness a particular line is the service's.
  */
 
-export type Result = { ok: true; message: string } | { ok: false; error: string };
+/** `allergy`: the line matched the patient's allergies (B2); write a reason and save again. */
+export type Result = { ok: true; message: string } | { ok: false; error: string; allergy?: string };
 
 const ok = (message: string): Result => ({ ok: true, message });
 
@@ -67,6 +72,7 @@ async function run(fn: () => Promise<Result>): Promise<Result> {
   try {
     return await fn();
   } catch (err) {
+    if (err instanceof AllergyMatchError) return { ok: false, error: 'Allergy: write why before saving', allergy: err.message };
     if (err instanceof MarError || err instanceof ModuleUnavailableError) return { ok: false, error: err.message };
     console.error('[mar] action failed', err);
     return { ok: false, error: 'Could not save. Try again.' };
@@ -92,6 +98,8 @@ export async function createOrderDynamic(args: {
   intervalHours?: string;
   firstDueAt?: string;
   latePolicy?: string;
+  /** B2: why to go ahead although the medicine matches an allergy. */
+  allergyOverride?: string;
 }): Promise<Result> {
   return run(async () => {
     const session = await requireWritableSession();
@@ -108,6 +116,8 @@ export async function createOrderDynamic(args: {
       clientId: args.clientId,
       actor: actorOf(session),
       mayTranscribe,
+      allergyOverride: args.allergyOverride || null,
+      allergyCheck: moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'allergy', 'read'),
     });
     return ok(transcribed ? 'Written. It waits for the doctor’s countersign.' : 'Added to the treatment card');
   });
@@ -149,12 +159,15 @@ export async function giveDynamic(args: {
   witnessUserId: string;
   dueAt?: string;
   timingReason?: string;
+  /** B4b: the store it was taken from, when the ward has more than one. */
+  storeId?: string;
 }): Promise<Result> {
   return run(async () => {
     const session = await authorize('ipd.administer', args.admissionId);
     const occurredAt = new Date(args.occurredAt);
     if (!isId(args.clientId) || Number.isNaN(occurredAt.getTime())) throw new MarError('Reload the page and try again');
-    const stage = (await getModuleStatesForRequest(session.hospitalId)).get('mar')?.stage ?? 'observe';
+    const states = await getModuleStatesForRequest(session.hospitalId);
+    const stage = states.get('mar')?.stage ?? 'observe';
     const outcome = await recordGive({
       hospitalId: session.hospitalId,
       orderId: args.orderId,
@@ -167,7 +180,9 @@ export async function giveDynamic(args: {
       actor: actorOf(session),
       stage,
       due: await dueContext(session, args.dueAt, args.timingReason),
+      stock: { on: (wardId) => marPostsStock(states, wardId), locationId: isId(args.storeId) ? args.storeId : null },
     });
+    const stock = outcome.stock === 'short' ? ' Not enough on the ward’s store: it is listed for the stock in-charge to take off.' : '';
     const witness =
       outcome.witness === 'ward_device'
         ? ' Witness needed: hand the tablet to the witness.'
@@ -176,7 +191,7 @@ export async function giveDynamic(args: {
           : outcome.witness === 'skipped'
             ? ' Recorded without a witness.'
             : '';
-    return ok(`Given.${witness}`);
+    return ok(`Given.${witness}${stock}`);
   });
 }
 
@@ -212,7 +227,7 @@ export async function strikeOutDoseDynamic(args: { admissionId: string; marId: s
   return run(async () => {
     const session = await authorize('ipd.administer', args.admissionId);
     await strikeOutDose({ hospitalId: session.hospitalId, marId: args.marId, actorUserId: session.userId, isOwner: session.role === 'owner', reason: args.reason });
-    return ok('Dose struck out; its bill line is removed');
+    return ok('Dose struck out; its bill line is removed and any stock it took is put back');
   });
 }
 
@@ -230,12 +245,13 @@ export async function proveAtBedDynamic(args: { admissionId: string; code: strin
   });
 }
 
-export async function askWitnessAgainDynamic(args: { admissionId: string; marId: string; witnessUserId: string }): Promise<Result> {
+export async function askWitnessAgainDynamic(args: { admissionId: string; marId?: string; wasteId?: string; witnessUserId: string }): Promise<Result> {
   return run(async () => {
     const session = await authorize('ipd.administer', args.admissionId);
     await askWitnessAgain({
       hospitalId: session.hospitalId,
-      marId: args.marId,
+      marId: isId(args.marId) ? args.marId : undefined,
+      wasteId: isId(args.wasteId) ? args.wasteId : undefined,
       witnessUserId: isId(args.witnessUserId) ? args.witnessUserId : null,
       actor: actorOf(session),
     });
@@ -296,3 +312,51 @@ export async function snoozeDynamic(args: { admissionId: string; orderId: string
     return ok(`Alert put off for ${args.minutes} minutes`);
   });
 }
+
+/**
+ * Waste of a risk-class medicine (B4b): always witnessed — on this tablet, or
+ * by the named person — and nothing comes off stock until it is.
+ */
+export async function wasteDynamic(args: {
+  admissionId: string;
+  orderId: string;
+  marId: string;
+  clientId: string;
+  occurredAt: string;
+  reason: string;
+  reasonText: string;
+  units: string;
+  amount: string;
+  storeId: string;
+  witnessUserId: string;
+}): Promise<Result> {
+  return run(async () => {
+    const session = await authorize('ipd.administer', args.admissionId);
+    const occurredAt = new Date(args.occurredAt);
+    if (!isId(args.clientId) || Number.isNaN(occurredAt.getTime())) throw new MarError('Reload the page and try again');
+    const waste = parseWaste(args);
+    const states = await getModuleStatesForRequest(session.hospitalId);
+    await recordWaste({
+      hospitalId: session.hospitalId,
+      orderId: args.orderId,
+      marId: isId(args.marId) ? args.marId : null,
+      occurredAt,
+      waste,
+      locationId: isId(args.storeId) ? args.storeId : null,
+      witnessUserId: isId(args.witnessUserId) ? args.witnessUserId : null,
+      clientId: args.clientId,
+      actor: actorOf(session),
+      stockOn: (wardId) => marPostsStock(states, wardId),
+    });
+    return ok(session.channel === 'ward_device' && !isId(args.witnessUserId) ? 'Waste saved. Hand the tablet to the witness.' : 'Waste saved and sent to the witness to confirm.');
+  });
+}
+
+export async function strikeOutWasteDynamic(args: { admissionId: string; wasteId: string; reason: string }): Promise<Result> {
+  return run(async () => {
+    const session = await authorize('ipd.administer', args.admissionId);
+    await strikeOutWaste({ hospitalId: session.hospitalId, wasteId: args.wasteId, actorUserId: session.userId, isOwner: session.role === 'owner', reason: args.reason });
+    return ok('Waste struck out');
+  });
+}
+

@@ -5,11 +5,13 @@ import { requireModule } from '@/lib/auth/modules';
 import { requireSession } from '@/lib/auth/session';
 import { readWardDeviceCookie } from '@/lib/auth/ward-device-cookie';
 import { can } from '@/lib/domain/permissions';
-import { addDays, chartDayOf, isChartDay } from '@/lib/domain/tpr';
-import { moduleAllows } from '@/lib/modules/registry';
-import { getTreatmentCard, listDeviceWitnessRequests, listOrderingDoctors, listWitnessCandidates } from '@/lib/services/mar';
+import { addDays, chartDayOf, chartDayWindow, isChartDay } from '@/lib/domain/tpr';
+import { marPostsStock, moduleAllows } from '@/lib/modules/registry';
+import { getTreatmentCard, listDeviceWitnessRequests, listOrderingDoctors, listWardStoresFor, listWastes, listWitnessCandidates } from '@/lib/services/mar';
 import { listPinPeople, resolveWardDevice } from '@/lib/services/staff-access';
 import { getAdmissionDue } from '@/lib/services/due';
+import { getAllergies } from '@/lib/services/allergy';
+import { matchAllergies, matchText } from '@/lib/domain/allergy';
 import { timingText } from '@/lib/domain/due';
 import { loadAdmission } from '../data';
 import { TreatmentCard } from './treatment-card';
@@ -41,14 +43,21 @@ export default async function TreatmentPage({ params, searchParams }: PageProps<
   const stage = states.get('mar')?.stage ?? 'observe';
 
   const device = session.channel === 'ward_device' ? await resolveWardDevice(await readWardDeviceCookie()) : null;
-  const [card, due, doctors, candidates, deviceRequests, devicePeople] = await Promise.all([
+  // B4b: risk-class doses and wastes come off the ward's stores when stock is in use there.
+  const stockOn = marPostsStock(states, admission.bed?.wardId ?? null);
+  const window = chartDayWindow(day, session.timezone);
+  const [card, due, doctors, candidates, deviceRequests, devicePeople, wastes, stores] = await Promise.all([
     getTreatmentCard({ hospitalId: session.hospitalId, admissionId: id, day, timezone: session.timezone }),
     getAdmissionDue({ hospitalId: session.hospitalId, admissionId: id, day, timezone: session.timezone, now }),
     canRecord ? listOrderingDoctors(session.hospitalId) : Promise.resolve([]),
     canRecord ? listWitnessCandidates(session.hospitalId, session.userId) : Promise.resolve([]),
     device && canRecord ? listDeviceWitnessRequests({ hospitalId: session.hospitalId, deviceId: device.id }) : Promise.resolve([]),
     device && canRecord ? listPinPeople(device) : Promise.resolve([]),
+    listWastes({ hospitalId: session.hospitalId, admissionId: id, from: window.from, to: window.to }),
+    stockOn && canRecord ? listWardStoresFor(session.hospitalId, id) : Promise.resolve([]),
   ]);
+  // B2: allergies recorded after a line was written still show on it.
+  const allergyList = moduleAllows(states, 'allergy', 'read') ? (await getAllergies(session.hospitalId, admission.patientId)).allergies : [];
   const myDoctor = doctors.find((d) => d.userId === session.userId);
   // Opened from the due board: this line's dose at this due time.
   const focus =
@@ -145,6 +154,12 @@ export default async function TreatmentPage({ params, searchParams }: PageProps<
           status: o.status,
           risk: o.risk ? { className: o.risk.className, needsWitness: o.risk.needsWitness } : null,
           dosesRecorded: o.dosesRecorded,
+          allergyMatches: o.allergyMatches,
+          allergyOverrideReason: o.allergyOverrideReason,
+          allergyNow:
+            o.kind === 'medicine' && o.status !== 'struck_out' && o.status !== 'stopped'
+              ? matchAllergies(allergyList, { id: o.medicineId, name: o.description }).map(matchText)
+              : [],
         }))}
         doses={card.doses.map((d) => ({
           id: d.id,
@@ -163,6 +178,26 @@ export default async function TreatmentPage({ params, searchParams }: PageProps<
           voided: Boolean(d.voidedAt),
           voidReason: d.voidReason,
           pendingRequest: d.pendingRequest ? { method: d.pendingRequest.method, witnessName: d.pendingRequest.witnessName } : null,
+          stockStatus: d.stockStatus,
+        }))}
+        stockOn={stockOn}
+        stores={stores.map(({ id: storeId, name }) => ({ id: storeId, name }))}
+        wastes={wastes.map((w) => ({
+          id: w.id,
+          orderId: w.orderId,
+          occurredAt: w.occurredAt.toISOString(),
+          units: w.units,
+          amount: w.amount,
+          reasonLabel: w.reasonLabel,
+          reasonText: w.reasonText,
+          recordedBy: w.recordedBy,
+          recordedByUserId: w.recordedByUserId,
+          witnessStatus: w.witnessStatus,
+          witnessedBy: w.witnessedBy,
+          stockStatus: w.stockStatus,
+          voided: w.voided,
+          voidReason: w.voidReason,
+          pendingRequest: w.pendingRequest,
         }))}
         witnessCandidates={candidates.map(({ userId, name }) => ({ userId, name }))}
         deviceRequests={deviceRequests

@@ -236,6 +236,41 @@ export function notGivenRefusal(choice: NotGivenChoice, text: string | null): st
   return null;
 }
 
+/* ------------------------------------------------------------------ waste */
+
+/**
+ * Why a risk-class medicine was wasted (B4b, §7.2: reason + witness, always a
+ * ledger entry). "Rest of an opened unit" takes nothing more off stock: the
+ * dose already took the whole ampoule; the amount says what was discarded.
+ */
+export const WASTE_REASONS = {
+  remainder: 'Rest of an opened ampoule or vial',
+  broken: 'Broken or spilt',
+  dropped: 'Dropped or fell',
+  contaminated: 'Contaminated',
+  not_used: 'Drawn up, not given',
+  expired: 'Expired on the ward',
+  other: 'Other',
+} as const;
+export type WasteReason = keyof typeof WASTE_REASONS;
+export const isWasteReason = (value: string): value is WasteReason => value in WASTE_REASONS;
+
+export type WasteInput = { reason: WasteReason; reasonText: string | null; units: number; amount: string | null };
+
+/** Checks a waste as typed. Whole units come off stock; a remainder needs the amount discarded instead. */
+export function parseWaste(raw: { reason?: string | null; reasonText?: string | null; units?: string | number | null; amount?: string | null }): WasteInput {
+  const reason = String(raw.reason ?? '');
+  if (!isWasteReason(reason)) throw new MarError('Choose why it was wasted');
+  const reasonText = tidy(raw.reasonText, 200, 'reason', reason === 'other');
+  const unitsText = String(raw.units ?? '').trim() || '0';
+  if (!/^\d{1,3}$/.test(unitsText) || Number(unitsText) > 100) throw new MarError('Units wasted: a whole number from 0 to 100');
+  const units = Number(unitsText);
+  const amount = tidy(raw.amount, 40, 'amount wasted', false);
+  if (reason === 'remainder' && units > 0) throw new MarError('The rest of an opened unit is already off stock: leave units at 0 and write the amount');
+  if (units === 0 && !amount) throw new MarError('Write how much was wasted (for example 6 mg or 0.6 ml)');
+  return { reason, reasonText, units, amount };
+}
+
 /* --------------------------------------------------------------- bed codes */
 
 /** The letters on a bed label: no 0/O, 1/I/L, so it reads and types without doubt. */

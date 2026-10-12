@@ -13,6 +13,8 @@ import {
   medicineRiskClasses,
   medicines,
   marAdministrations,
+  stockLocations,
+  marWastes,
   presenceProofs,
   riskClasses,
   staffMemberships,
@@ -27,6 +29,7 @@ import {
   PRESENCE_VALID_MS,
   WITNESS_APPROVAL_MS,
   WITNESS_LATE_MS,
+  WASTE_REASONS,
   checkGive,
   needsWitness,
   newBedCode,
@@ -41,6 +44,8 @@ import {
   type ReasonCode,
   type RiskInfo,
   type Route,
+  type WasteInput,
+  type WasteReason,
 } from '@/lib/domain/mar';
 import { medicineLabel } from '@/lib/domain/medicine';
 import {
@@ -57,6 +62,9 @@ import type { StaffRole } from '@/lib/domain/permissions';
 import { chartDayWindow } from '@/lib/domain/tpr';
 import type { ModuleStage } from '@/lib/modules/registry';
 import { BILLABLE_ADMISSION_STATUSES, postCareEntryLineInTx, voidCareEntryLineInTx } from '@/lib/services/ipd-billing';
+import { drawInTx, isStockedInTx, putBackInTx, wardStoresInTx } from '@/lib/services/mar-stock';
+import { activeAllergiesInTx } from '@/lib/services/allergy';
+import { matchAllergies, matchText, type AllergyMatch } from '@/lib/domain/allergy';
 import { verifyWitnessPin, type WardDevice } from '@/lib/services/staff-access';
 
 /**
@@ -69,6 +77,16 @@ import { verifyWitnessPin, type WardDevice } from '@/lib/services/staff-access';
  */
 
 export { MarError };
+
+/**
+ * B2: the medicine matches the patient's allergies and no reason was given
+ * for going ahead. Carries the matches so the screen can show them and ask.
+ */
+export class AllergyMatchError extends MarError {
+  constructor(readonly matches: AllergyMatch[]) {
+    super(`Allergy: ${matches.map(matchText).join('; ')}. Write why it is still to be given, or choose another medicine.`);
+  }
+}
 
 const clinical = { clinical: true } as const;
 const CLINICAL_PERSON_ROLES: readonly StaffRole[] = ['owner', 'doctor', 'nurse'];
@@ -110,6 +128,27 @@ async function admissionInBedInTx(tx: Tx, admissionId: string, lock = false) {
   return row;
 }
 
+/** The ward of the patient's current bed (where a dose's stock comes from). */
+async function currentWardInTx(tx: Tx, admissionId: string): Promise<string | null> {
+  const [row] = await tx
+    .select({ wardId: beds.wardId })
+    .from(bedAssignments)
+    .innerJoin(beds, eq(beds.id, bedAssignments.bedId))
+    .where(and(eq(bedAssignments.admissionId, admissionId), isNull(bedAssignments.toAt)))
+    .limit(1);
+  return row?.wardId ?? null;
+}
+
+/**
+ * Where a risk-class dose or waste comes off stock (B4b): the store the nurse
+ * chose if it is one of the ward's, else the ward's own store. Null when the
+ * ward has no store (it is then taken off by hand, from the stock page).
+ */
+async function storeForInTx(tx: Tx, admissionId: string, chosen: string | null | undefined): Promise<string | null> {
+  const stores = await wardStoresInTx(tx, await currentWardInTx(tx, admissionId));
+  return stores.find((s) => s.id === chosen)?.id ?? stores[0]?.id ?? null;
+}
+
 async function riskOfMedicineInTx(tx: Tx, medicineId: string | null): Promise<RiskInfo> {
   if (!medicineId) return null;
   const [row] = await tx
@@ -148,8 +187,12 @@ export async function createOrder(args: {
   clientId: string;
   actor: Actor;
   mayTranscribe: boolean;
+  /** B2: why to go ahead although the medicine matches an allergy (required when it does). */
+  allergyOverride?: string | null;
+  /** B2: whether the allergy check is in use (module `allergy`); on by default. */
+  allergyCheck?: boolean;
   now?: Date;
-}): Promise<{ orderId: string; transcribed: boolean }> {
+}): Promise<{ orderId: string; transcribed: boolean; allergyMatches: string[] }> {
   const now = args.now ?? new Date();
   return withTenant(
     args.hospitalId,
@@ -160,7 +203,7 @@ export async function createOrder(args: {
         .where(eq(treatmentOrders.clientId, args.clientId));
       if (existing) {
         if (existing.admissionId !== args.admissionId) throw new MarError('That line belongs to another patient');
-        return { orderId: existing.id, transcribed: existing.transcribed };
+        return { orderId: existing.id, transcribed: existing.transcribed, allergyMatches: [] };
       }
 
       const admission = await admissionInBedInTx(tx, args.admissionId);
@@ -174,14 +217,25 @@ export async function createOrder(args: {
 
       let description: string;
       let medicineId: string | null = null;
+      let allergyMatches: string[] = [];
+      let allergyOverride: string | null = null;
       if (args.input.kind === 'medicine') {
         const [medicine] = await tx
-          .select({ id: medicines.id, name: medicines.name, strength: medicines.strength, form: medicines.form, active: medicines.active })
+          .select({ id: medicines.id, name: medicines.name, genericName: medicines.genericName, strength: medicines.strength, form: medicines.form, active: medicines.active })
           .from(medicines)
           .where(eq(medicines.id, args.input.medicineId));
         if (!medicine?.active) throw new MarError('That medicine is not in the list');
         description = medicineLabel(medicine);
         medicineId = medicine.id;
+        // B2: decision support. A match needs the doctor's reason to go ahead; it is kept on the line.
+        if (args.allergyCheck !== false) {
+          const matches = matchAllergies(await activeAllergiesInTx(tx, admission.patientId), medicine);
+          if (matches.length > 0) {
+            allergyOverride = args.allergyOverride?.replace(/\s+/g, ' ').trim().slice(0, 200) || null;
+            if (!allergyOverride || allergyOverride.length < 3) throw new AllergyMatchError(matches);
+            allergyMatches = matches.map(matchText);
+          }
+        }
       } else {
         description = args.input.description;
       }
@@ -213,13 +267,25 @@ export async function createOrder(args: {
           orderedAt: now,
           enteredByUserId: args.actor.userId,
           transcribed,
+          allergyMatches: allergyMatches.length > 0 ? allergyMatches : null,
+          allergyOverrideReason: allergyMatches.length > 0 ? allergyOverride : null,
           recordedChannel: origin?.channel ?? args.actor.channel,
           recordedDeviceId: origin?.deviceId ?? null,
           recordedSessionId: origin?.sessionId ?? null,
           clientId: args.clientId,
         })
         .returning({ id: treatmentOrders.id });
-      return { orderId: row.id, transcribed };
+      if (allergyMatches.length > 0) {
+        await audit(tx, {
+          hospitalId: args.hospitalId,
+          actorUserId: args.actor.userId,
+          action: 'mar.allergy_override',
+          objectType: 'treatment_order',
+          objectId: row.id,
+          metadata: { matches: allergyMatches.length },
+        });
+      }
+      return { orderId: row.id, transcribed, allergyMatches };
     },
     clinical,
   );
@@ -367,6 +433,8 @@ export type DoseOutcome = {
   occurredAt: Date;
   witness: 'not_needed' | 'ward_device' | 'approval' | 'skipped';
   flags: ControlFlag[];
+  /** B4b: taken off a store, or short (saved; to be taken off by hand); null when nothing comes off stock. */
+  stock: 'posted' | 'short' | 'reversed' | null;
   repeat: boolean;
 };
 
@@ -378,6 +446,7 @@ async function existingDoseInTx(tx: Tx, clientId: string) {
       orderId: marAdministrations.orderId,
       witnessStatus: marAdministrations.witnessStatus,
       controlFlags: marAdministrations.controlFlags,
+      stockStatus: marAdministrations.stockStatus,
     })
     .from(marAdministrations)
     .where(eq(marAdministrations.clientId, clientId));
@@ -432,6 +501,12 @@ export async function recordGive(args: {
   stage: ModuleStage;
   /** The due time this dose answers (B3b); absent for a dose outside the schedule. */
   due?: DueContext;
+  /**
+   * B4b: whether risk-class stock is in use for the patient's ward (so the dose
+   * comes off a store) — a flag, or decided from the ward — and which store, if
+   * the nurse chose.
+   */
+  stock?: { on: boolean | ((wardId: string | null) => boolean); locationId?: string | null };
   now?: Date;
 }): Promise<DoseOutcome> {
   const now = args.now ?? new Date();
@@ -447,6 +522,7 @@ export async function recordGive(args: {
           occurredAt: existing.occurredAt,
           witness: existing.witnessStatus === 'skipped' ? 'skipped' : existing.witnessStatus === 'not_needed' ? 'not_needed' : args.actor.channel === 'ward_device' ? 'ward_device' : 'approval',
           flags: existing.controlFlags,
+          stock: existing.stockStatus,
           repeat: true,
         };
       }
@@ -507,6 +583,26 @@ export async function recordGive(args: {
         careEntryId = entry.id;
       }
 
+      // B4b: a risk-class dose comes off the ward's store with it, or is marked short (never refused for it).
+      let stockStatus: 'posted' | 'short' | null = null;
+      let stockLocationId: string | null = null;
+      const stockOn = (wardId: string | null) => (typeof args.stock?.on === 'function' ? args.stock.on(wardId) : Boolean(args.stock?.on));
+      if (risk && args.quantity > 0 && args.stock && stockOn(await currentWardInTx(tx, admission.id)) && (await isStockedInTx(tx, order.medicineId))) {
+        stockLocationId = await storeForInTx(tx, admission.id, args.stock.locationId);
+        stockStatus = stockLocationId
+          ? await drawInTx(tx, {
+              hospitalId: args.hospitalId,
+              subject: { kind: 'dose', id: marId },
+              locationId: stockLocationId,
+              medicineId: order.medicineId!,
+              units: args.quantity,
+              occurredAt: args.occurredAt,
+              actorUserId: args.actor.userId,
+              now,
+            })
+          : 'short';
+      }
+
       const witnessStatus = check.witness === 'not_needed' ? 'not_needed' : check.witness === 'skipped' ? 'skipped' : 'awaiting';
       await tx.insert(marAdministrations).values({
         id: marId,
@@ -527,6 +623,8 @@ export async function recordGive(args: {
         witnessStatus,
         presenceProofId,
         controlFlags: check.flags,
+        stockStatus,
+        stockLocationId,
         ...timing,
         recordedAt: now,
         recordedByUserId: args.actor.userId,
@@ -550,7 +648,7 @@ export async function recordGive(args: {
           expiresAt: new Date(now.getTime() + WITNESS_APPROVAL_MS),
         });
       }
-      return { marId, occurredAt: args.occurredAt, witness: check.witness, flags: check.flags, repeat: false };
+      return { marId, occurredAt: args.occurredAt, witness: check.witness, flags: check.flags, stock: stockStatus, repeat: false };
     },
     clinical,
   );
@@ -694,6 +792,7 @@ export async function strikeOutDose(args: {
           careEntryId: marAdministrations.careEntryId,
           voidedAt: marAdministrations.voidedAt,
           admissionId: marAdministrations.admissionId,
+          stockStatus: marAdministrations.stockStatus,
         })
         .from(marAdministrations)
         .where(eq(marAdministrations.id, args.marId))
@@ -704,9 +803,11 @@ export async function strikeOutDose(args: {
       const [admission] = await tx.select({ status: admissions.status }).from(admissions).where(eq(admissions.id, dose.admissionId));
       if (admission?.status === 'discharged') throw new MarError('This stay is discharged and its bill is final. Correct it on the bill.');
       const now = new Date();
+      // B4b: what it took off stock goes back, by reversal rows (the ledger is never edited).
+      const putBack = dose.stockStatus === 'posted' && (await putBackInTx(tx, { hospitalId: args.hospitalId, subject: { kind: 'dose', id: dose.id }, actorUserId: args.actorUserId, now })) > 0;
       await tx
         .update(marAdministrations)
-        .set({ voidedAt: now, voidedByUserId: args.actorUserId, voidReason: reason })
+        .set({ voidedAt: now, voidedByUserId: args.actorUserId, voidReason: reason, ...(putBack ? { stockStatus: 'reversed' as const } : {}) })
         .where(and(eq(marAdministrations.id, dose.id), eq(marAdministrations.occurredAt, dose.occurredAt)));
       if (dose.careEntryId) {
         await tx
@@ -728,6 +829,8 @@ export async function strikeOutDose(args: {
 
 export type WitnessRequestRow = {
   id: string;
+  /** A give, or a waste (B4b): then `dose` says what was wasted. */
+  action: 'give' | 'waste';
   admissionId: string;
   patientName: string;
   bed: string | null;
@@ -745,6 +848,7 @@ async function listRequestsInTx(tx: Tx, where: ReturnType<typeof and>): Promise<
   const actor = aliasedTable(users, 'actor');
   const rows = await tx.execute<{
     id: string;
+    action: 'give' | 'waste';
     admission_id: string;
     patient_name: string;
     bed: string | null;
@@ -757,20 +861,26 @@ async function listRequestsInTx(tx: Tx, where: ReturnType<typeof and>): Promise<
     requested_at: string;
     expires_at: string;
   }>(sql`
-    select r.id, r.admission_id, p.name as patient_name,
+    select r.id, r.action, r.admission_id, p.name as patient_name,
       (select w.name || ' · Bed ' || b.label from bed_assignments ba join beds b on b.id = ba.bed_id join wards w on w.id = b.ward_id
         where ba.admission_id = r.admission_id and ba.to_at is null limit 1) as bed,
-      o.description, m.dose, o.route, m.occurred_at, r.actor_user_id, ${actor.name} as actor_name, r.requested_at, r.expires_at
+      o.description,
+      case when r.action = 'waste'
+        then 'Waste: ' || concat_ws(' · ', case when x.units > 0 then x.units || ' unit' || case when x.units > 1 then 's' else '' end end, x.amount)
+        else m.dose end as dose,
+      o.route, coalesce(m.occurred_at, x.occurred_at) as occurred_at, r.actor_user_id, ${actor.name} as actor_name, r.requested_at, r.expires_at
     from witness_requests r
-    join mar_administrations m on m.id = r.mar_id and m.occurred_at = r.mar_occurred_at
-    join treatment_orders o on o.id = m.order_id
-    join patients p on p.id = m.patient_id
+    left join mar_administrations m on m.id = r.mar_id and m.occurred_at = r.mar_occurred_at
+    left join mar_wastes x on x.id = r.waste_id
+    join treatment_orders o on o.id = coalesce(m.order_id, x.order_id)
+    join patients p on p.id = coalesce(m.patient_id, x.patient_id)
     join users ${actor} on ${actor.id} = r.actor_user_id
     where r.status = 'pending' and ${where}
     order by r.requested_at
   `);
   return [...rows].map((r) => ({
     id: r.id,
+    action: r.action,
     admissionId: r.admission_id,
     patientName: r.patient_name,
     bed: r.bed,
@@ -850,7 +960,9 @@ async function approveInTx(
     .for('update');
   if (!request) throw new MarError('Witness request not found');
   if (request.status !== 'pending' || request.expiresAt <= args.now) throw new MarError('This request has closed. Ask the nurse to ask again.');
-  if (request.actorUserId === args.witnessUserId) throw new MarError('You gave this dose; someone else must witness it');
+  if (request.actorUserId === args.witnessUserId) {
+    throw new MarError(request.action === 'waste' ? 'You recorded this waste; someone else must witness it' : 'You gave this dose; someone else must witness it');
+  }
   await assertWitnessCandidateInTx(tx, { witnessUserId: args.witnessUserId, actorUserId: request.actorUserId });
   await tx
     .update(witnessRequests)
@@ -863,17 +975,44 @@ async function approveInTx(
       decidedSessionId: args.sessionId,
     })
     .where(eq(witnessRequests.id, request.id));
+  if (request.action === 'waste') {
+    await witnessWasteInTx(tx, { wasteId: request.wasteId!, witnessUserId: args.witnessUserId, now: args.now });
+    return;
+  }
   await tx
     .update(marAdministrations)
     .set({ witnessStatus: 'witnessed', witnessedByUserId: args.witnessUserId, witnessedAt: args.now })
     .where(
       and(
-        eq(marAdministrations.id, request.marId),
-        eq(marAdministrations.occurredAt, request.marOccurredAt),
+        eq(marAdministrations.id, request.marId!),
+        eq(marAdministrations.occurredAt, request.marOccurredAt!),
         inArray(marAdministrations.witnessStatus, ['awaiting', 'skipped']),
         isNull(marAdministrations.voidedAt),
       ),
     );
+}
+
+/** A waste is witnessed: only now do its units come off stock (D-WITNESS: nothing is decremented before). */
+async function witnessWasteInTx(tx: Tx, args: { wasteId: string; witnessUserId: string; now: Date }) {
+  const [waste] = await tx.select().from(marWastes).where(eq(marWastes.id, args.wasteId)).for('update');
+  if (!waste || waste.voidedAt || waste.witnessStatus !== 'awaiting') return;
+  let stockStatus: 'posted' | 'short' | null = null;
+  if (waste.units > 0 && waste.locationId) {
+    stockStatus = await drawInTx(tx, {
+      hospitalId: waste.hospitalId,
+      subject: { kind: 'waste', id: waste.id },
+      locationId: waste.locationId,
+      medicineId: waste.medicineId,
+      units: waste.units,
+      occurredAt: waste.occurredAt,
+      actorUserId: waste.recordedByUserId,
+      now: args.now,
+    });
+  }
+  await tx
+    .update(marWastes)
+    .set({ witnessStatus: 'witnessed', witnessedByUserId: args.witnessUserId, witnessedAt: args.now, stockStatus })
+    .where(eq(marWastes.id, waste.id));
 }
 
 /**
@@ -947,7 +1086,9 @@ export async function decideWitnessRequest(args: {
 /** The nurse asks again (a request closed, or there was no witness at the time): on this tablet, or of a named person. */
 export async function askWitnessAgain(args: {
   hospitalId: string;
-  marId: string;
+  /** The dose, or (B4b) the waste, that needs its witness. */
+  marId?: string;
+  wasteId?: string;
   witnessUserId: string | null;
   actor: Actor;
   now?: Date;
@@ -956,45 +1097,492 @@ export async function askWitnessAgain(args: {
   await withTenant(
     args.hospitalId,
     async (tx) => {
-      const [dose] = await tx
-        .select({
-          id: marAdministrations.id,
-          occurredAt: marAdministrations.occurredAt,
-          admissionId: marAdministrations.admissionId,
-          recordedByUserId: marAdministrations.recordedByUserId,
-          witnessStatus: marAdministrations.witnessStatus,
-          voidedAt: marAdministrations.voidedAt,
-        })
-        .from(marAdministrations)
-        .where(eq(marAdministrations.id, args.marId))
-        .for('update');
-      if (!dose || dose.voidedAt) throw new MarError('Dose not found');
-      if (dose.recordedByUserId !== args.actor.userId) throw new MarError('Only whoever gave the dose can ask for its witness');
-      if (dose.witnessStatus !== 'awaiting' && dose.witnessStatus !== 'skipped') throw new MarError('This dose needs no witness now');
-      const method = args.actor.channel === 'ward_device' && !args.witnessUserId ? 'ward_device' : 'approval';
-      if (method === 'approval') {
-        if (!args.witnessUserId) throw new MarError('Choose who will witness this dose');
-        await assertWitnessCandidateInTx(tx, { witnessUserId: args.witnessUserId, actorUserId: args.actor.userId });
-      } else if (!args.actor.wardDeviceId) throw new MarError('Ward tablet not found');
-      await tx
-        .update(witnessRequests)
-        .set({ status: 'withdrawn', decidedAt: now })
-        .where(and(eq(witnessRequests.marId, dose.id), eq(witnessRequests.status, 'pending')));
-      await tx.insert(witnessRequests).values({
-        hospitalId: args.hospitalId,
-        admissionId: dose.admissionId,
-        marId: dose.id,
-        marOccurredAt: dose.occurredAt,
-        actorUserId: args.actor.userId,
-        method,
-        deviceId: method === 'ward_device' ? args.actor.wardDeviceId : null,
-        witnessUserId: method === 'approval' ? args.witnessUserId : null,
-        requestedAt: now,
-        expiresAt: new Date(now.getTime() + WITNESS_APPROVAL_MS),
-      });
+      let subject: { admissionId: string; mar: { id: string; occurredAt: Date } | null; wasteId: string | null };
+      if (args.wasteId) {
+        const [waste] = await tx
+          .select({ id: marWastes.id, admissionId: marWastes.admissionId, recordedByUserId: marWastes.recordedByUserId, witnessStatus: marWastes.witnessStatus, voidedAt: marWastes.voidedAt })
+          .from(marWastes)
+          .where(eq(marWastes.id, args.wasteId))
+          .for('update');
+        if (!waste || waste.voidedAt) throw new MarError('Waste not found');
+        if (waste.recordedByUserId !== args.actor.userId) throw new MarError('Only whoever recorded the waste can ask for its witness');
+        if (waste.witnessStatus !== 'awaiting') throw new MarError('This waste is already witnessed');
+        subject = { admissionId: waste.admissionId, mar: null, wasteId: waste.id };
+      } else {
+        const [dose] = await tx
+          .select({
+            id: marAdministrations.id,
+            occurredAt: marAdministrations.occurredAt,
+            admissionId: marAdministrations.admissionId,
+            recordedByUserId: marAdministrations.recordedByUserId,
+            witnessStatus: marAdministrations.witnessStatus,
+            voidedAt: marAdministrations.voidedAt,
+          })
+          .from(marAdministrations)
+          .where(eq(marAdministrations.id, args.marId ?? ''))
+          .for('update');
+        if (!dose || dose.voidedAt) throw new MarError('Dose not found');
+        if (dose.recordedByUserId !== args.actor.userId) throw new MarError('Only whoever gave the dose can ask for its witness');
+        if (dose.witnessStatus !== 'awaiting' && dose.witnessStatus !== 'skipped') throw new MarError('This dose needs no witness now');
+        subject = { admissionId: dose.admissionId, mar: { id: dose.id, occurredAt: dose.occurredAt }, wasteId: null };
+      }
+      await insertWitnessRequestInTx(tx, { hospitalId: args.hospitalId, ...subject, witnessUserId: args.witnessUserId, actor: args.actor, now });
     },
     clinical,
   );
+}
+
+/** Withdraws any open request for the dose or waste and opens a new one: on this tablet, or of the named person. */
+async function insertWitnessRequestInTx(
+  tx: Tx,
+  args: { hospitalId: string; admissionId: string; mar: { id: string; occurredAt: Date } | null; wasteId: string | null; witnessUserId: string | null; actor: Actor; now: Date },
+) {
+  const method = args.actor.channel === 'ward_device' && !args.witnessUserId ? 'ward_device' : 'approval';
+  if (method === 'approval') {
+    if (!args.witnessUserId) throw new MarError(args.wasteId ? 'Choose who will witness this waste' : 'Choose who will witness this dose');
+    await assertWitnessCandidateInTx(tx, { witnessUserId: args.witnessUserId, actorUserId: args.actor.userId });
+  } else if (!args.actor.wardDeviceId) throw new MarError('Ward tablet not found');
+  await tx
+    .update(witnessRequests)
+    .set({ status: 'withdrawn', decidedAt: args.now })
+    .where(and(args.wasteId ? eq(witnessRequests.wasteId, args.wasteId) : eq(witnessRequests.marId, args.mar!.id), eq(witnessRequests.status, 'pending')));
+  await tx.insert(witnessRequests).values({
+    hospitalId: args.hospitalId,
+    admissionId: args.admissionId,
+    action: args.wasteId ? 'waste' : 'give',
+    marId: args.mar?.id ?? null,
+    marOccurredAt: args.mar?.occurredAt ?? null,
+    wasteId: args.wasteId,
+    actorUserId: args.actor.userId,
+    method,
+    deviceId: method === 'ward_device' ? args.actor.wardDeviceId : null,
+    witnessUserId: method === 'approval' ? args.witnessUserId : null,
+    requestedAt: args.now,
+    expiresAt: new Date(args.now.getTime() + WITNESS_APPROVAL_MS),
+  });
+}
+
+/* =================================================================== waste */
+
+/**
+ * Records a risk-class medicine wasted (B4b, D-WITNESS): broken, dropped,
+ * drawn up and not given, or the rest of an opened ampoule. It always needs a
+ * second person — on the ward tablet, or by approval from the named witness —
+ * and nothing comes off stock until they confirm it. Whole units come off
+ * the ward's store (or the one chosen); a remainder only records the amount.
+ */
+export async function recordWaste(args: {
+  hospitalId: string;
+  orderId: string;
+  /** The dose it was left over from, if any. */
+  marId: string | null;
+  occurredAt: Date;
+  waste: WasteInput;
+  locationId: string | null;
+  witnessUserId: string | null;
+  clientId: string;
+  actor: Actor;
+  /** Whether risk-class stock is in use for the patient's ward, as for a give. */
+  stockOn: boolean | ((wardId: string | null) => boolean);
+  now?: Date;
+}): Promise<{ wasteId: string; repeat: boolean }> {
+  const now = args.now ?? new Date();
+  if (args.occurredAt.getTime() > now.getTime() + 5 * 60_000) throw new MarError('The time given is in the future');
+  if (now.getTime() - args.occurredAt.getTime() > 48 * 3_600_000) throw new MarError('That was over 48 hours ago. Tell the desk.');
+  return withTenant(
+    args.hospitalId,
+    async (tx) => {
+      const [existing] = await tx.select({ id: marWastes.id }).from(marWastes).where(eq(marWastes.clientId, args.clientId));
+      if (existing) return { wasteId: existing.id, repeat: true };
+      const order = await lockOrderInTx(tx, args.orderId);
+      if (order.kind !== 'medicine' || !order.medicineId) throw new MarError('Only a medicine line can have waste');
+      if (order.voidedAt) throw new MarError('This line was struck out');
+      const admission = await admissionInBedInTx(tx, order.admissionId, true);
+      if (!(await riskOfMedicineInTx(tx, order.medicineId))) throw new MarError('Waste is recorded for risk-class medicines only');
+      let mar: { id: string; occurredAt: Date } | null = null;
+      if (args.marId) {
+        const [dose] = await tx
+          .select({ id: marAdministrations.id, occurredAt: marAdministrations.occurredAt, orderId: marAdministrations.orderId, state: marAdministrations.state, voidedAt: marAdministrations.voidedAt })
+          .from(marAdministrations)
+          .where(eq(marAdministrations.id, args.marId));
+        if (!dose || dose.voidedAt || dose.orderId !== order.id || dose.state !== 'given') throw new MarError('That dose is not a give on this line');
+        mar = { id: dose.id, occurredAt: dose.occurredAt };
+      }
+      // Whole units come off the ward's store once witnessed; without stock in use on the ward it is recorded only.
+      const wardId = await currentWardInTx(tx, admission.id);
+      const stockOn = typeof args.stockOn === 'function' ? args.stockOn(wardId) : args.stockOn;
+      const locationId = args.waste.units > 0 && stockOn ? await storeForInTx(tx, admission.id, args.locationId) : null;
+      if (args.waste.units > 0 && stockOn && !locationId) throw new MarError('This ward has no store set up. Ask the owner to add it under Stock.');
+      const origin = await requestOrigin();
+      const [row] = await tx
+        .insert(marWastes)
+        .values({
+          hospitalId: args.hospitalId,
+          branchId: admission.branchId,
+          admissionId: admission.id,
+          encounterId: admission.encounterId,
+          patientId: admission.patientId,
+          orderId: order.id,
+          medicineId: order.medicineId,
+          marId: mar?.id ?? null,
+          marOccurredAt: mar?.occurredAt ?? null,
+          locationId,
+          units: args.waste.units,
+          amount: args.waste.amount,
+          reasonCode: args.waste.reason,
+          reasonText: args.waste.reasonText,
+          occurredAt: args.occurredAt,
+          recordedAt: now,
+          recordedByUserId: args.actor.userId,
+          recordedChannel: origin?.channel ?? args.actor.channel,
+          recordedDeviceId: origin?.deviceId ?? null,
+          recordedSessionId: origin?.sessionId ?? null,
+          clientId: args.clientId,
+        })
+        .returning({ id: marWastes.id });
+      await insertWitnessRequestInTx(tx, { hospitalId: args.hospitalId, admissionId: admission.id, mar: null, wasteId: row.id, witnessUserId: args.witnessUserId, actor: args.actor, now });
+      return { wasteId: row.id, repeat: false };
+    },
+    clinical,
+  );
+}
+
+/** Strikes out a waste recorded in error: its request is withdrawn, and any stock it took is put back. */
+export async function strikeOutWaste(args: { hospitalId: string; wasteId: string; actorUserId: string; isOwner: boolean; reason: string }): Promise<void> {
+  const reason = args.reason.replace(/\s+/g, ' ').trim().slice(0, 200);
+  if (!reason) throw new MarError('Write why the waste is struck out');
+  await withTenant(
+    args.hospitalId,
+    async (tx) => {
+      const [waste] = await tx.select().from(marWastes).where(eq(marWastes.id, args.wasteId)).for('update');
+      if (!waste) throw new MarError('Waste not found');
+      if (waste.voidedAt) return;
+      if (!args.isOwner && waste.recordedByUserId !== args.actorUserId) throw new MarError('Only whoever recorded the waste can strike it out');
+      const now = new Date();
+      const putBack = waste.stockStatus === 'posted' && (await putBackInTx(tx, { hospitalId: args.hospitalId, subject: { kind: 'waste', id: waste.id }, actorUserId: args.actorUserId, now })) > 0;
+      await tx
+        .update(marWastes)
+        .set({ voidedAt: now, voidedByUserId: args.actorUserId, voidReason: reason, ...(putBack ? { stockStatus: 'reversed' as const } : {}) })
+        .where(eq(marWastes.id, waste.id));
+      await tx
+        .update(witnessRequests)
+        .set({ status: 'withdrawn', decidedAt: now })
+        .where(and(eq(witnessRequests.wasteId, waste.id), eq(witnessRequests.status, 'pending')));
+    },
+    clinical,
+  );
+}
+
+export type CardWaste = {
+  id: string;
+  orderId: string;
+  marId: string | null;
+  occurredAt: Date;
+  units: number;
+  amount: string | null;
+  reason: WasteReason;
+  reasonLabel: string;
+  reasonText: string | null;
+  recordedBy: string | null;
+  recordedByUserId: string | null;
+  witnessStatus: 'awaiting' | 'witnessed';
+  witnessedBy: string | null;
+  stockStatus: 'posted' | 'short' | 'reversed' | null;
+  voided: boolean;
+  voidReason: string | null;
+  pendingRequest: { method: 'ward_device' | 'approval'; witnessName: string | null } | null;
+};
+
+/** The wastes of one stay in a time window, for the treatment card. */
+export async function listWastes(args: { hospitalId: string; admissionId: string; from: Date; to: Date }): Promise<CardWaste[]> {
+  return withTenant(
+    args.hospitalId,
+    async (tx) => {
+      const recorder = aliasedTable(users, 'recorder');
+      const witness = aliasedTable(users, 'witness');
+      const asked = aliasedTable(users, 'asked');
+      const rows = await tx
+        .select({
+          id: marWastes.id,
+          orderId: marWastes.orderId,
+          marId: marWastes.marId,
+          occurredAt: marWastes.occurredAt,
+          units: marWastes.units,
+          amount: marWastes.amount,
+          reason: marWastes.reasonCode,
+          reasonText: marWastes.reasonText,
+          recordedBy: recorder.name,
+          recordedByUserId: marWastes.recordedByUserId,
+          witnessStatus: marWastes.witnessStatus,
+          witnessedBy: witness.name,
+          stockStatus: marWastes.stockStatus,
+          voidedAt: marWastes.voidedAt,
+          voidReason: marWastes.voidReason,
+          requestMethod: witnessRequests.method,
+          requestWitness: asked.name,
+        })
+        .from(marWastes)
+        .leftJoin(recorder, eq(recorder.id, marWastes.recordedByUserId))
+        .leftJoin(witness, eq(witness.id, marWastes.witnessedByUserId))
+        .leftJoin(witnessRequests, and(eq(witnessRequests.wasteId, marWastes.id), eq(witnessRequests.status, 'pending')))
+        .leftJoin(asked, eq(asked.id, witnessRequests.witnessUserId))
+        .where(and(eq(marWastes.admissionId, args.admissionId), gte(marWastes.occurredAt, args.from), lt(marWastes.occurredAt, args.to)))
+        .orderBy(asc(marWastes.occurredAt));
+      return rows.map((r) => ({
+        id: r.id,
+        orderId: r.orderId,
+        marId: r.marId,
+        occurredAt: r.occurredAt,
+        units: r.units,
+        amount: r.amount,
+        reason: r.reason,
+        reasonLabel: WASTE_REASONS[r.reason],
+        reasonText: r.reasonText,
+        recordedBy: r.recordedBy,
+        recordedByUserId: r.recordedByUserId,
+        witnessStatus: r.witnessStatus,
+        witnessedBy: r.witnessedBy,
+        stockStatus: r.stockStatus,
+        voided: Boolean(r.voidedAt),
+        voidReason: r.voidReason,
+        pendingRequest: r.requestMethod ? { method: r.requestMethod, witnessName: r.requestWitness } : null,
+      }));
+    },
+    clinical,
+  );
+}
+
+/** The stores of a patient's ward a nurse can take a dose from (B4b): to choose when there is more than one. */
+export async function listWardStoresFor(hospitalId: string, admissionId: string) {
+  return withTenant(hospitalId, async (tx) => wardStoresInTx(tx, await currentWardInTx(tx, admissionId)), clinical);
+}
+
+/* ============================================================ stock (B4b) */
+
+export type StockToResolve = {
+  kind: 'dose' | 'waste';
+  id: string;
+  /** short: saved, but no store could cover it; awaiting_witness: a waste not yet confirmed (nothing taken off). */
+  status: 'short' | 'awaiting_witness';
+  occurredAt: Date;
+  admissionId: string;
+  patientName: string;
+  bed: string | null;
+  description: string;
+  medicineId: string;
+  units: number;
+  storeId: string | null;
+  storeName: string | null;
+  recordedBy: string | null;
+};
+
+/**
+ * What the stock page must still settle from the treatment card: doses and
+ * wastes that no store could cover (to take off by hand), and wastes still
+ * waiting for their witness after 15 minutes (nothing is taken off until
+ * then). Names the patient, so it reads with the clinical key.
+ */
+export async function listStockToResolve(args: { hospitalId: string; now?: Date }): Promise<StockToResolve[]> {
+  const now = args.now ?? new Date();
+  const rows = await withTenant(
+    args.hospitalId,
+    (tx) =>
+      tx.execute<{
+        kind: 'dose' | 'waste';
+        id: string;
+        status: 'short' | 'awaiting_witness';
+        occurred_at: string;
+        admission_id: string;
+        patient_name: string;
+        bed: string | null;
+        description: string;
+        medicine_id: string;
+        units: number;
+        store_id: string | null;
+        store_name: string | null;
+        recorded_by: string | null;
+      }>(sql`
+        with items as (
+          select 'dose' as kind, m.id, 'short' as status, m.occurred_at, m.admission_id, m.patient_id, m.order_id, m.medicine_id,
+            m.quantity::int as units, m.stock_location_id as store_id, m.recorded_by_user_id
+          from mar_administrations m
+          where m.stock_status = 'short' and m.voided_at is null
+          union all
+          select 'waste', w.id, case when w.witness_status = 'awaiting' then 'awaiting_witness' else 'short' end, w.occurred_at,
+            w.admission_id, w.patient_id, w.order_id, w.medicine_id, w.units::int, w.location_id, w.recorded_by_user_id
+          from mar_wastes w
+          where w.voided_at is null and (w.stock_status = 'short'
+            or (w.witness_status = 'awaiting' and w.recorded_at <= ${now.toISOString()}::timestamptz - make_interval(secs => ${WITNESS_LATE_MS / 1000})))
+        )
+        select i.kind, i.id, i.status, i.occurred_at, i.admission_id, p.name as patient_name,
+          (select wd.name || ' · Bed ' || b.label from bed_assignments ba join beds b on b.id = ba.bed_id join wards wd on wd.id = b.ward_id
+            where ba.admission_id = i.admission_id order by ba.from_at desc limit 1) as bed,
+          o.description, i.medicine_id, i.units, i.store_id, l.name as store_name, u.name as recorded_by
+        from items i
+        join patients p on p.id = i.patient_id
+        join treatment_orders o on o.id = i.order_id
+        left join stock_locations l on l.id = i.store_id
+        left join users u on u.id = i.recorded_by_user_id
+        order by i.occurred_at
+      `),
+    clinical,
+  );
+  return [...rows].map((r) => ({
+    kind: r.kind,
+    id: r.id,
+    status: r.status,
+    occurredAt: new Date(r.occurred_at),
+    admissionId: r.admission_id,
+    patientName: r.patient_name,
+    bed: r.bed,
+    description: r.description,
+    medicineId: r.medicine_id,
+    units: Number(r.units),
+    storeId: r.store_id,
+    storeName: r.store_name,
+    recordedBy: r.recorded_by,
+  }));
+}
+
+/**
+ * Takes a short dose or waste off a store by hand, once that store holds it
+ * (stock arrived, or it came from another store). Whoever does this is in the
+ * evidence log; it is all or nothing, as at the bedside.
+ */
+export async function postShortByHand(args: {
+  hospitalId: string;
+  kind: 'dose' | 'waste';
+  id: string;
+  locationId: string;
+  actorUserId: string;
+  now?: Date;
+}): Promise<void> {
+  const now = args.now ?? new Date();
+  await withTenant(
+    args.hospitalId,
+    async (tx) => {
+      const [store] = await tx.select({ id: stockLocations.id, active: stockLocations.active }).from(stockLocations).where(eq(stockLocations.id, args.locationId));
+      if (!store?.active) throw new MarError('Choose an open store');
+      if (args.kind === 'dose') {
+        const [dose] = await tx
+          .select({ id: marAdministrations.id, occurredAt: marAdministrations.occurredAt, medicineId: marAdministrations.medicineId, quantity: marAdministrations.quantity, stockStatus: marAdministrations.stockStatus, voidedAt: marAdministrations.voidedAt })
+          .from(marAdministrations)
+          .where(eq(marAdministrations.id, args.id))
+          .for('update');
+        if (!dose || dose.voidedAt || dose.stockStatus !== 'short' || !dose.medicineId || !dose.quantity) throw new MarError('This dose has nothing waiting to come off stock');
+        const result = await drawInTx(tx, { hospitalId: args.hospitalId, subject: { kind: 'dose', id: dose.id }, locationId: store.id, medicineId: dose.medicineId, units: dose.quantity, occurredAt: dose.occurredAt, actorUserId: args.actorUserId, now });
+        if (result === 'short') throw new MarError('That store does not hold enough of it (unexpired). Receive or send it there first.');
+        await tx
+          .update(marAdministrations)
+          .set({ stockStatus: 'posted', stockLocationId: store.id })
+          .where(and(eq(marAdministrations.id, dose.id), eq(marAdministrations.occurredAt, dose.occurredAt)));
+        return;
+      }
+      const [waste] = await tx.select().from(marWastes).where(eq(marWastes.id, args.id)).for('update');
+      if (!waste || waste.voidedAt || waste.stockStatus !== 'short') throw new MarError('This waste has nothing waiting to come off stock');
+      const result = await drawInTx(tx, { hospitalId: args.hospitalId, subject: { kind: 'waste', id: waste.id }, locationId: store.id, medicineId: waste.medicineId, units: waste.units, occurredAt: waste.occurredAt, actorUserId: args.actorUserId, now });
+      if (result === 'short') throw new MarError('That store does not hold enough of it (unexpired). Receive or send it there first.');
+      await tx.update(marWastes).set({ stockStatus: 'posted', locationId: store.id }).where(eq(marWastes.id, waste.id));
+    },
+    clinical,
+  );
+}
+
+export type RegisterRow = {
+  kind: 'give' | 'waste';
+  id: string;
+  occurredAt: Date;
+  patientName: string;
+  ipdNumber: number | null;
+  dose: string | null;
+  units: number;
+  amount: string | null;
+  batches: string | null;
+  storeName: string | null;
+  recordedBy: string | null;
+  witnessedBy: string | null;
+  stockStatus: 'posted' | 'short' | 'reversed' | null;
+  /** Why it was wasted (a waste), in words. */
+  reason: string | null;
+  note: string | null;
+  voided: boolean;
+};
+
+/**
+ * The patient-wise account of one risk-class medicine over a period (the
+ * shape of the NDPS Form 3E — wording still to be confirmed, D-DRUG): every
+ * give and waste from the treatment card, with patient, batch, store, who
+ * gave it and who witnessed. Struck-out rows stay, marked.
+ */
+export async function getDoseRegister(args: { hospitalId: string; medicineId: string; from: Date; to: Date }): Promise<RegisterRow[]> {
+  const rows = await withTenant(
+    args.hospitalId,
+    (tx) =>
+      tx.execute<{
+        kind: 'give' | 'waste';
+        id: string;
+        occurred_at: string;
+        patient_name: string;
+        ipd_number: number | null;
+        dose: string | null;
+        units: number;
+        amount: string | null;
+        batches: string | null;
+        store_name: string | null;
+        recorded_by: string | null;
+        witnessed_by: string | null;
+        stock_status: 'posted' | 'short' | 'reversed' | null;
+        reason: WasteReason | null;
+        note: string | null;
+        voided: boolean;
+      }>(sql`
+        with items as (
+          select 'give' as kind, m.id, m.occurred_at, m.admission_id, m.patient_id, m.dose, coalesce(m.quantity, 0)::int as units, null::text as amount,
+            m.stock_location_id as store_id, m.recorded_by_user_id, m.witnessed_by_user_id, m.stock_status, null::text as reason, m.void_reason as note,
+            m.voided_at is not null as voided, 'mar:' || m.id || ':%' as ref
+          from mar_administrations m
+          where m.medicine_id = ${args.medicineId}::uuid and m.state = 'given'
+            and m.occurred_at >= ${args.from.toISOString()}::timestamptz and m.occurred_at < ${args.to.toISOString()}::timestamptz
+          union all
+          select 'waste', w.id, w.occurred_at, w.admission_id, w.patient_id, null, w.units::int, w.amount, w.location_id, w.recorded_by_user_id,
+            w.witnessed_by_user_id, w.stock_status, w.reason_code, coalesce(w.void_reason, w.reason_text), w.voided_at is not null, 'waste:' || w.id || ':%'
+          from mar_wastes w
+          where w.medicine_id = ${args.medicineId}::uuid
+            and w.occurred_at >= ${args.from.toISOString()}::timestamptz and w.occurred_at < ${args.to.toISOString()}::timestamptz
+        )
+        select i.kind, i.id, i.occurred_at, p.name as patient_name, a.ipd_number, i.dose, i.units, i.amount,
+          (select string_agg(b.batch_no || ' ×' || (-g.quantity), ', ' order by b.expiry_date)
+             from stock_ledger g join stock_batches b on b.id = g.batch_id
+            where g.reference_key like i.ref) as batches,
+          l.name as store_name, ru.name as recorded_by, wu.name as witnessed_by, i.stock_status, i.reason, i.note, i.voided
+        from items i
+        join patients p on p.id = i.patient_id
+        join admissions a on a.id = i.admission_id
+        left join stock_locations l on l.id = i.store_id
+        left join users ru on ru.id = i.recorded_by_user_id
+        left join users wu on wu.id = i.witnessed_by_user_id
+        order by i.occurred_at
+      `),
+    clinical,
+  );
+  return [...rows].map((r) => ({
+    kind: r.kind,
+    id: r.id,
+    occurredAt: new Date(r.occurred_at),
+    patientName: r.patient_name,
+    ipdNumber: r.ipd_number,
+    dose: r.dose,
+    units: Number(r.units),
+    amount: r.amount,
+    batches: r.batches,
+    storeName: r.store_name,
+    recordedBy: r.recorded_by,
+    witnessedBy: r.witnessed_by,
+    stockStatus: r.stock_status,
+    reason: r.reason ? WASTE_REASONS[r.reason] : null,
+    note: r.note,
+    voided: r.voided,
+  }));
 }
 
 /* ================================================================ presence */
@@ -1104,6 +1692,9 @@ export type CardOrder = {
   status: OrderStatus;
   risk: { className: string; kind: string; needsWitness: boolean } | null;
   dosesRecorded: number;
+  /** B2: the allergies matched when the line was written, and why the doctor went ahead. */
+  allergyMatches: string[];
+  allergyOverrideReason: string | null;
 };
 
 export type CardDose = {
@@ -1127,6 +1718,7 @@ export type CardDose = {
   voidedAt: Date | null;
   voidReason: string | null;
   pendingRequest: { id: string; method: 'ward_device' | 'approval'; witnessName: string | null; expiresAt: Date } | null;
+  stockStatus: 'posted' | 'short' | 'reversed' | null;
 };
 
 /**
@@ -1180,6 +1772,8 @@ export async function getTreatmentCard(args: {
           tcBefore: medicines.tcWindowBeforeMin,
           tcAfter: medicines.tcWindowAfterMin,
           dosesRecorded: sql<number>`(select count(*)::int from mar_administrations m where m.order_id = ${treatmentOrders.id} and m.voided_at is null)`,
+          allergyMatches: treatmentOrders.allergyMatches,
+          allergyOverrideReason: treatmentOrders.allergyOverrideReason,
         })
         .from(treatmentOrders)
         .innerJoin(doctors, eq(doctors.id, treatmentOrders.orderingDoctorId))
@@ -1213,6 +1807,7 @@ export async function getTreatmentCard(args: {
           flags: marAdministrations.controlFlags,
           voidedAt: marAdministrations.voidedAt,
           voidReason: marAdministrations.voidReason,
+          stockStatus: marAdministrations.stockStatus,
         })
         .from(marAdministrations)
         .leftJoin(recorder, eq(recorder.id, marAdministrations.recordedByUserId))
@@ -1274,6 +1869,8 @@ export async function getTreatmentCard(args: {
             status,
             risk: risk ? { className: o.riskName!, kind: o.riskKind!, needsWitness: needsWitness(risk, o.route) } : null,
             dosesRecorded: o.dosesRecorded,
+            allergyMatches: o.allergyMatches ?? [],
+            allergyOverrideReason: o.allergyOverrideReason,
           };
         })
         .sort((a, b) => statusRank[a.status] - statusRank[b.status] || a.orderedAt.getTime() - b.orderedAt.getTime());

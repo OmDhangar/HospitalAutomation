@@ -121,6 +121,80 @@ export const MODULES = [
     defaultState: 'off',
   },
   {
+    id: 'doctor_notes',
+    title: 'Doctor’s notes',
+    description:
+      'The case sheet at admission (Case of, C/O, H/O, P/H, O/E, S/E, Adv) and daily progress notes, typed by the doctor or transcribed by a nurse and countersigned. Vitals on the note go on the T.P.R. chart.',
+    tier: 'basic',
+    core: false,
+    dependsOn: ['patient_file'],
+    uses: ['charts'],
+    routes: ['/ipd/admissions/[id]/(file)/notes'],
+    fileTabs: [{ slug: 'notes', label: 'Doctor’s notes', permission: 'ipd.view', order: 8 }],
+    printSheets: [{ id: 'notes', label: 'Case sheet and progress notes', permission: 'ipd.view', order: 8 }],
+    hasStages: false,
+    defaultState: 'off',
+  },
+  {
+    id: 'discharge_summary',
+    title: 'Discharge summary',
+    description:
+      'Drafted from the record (case sheet, tests, treatment, discharge medicines), edited by the doctor, finalised and signed as numbered versions. Unsigned prints as DRAFT.',
+    tier: 'basic',
+    core: false,
+    dependsOn: ['patient_file'],
+    uses: ['doctor_notes', 'med_reconciliation', 'mar', 'test_follow_up'],
+    routes: ['/ipd/admissions/[id]/(file)/discharge-summary'],
+    fileTabs: [{ slug: 'discharge-summary', label: 'Discharge summary', permission: 'ipd.view', order: 90 }],
+    printSheets: [{ id: 'discharge_summary', label: 'Discharge summary', permission: 'ipd.view', order: 90 }],
+    hasStages: false,
+    defaultState: 'off',
+  },
+  {
+    id: 'allergy',
+    title: 'Allergies',
+    description:
+      'What each patient is allergic to, kept with the patient for every stay; a banner on the file; and a check when a medicine is written on the treatment card (by name and drug class) that asks the doctor why before going ahead.',
+    tier: 'basic',
+    core: false,
+    dependsOn: ['patient_file'],
+    uses: ['mar'],
+    routes: ['/ipd/admissions/[id]/(file)/allergies'],
+    fileTabs: [{ slug: 'allergies', label: 'Allergies', permission: 'ipd.view', order: 5 }],
+    printSheets: [],
+    hasStages: false,
+    defaultState: 'off',
+  },
+  {
+    id: 'med_reconciliation',
+    title: 'Medication reconciliation',
+    description:
+      'The patient’s home medicines at admission and what goes home at discharge, each decided by the doctor (continue, hold, stop, change), and signed off. The discharge list prints on the discharge summary.',
+    tier: 'basic',
+    core: false,
+    dependsOn: ['patient_file'],
+    uses: ['mar'],
+    routes: ['/ipd/admissions/[id]/(file)/medicines'],
+    fileTabs: [{ slug: 'medicines', label: 'Home medicines', permission: 'ipd.view', order: 15 }],
+    printSheets: [{ id: 'medicines', label: 'Medication reconciliation', permission: 'ipd.view', order: 15 }],
+    hasStages: false,
+    defaultState: 'off',
+  },
+  {
+    id: 'deposit_alert',
+    title: 'Deposit alerts',
+    description: 'Tells the desk when a patient’s charges have used up most of the deposit, or more than a set amount is owed (80% and ₹5,000 to start).',
+    tier: 'basic',
+    core: false,
+    dependsOn: ['core_ipd'],
+    uses: [],
+    routes: ['/ipd/deposits'],
+    fileTabs: [],
+    printSheets: [],
+    hasStages: false,
+    defaultState: 'off',
+  },
+  {
     id: 'stock',
     title: 'Risk-class stock',
     description:
@@ -322,6 +396,15 @@ export function moduleAllows(
   const scope = def.rolloutScope;
   if (scope.all || wardId === null) return scope.all || scope.wardIds.length > 0;
   return scope.wardIds.includes(wardId);
+}
+
+/**
+ * B4b: a ward's risk-class doses and wastes post to the stock ledger from the
+ * treatment card when both the card and stock are in use there. Its store's
+ * counts then stop asking for the paper register's "used" figure.
+ */
+export function marPostsStock(states: ModuleStates, wardId: string | null): boolean {
+  return wardId !== null && moduleAllows(states, 'mar', 'write', wardId) && moduleAllows(states, 'stock', 'write', wardId);
 }
 
 /** The patient-file tabs this role sees, in paper order. */

@@ -31,7 +31,12 @@ import {
   isVarianceReason,
   parseBatchNo,
   parseExpiry,
+  reconcile,
+  shiftOf,
+  varianceRecurrence,
   type AdjustReason,
+  type ReconLine,
+  type RecurrenceFlag,
   type LocationKind,
   type RiskKind,
   type VarianceReason,
@@ -557,7 +562,7 @@ export type Movement = {
   id: string;
   kind: string;
   quantity: number;
-  source: 'app' | 'manual_register';
+  source: 'app' | 'manual_register' | 'mar';
   label: string;
   batchNo: string;
   recordedAt: Date;
@@ -636,6 +641,8 @@ export async function startCount(args: {
           gt(stockLedger.recordedAt, since),
           ne(stockLedger.kind, 'count_variance'),
           ne(stockLedger.source, 'manual_register'),
+          // Giving doses from the ward store (B4b) is nursing, not issuing: it does not bar the count.
+          ne(stockLedger.source, 'mar'),
         ),
       );
     const mover = moved.n > 0;
@@ -803,6 +810,8 @@ export async function saveCount(args: {
   counted: readonly { batchId: string; quantity: number | null }[];
   manualUse: readonly { medicineId: string; used: number | null }[];
   found?: { medicineId: string; batchNo: string; expiry: string; quantity: number } | null;
+  /** B4b: this store's doses post from the treatment card, so the register's "used" figure is not asked. */
+  marPosts?: boolean;
 }): Promise<void> {
   return inTx(args.hospitalId, async (tx) => {
     const count = await openCountInTx(tx, args.countId, args.actorUserId);
@@ -828,7 +837,7 @@ export async function saveCount(args: {
       const batchId = await batchInTx(tx, { hospitalId: args.hospitalId, medicineId: args.found.medicineId, batchNo: args.found.batchNo, expiryDate: args.found.expiry, actorUserId: args.actorUserId });
       await save(batchId, args.found.medicineId, args.found.quantity);
     }
-    for (const use of args.manualUse) {
+    for (const use of args.marPosts ? [] : args.manualUse) {
       if (use.used === null) {
         await tx.delete(stockCountManualUse).where(and(eq(stockCountManualUse.countId, count.id), eq(stockCountManualUse.medicineId, use.medicineId)));
         continue;
@@ -848,7 +857,7 @@ export async function saveCount(args: {
  * (first expiry first), and the differences worked out. If stock moved in or
  * out of the store while it was being counted, the count says so.
  */
-export async function submitCount(args: { hospitalId: string; countId: string; actorUserId: string }): Promise<{ differences: number }> {
+export async function submitCount(args: { hospitalId: string; countId: string; actorUserId: string; marPosts?: boolean }): Promise<{ differences: number }> {
   return inTx(args.hospitalId, async (tx) => {
     const count = await openCountInTx(tx, args.countId, args.actorUserId);
     const { held, lines } = await sheetBatchesInTx(tx, count.locationId, count.id);
@@ -864,7 +873,8 @@ export async function submitCount(args: { hospitalId: string; countId: string; a
       .from(stockBatches)
       .where(inArray(stockBatches.id, counted.map((l) => l.batchId)));
     const batchById = new Map(batches.map((b) => [b.id, b]));
-    const use = await tx.select().from(stockCountManualUse).where(eq(stockCountManualUse.countId, count.id));
+    // B4b: where doses post from the treatment card the books already hold every give; a "used" figure would count them twice.
+    const use = args.marPosts ? [] : await tx.select().from(stockCountManualUse).where(eq(stockCountManualUse.countId, count.id));
 
     const outcome = countOutcome(
       counted.map((l) => ({
@@ -1286,3 +1296,136 @@ export async function getStockOverview(args: { hospitalId: string; timezone: str
     };
   });
 }
+
+/* -------------------------------------------------------------- reconciliation (B4b) */
+
+export type ReconRow = ReconLine & { medicineId: string; label: string; unit: string; batchNo: string; expiryDate: string };
+
+export type Reconciliation = {
+  location: { id: string; name: string };
+  from: Date;
+  to: Date;
+  rows: ReconRow[];
+  /** Counts approved in the period, with what each found against the books. */
+  counts: { id: string; submittedAt: Date; countedByName: string | null; approvedByName: string | null; differences: number }[];
+};
+
+/**
+ * Plan §7.3 for one store over a period: per batch, opening + received +
+ * received from stores − sent − given (treatment card) − given (paper
+ * register) − wasted − returned ± adjustments ± count differences + put back
+ * = closing. From the ledger alone, by when each movement happened.
+ */
+export async function getReconciliation(args: { hospitalId: string; locationId: string; from: Date; to: Date }): Promise<Reconciliation> {
+  return withTenant(args.hospitalId, async (tx) => {
+    const location = await locationInTx(tx, args.locationId);
+    const movements = await tx
+      .select({ batchId: stockLedger.batchId, kind: stockLedger.kind, source: stockLedger.source, quantity: stockLedger.quantity, occurredAt: stockLedger.occurredAt })
+      .from(stockLedger)
+      .where(and(eq(stockLedger.locationId, location.id), sql`${stockLedger.occurredAt} < ${args.to.toISOString()}::timestamptz`));
+    const lines = reconcile(movements, args.from, args.to);
+    const details = lines.length
+      ? await tx
+          .select({
+            batchId: stockBatches.id,
+            medicineId: stockBatches.medicineId,
+            batchNo: stockBatches.batchNo,
+            expiryDate: stockBatches.expiryDate,
+            name: medicines.name,
+            strength: medicines.strength,
+            form: medicines.form,
+            unit: medicines.unit,
+          })
+          .from(stockBatches)
+          .innerJoin(medicines, eq(medicines.id, stockBatches.medicineId))
+          .where(inArray(stockBatches.id, lines.map((l) => l.batchId)))
+      : [];
+    const byBatch = new Map(details.map((d) => [d.batchId, d]));
+    const rows: ReconRow[] = lines
+      .map((l) => {
+        const d = byBatch.get(l.batchId)!;
+        return { ...l, medicineId: d.medicineId, label: medicineLabel(d), unit: d.unit, batchNo: d.batchNo, expiryDate: d.expiryDate };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label) || a.expiryDate.localeCompare(b.expiryDate));
+    const counts = await tx
+      .select({
+        id: stockCounts.id,
+        submittedAt: stockCounts.submittedAt,
+        countedByName: sql<string | null>`(select name from users u where u.id = ${stockCounts.countedByUserId})`,
+        approvedByName: sql<string | null>`(select name from users u where u.id = ${stockCounts.approvedByUserId})`,
+        differences: sql<number>`(select count(*)::int from stock_count_lines l where l.count_id = ${stockCounts.id} and coalesce(l.variance, 0) <> 0)`,
+      })
+      .from(stockCounts)
+      .where(
+        and(
+          eq(stockCounts.locationId, location.id),
+          eq(stockCounts.status, 'approved'),
+          sql`${stockCounts.submittedAt} >= ${args.from.toISOString()}::timestamptz`,
+          sql`${stockCounts.submittedAt} < ${args.to.toISOString()}::timestamptz`,
+        ),
+      )
+      .orderBy(asc(stockCounts.submittedAt));
+    return {
+      location: { id: location.id, name: location.name },
+      from: args.from,
+      to: args.to,
+      rows,
+      counts: counts.map((c) => ({ ...c, submittedAt: c.submittedAt! })),
+    };
+  });
+}
+
+export type RecurrenceView = RecurrenceFlag & { label: string };
+
+/**
+ * D13 in observe (plan §7.5): stores, counters and shifts with differences on
+ * two or more counts in the last 7 days. Listed for the owner; no alert, no
+ * case — the detectors and cases come with B6.
+ */
+export async function getVarianceRecurrence(args: { hospitalId: string; timezone: string; now?: Date }): Promise<RecurrenceView[]> {
+  const now = args.now ?? new Date();
+  return withTenant(args.hospitalId, async (tx) => {
+    const rows = await tx
+      .select({
+        countId: stockCounts.id,
+        locationId: stockCounts.locationId,
+        locationName: stockLocations.name,
+        countedByUserId: stockCounts.countedByUserId,
+        countedByName: users.name,
+        approvedAt: stockCounts.approvedAt,
+        submittedAt: stockCounts.submittedAt,
+      })
+      .from(stockCounts)
+      .innerJoin(stockLocations, eq(stockLocations.id, stockCounts.locationId))
+      .leftJoin(users, eq(users.id, stockCounts.countedByUserId))
+      .where(
+        and(
+          eq(stockCounts.status, 'approved'),
+          gt(stockCounts.approvedAt, new Date(now.getTime() - 7 * 86_400_000)),
+          sql`exists (select 1 from stock_count_lines l where l.count_id = ${stockCounts.id} and coalesce(l.variance, 0) <> 0)`,
+        ),
+      );
+    const flags = varianceRecurrence(
+      rows.map((r) => ({
+        countId: r.countId,
+        locationId: r.locationId,
+        countedByUserId: r.countedByUserId,
+        approvedAt: r.approvedAt!,
+        // The shift of the count itself (when it was submitted), not of its approval.
+        shift: shiftOf(r.submittedAt ?? r.approvedAt!, args.timezone),
+      })),
+      now,
+    );
+    const SHIFT_NAMES = { morning: 'Morning shift (8 am–2 pm)', evening: 'Evening shift (2–8 pm)', night: 'Night shift (8 pm–8 am)' } as const;
+    return flags.map((f) => ({
+      ...f,
+      label:
+        f.on === 'location'
+          ? (rows.find((r) => r.locationId === f.key)?.locationName ?? 'Store')
+          : f.on === 'person'
+            ? (rows.find((r) => r.countedByUserId === f.key)?.countedByName ?? 'Staff member')
+            : SHIFT_NAMES[f.key as keyof typeof SHIFT_NAMES],
+    }));
+  });
+}
+

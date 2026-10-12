@@ -61,6 +61,21 @@ The treatment card (module **Treatment card and MAR**) records why.
 5. Never edit `treatment_orders` or `mar_administrations`; strike out and record again (the database
    refuses edits).
 
+## A dose or waste is "not off stock", or a ward store's count does not match
+
+1. **"Not taken off stock" on a dose** means the ward's store did not hold enough (unexpired) of that
+   medicine when it was given. The dose itself is saved and billed. On Stock → "From the treatment
+   card", pick a store that holds it and tap "Take off stock"; if none does, receive or send it there
+   first.
+2. **Waste "waiting for witness"** is not off stock until a second person confirms it (their own
+   login, or their PIN on the ward tablet). The nurse can "Ask witness" again on the card.
+3. **Struck out by mistake?** A strike-out cannot be undone: record the dose again. Its stock went back
+   with the strike-out (a "put back" movement), and comes off again with the new dose.
+4. **Count differs on a ward that gives from the card:** look at the store's Reconcile page for the
+   period. Doses given from the bedside record screen instead of the treatment card, or from another
+   store, do not come off this store and show as a difference; so does a dose still listed as short.
+5. Never edit `stock_ledger`, `mar_administrations` or `mar_wastes`; the database refuses it.
+
 ## Time-critical alerts are not showing, or doses show as late or missed
 
 1. **Stage** (Settings → Modules → Treatment card and MAR): in `observe` escalations are only counted

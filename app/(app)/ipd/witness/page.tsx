@@ -30,8 +30,11 @@ export default async function WitnessPage({ searchParams }: PageProps<'/ipd/witn
     <div className="mx-auto max-w-2xl space-y-4">
       <AutoRefresh seconds={20} />
       <div>
-        <h1 className="text-xl font-bold text-ink-900">Witness doses</h1>
-        <p className="text-sm text-ink-600">A colleague gave a risk-class dose and named you as witness. Check it, then approve or decline.</p>
+        <h1 className="text-xl font-bold text-ink-900">Witness doses and waste</h1>
+        <p className="text-sm text-ink-600">
+          A colleague gave or wasted a risk-class medicine and named you as witness. Check it, then approve or decline. Waste comes off stock only
+          once you confirm it.
+        </p>
       </div>
       {typeof query.saved === 'string' ? <Alert tone="success">{query.saved}</Alert> : null}
       {typeof query.error === 'string' ? <Alert tone="error">{query.error}</Alert> : null}
@@ -49,7 +52,8 @@ export default async function WitnessPage({ searchParams }: PageProps<'/ipd/witn
                 <p className="text-sm text-ink-800">
                   <strong>{r.description}</strong>
                   {r.dose ? ` · ${r.dose}` : ''}
-                  {r.route ? ` · ${ROUTES[r.route as Route] ?? r.route}` : ''} · given {formatTimeIn(session.timezone, r.occurredAt)} by {r.actorName}
+                  {r.route && r.action === 'give' ? ` · ${ROUTES[r.route as Route] ?? r.route}` : ''} · {r.action === 'waste' ? 'wasted' : 'given'}{' '}
+                  {formatTimeIn(session.timezone, r.occurredAt)} by {r.actorName}
                 </p>
                 <p className="text-xs text-ink-500">Closes at {formatTimeIn(session.timezone, r.expiresAt)}</p>
                 {writable ? (
@@ -58,7 +62,7 @@ export default async function WitnessPage({ searchParams }: PageProps<'/ipd/witn
                       <input type="hidden" name="requestId" value={r.id} />
                       <input type="hidden" name="decision" value="approve" />
                       <Button type="submit" variant="primary" className="h-11">
-                        I witnessed this dose
+                        {r.action === 'waste' ? 'I witnessed this waste' : 'I witnessed this dose'}
                       </Button>
                     </form>
                     <form action={decideWitnessAction}>

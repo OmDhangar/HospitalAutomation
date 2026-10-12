@@ -23,8 +23,12 @@ import {
 } from 'drizzle-orm/pg-core';
 import { STAFF_ROLES } from '@/lib/domain/permissions';
 import type { CallOutcome, ClockFrom, ClosingOutcome, ServicePointKind, TestOrderStatus } from '@/lib/domain/test-orders';
-import type { ControlFlag, DoseState, ReasonCode, Route } from '@/lib/domain/mar';
+import type { ControlFlag, DoseState, ReasonCode, Route, WasteReason } from '@/lib/domain/mar';
 import type { TaskKind, TimingMode } from '@/lib/domain/due';
+import type { AllergyCategory, AllergySeverity, AllergySource, DrugClass } from '@/lib/domain/allergy';
+import type { MedRecDecision, MedRecPhase, MedRecSource } from '@/lib/domain/medrec';
+import type { Complaint, GeneralExam, NoteKind, NoteVitals, SystemicExam } from '@/lib/domain/notes';
+import type { SummaryContent } from '@/lib/domain/discharge-summary';
 import { APPOINTMENT_STATUSES, QUEUE_ACTIONS } from '@/lib/domain/types';
 
 /**
@@ -2634,10 +2638,11 @@ export const stockLedger = pgTable('stock_ledger', {
   medicineId: uuid('medicine_id').notNull(),
   batchId: uuid('batch_id').notNull(),
   kind: text('kind')
-    .$type<'receive' | 'transfer_out' | 'transfer_in' | 'give' | 'waste' | 'return' | 'adjust' | 'count_variance'>()
+    .$type<'receive' | 'transfer_out' | 'transfer_in' | 'give' | 'waste' | 'return' | 'adjust' | 'count_variance' | 'reversal'>()
     .notNull(),
   quantity: integer('quantity').notNull(),
-  source: text('source').$type<'app' | 'manual_register'>().notNull().default('app'),
+  /** 'mar': posted by the treatment card (0050), with a reference key per batch row. */
+  source: text('source').$type<'app' | 'manual_register' | 'mar'>().notNull().default('app'),
   occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
   recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
   recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
@@ -2807,6 +2812,9 @@ export const treatmentOrders = pgTable(
     stoppedAt: timestamp('stopped_at', { withTimezone: true }),
     stoppedByUserId: uuid('stopped_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     stopReason: text('stop_reason'),
+    /** B2 (0051): the allergies this line matched when written, and the doctor's reason for going ahead. */
+    allergyMatches: text('allergy_matches').array(),
+    allergyOverrideReason: text('allergy_override_reason'),
     recordedChannel: text('recorded_channel').$type<'personal' | 'ward_device'>(),
     recordedDeviceId: text('recorded_device_id'),
     recordedSessionId: uuid('recorded_session_id'),
@@ -2819,6 +2827,175 @@ export const treatmentOrders = pgTable(
     uniqueIndex('treatment_orders_client_key').on(t.hospitalId, t.clientId),
   ],
 );
+
+/** Clinical. The doctor's case sheet (one per stay) and progress notes; struck out, never edited (0052). */
+export const ipdNotes = pgTable(
+  'ipd_notes',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull(),
+    admissionId: uuid('admission_id').notNull(),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    kind: text('kind').$type<NoteKind>().notNull(),
+    seenAt: timestamp('seen_at', { withTimezone: true }).notNull(),
+    caseOf: text('case_of'),
+    complaints: jsonb('complaints').$type<Complaint[]>().notNull().default([]),
+    history: text('history'),
+    pastHistory: text('past_history'),
+    generalExam: jsonb('general_exam').$type<GeneralExam>().notNull().default({}),
+    vitals: jsonb('vitals').$type<NoteVitals>().notNull().default({}),
+    systemicExam: jsonb('systemic_exam').$type<SystemicExam>().notNull().default({}),
+    progress: text('progress'),
+    advice: text('advice'),
+    seenByDoctorId: uuid('seen_by_doctor_id').notNull(),
+    chartEntryId: uuid('chart_entry_id'),
+    chartObservedAt: timestamp('chart_observed_at', { withTimezone: true }),
+    writtenByUserId: uuid('written_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    transcribed: boolean('transcribed').notNull(),
+    countersignedAt: timestamp('countersigned_at', { withTimezone: true }),
+    countersignedByUserId: uuid('countersigned_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    recordedChannel: text('recorded_channel').$type<'personal' | 'ward_device'>(),
+    recordedDeviceId: text('recorded_device_id'),
+    recordedSessionId: uuid('recorded_session_id'),
+    clientId: uuid('client_id').notNull(),
+    ...voidColumns(),
+  },
+  (t) => [uniqueIndex('ipd_notes_client_key').on(t.hospitalId, t.clientId)],
+);
+
+/** Clinical. The discharge summary being written: one per stay, outside the record (0053). */
+export const dischargeSummaryDrafts = pgTable(
+  'discharge_summary_drafts',
+  {
+    hospitalId: uuid('hospital_id').notNull(),
+    admissionId: uuid('admission_id').notNull(),
+    content: jsonb('content').$type<SummaryContent>().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedByUserId: uuid('updated_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  },
+  (t) => [primaryKey({ columns: [t.hospitalId, t.admissionId] })],
+);
+
+/** Clinical. Each finalised version of a discharge summary; never edited, only countersigned (0053). */
+export const dischargeSummaries = pgTable(
+  'discharge_summaries',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id').notNull(),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    version: smallint('version').notNull(),
+    supersedesId: uuid('supersedes_id'),
+    content: jsonb('content').$type<SummaryContent>().notNull(),
+    doctorId: uuid('doctor_id').notNull(),
+    finalisedAt: timestamp('finalised_at', { withTimezone: true }).notNull().defaultNow(),
+    finalisedByUserId: uuid('finalised_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    transcribed: boolean('transcribed').notNull(),
+    signedAt: timestamp('signed_at', { withTimezone: true }),
+    signedByUserId: uuid('signed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    changeReason: text('change_reason'),
+    recordedChannel: text('recorded_channel').$type<'personal' | 'ward_device'>(),
+    recordedDeviceId: text('recorded_device_id'),
+    recordedSessionId: uuid('recorded_session_id'),
+    clientId: uuid('client_id').notNull(),
+  },
+  (t) => [uniqueIndex('discharge_summaries_client_key').on(t.hospitalId, t.clientId)],
+);
+
+/** Clinical. What a patient reacts to, per patient (follows them into every stay); void-only (0051). */
+export const patientAllergies = pgTable(
+  'patient_allergies',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    patientId: uuid('patient_id').notNull(),
+    substance: text('substance').notNull(),
+    category: text('category').$type<AllergyCategory>().notNull().default('drug'),
+    medicineId: uuid('medicine_id'),
+    drugClass: text('drug_class').$type<DrugClass>(),
+    reaction: text('reaction'),
+    severity: text('severity').$type<AllergySeverity>().notNull().default('unknown'),
+    source: text('source').$type<AllergySource>().notNull().default('patient'),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    admissionId: uuid('admission_id'),
+    clientId: uuid('client_id').notNull(),
+    ...voidColumns(),
+  },
+  (t) => [uniqueIndex('patient_allergies_client_key').on(t.hospitalId, t.clientId)],
+);
+
+/** Clinical. Someone asked about allergies: none known, recorded, or could not ask. Append-only (0051). */
+export const patientAllergyReviews = pgTable('patient_allergy_reviews', {
+  id: id(),
+  hospitalId: uuid('hospital_id')
+    .notNull()
+    .references(() => hospitals.id, { onDelete: 'cascade' }),
+  patientId: uuid('patient_id').notNull(),
+  admissionId: uuid('admission_id'),
+  outcome: text('outcome').$type<'nkda' | 'recorded' | 'unable'>().notNull(),
+  note: text('note'),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }).notNull().defaultNow(),
+  reviewedByUserId: uuid('reviewed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+});
+
+/** Clinical. A medicine on the admission or discharge reconciliation, with the doctor's decision (0051). */
+export const medRecItems = pgTable(
+  'med_rec_items',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id').notNull(),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    phase: text('phase').$type<MedRecPhase>().notNull(),
+    name: text('name').notNull(),
+    medicineId: uuid('medicine_id'),
+    dose: text('dose'),
+    frequency: text('frequency'),
+    route: text('route'),
+    duration: text('duration'),
+    source: text('source').$type<MedRecSource>(),
+    orderId: uuid('order_id'),
+    fromItemId: uuid('from_item_id'),
+    decision: text('decision').$type<MedRecDecision>(),
+    decisionNote: text('decision_note'),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    decidedByUserId: uuid('decided_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    clientId: uuid('client_id').notNull(),
+    ...voidColumns(),
+  },
+  (t) => [uniqueIndex('med_rec_items_client_key').on(t.hospitalId, t.clientId)],
+);
+
+/** Clinical. A doctor completed a reconciliation; append-only, the latest counts (0051). */
+export const medRecSignoffs = pgTable('med_rec_signoffs', {
+  id: id(),
+  hospitalId: uuid('hospital_id')
+    .notNull()
+    .references(() => hospitals.id, { onDelete: 'cascade' }),
+  admissionId: uuid('admission_id').notNull(),
+  phase: text('phase').$type<MedRecPhase>().notNull(),
+  noneAtHome: boolean('none_at_home').notNull().default(false),
+  items: integer('items').notNull(),
+  signedAt: timestamp('signed_at', { withTimezone: true }).notNull().defaultNow(),
+  signedByUserId: uuid('signed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  doctorId: uuid('doctor_id').notNull(),
+});
 
 /** Clinical. One dose, given or not; partitioned by month on occurred_at; void-only (trigger). */
 export const marAdministrations = pgTable(
@@ -2851,6 +3028,9 @@ export const marAdministrations = pgTable(
     delayMin: integer('delay_min'),
     timingReason: text('timing_reason'),
     controlFlags: text('control_flags').array().$type<ControlFlag[]>().notNull().default(sql`'{}'::text[]`),
+    /** Taken off a store (0050): null when there is nothing to take off. */
+    stockStatus: text('stock_status').$type<StockPostStatus>(),
+    stockLocationId: uuid('stock_location_id'),
     recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
     recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     recordedChannel: text('recorded_channel').$type<'personal' | 'ward_device'>(),
@@ -2863,6 +3043,46 @@ export const marAdministrations = pgTable(
   (t) => [primaryKey({ columns: [t.id, t.occurredAt] })],
 );
 
+export type StockPostStatus = 'posted' | 'short' | 'reversed';
+
+/** Clinical. A risk-class medicine wasted (broken, left over, not used), witnessed before it comes off stock (0050). */
+export const marWastes = pgTable(
+  'mar_wastes',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull(),
+    admissionId: uuid('admission_id').notNull(),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    orderId: uuid('order_id').notNull(),
+    medicineId: uuid('medicine_id').notNull(),
+    marId: uuid('mar_id'),
+    marOccurredAt: timestamp('mar_occurred_at', { withTimezone: true }),
+    locationId: uuid('location_id'),
+    units: smallint('units').notNull(),
+    amount: text('amount'),
+    reasonCode: text('reason_code').$type<WasteReason>().notNull(),
+    reasonText: text('reason_text'),
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+    witnessStatus: text('witness_status').$type<'awaiting' | 'witnessed'>().notNull().default('awaiting'),
+    witnessedByUserId: uuid('witnessed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    witnessedAt: timestamp('witnessed_at', { withTimezone: true }),
+    stockStatus: text('stock_status').$type<StockPostStatus>(),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    recordedChannel: text('recorded_channel').$type<'personal' | 'ward_device'>(),
+    recordedDeviceId: text('recorded_device_id'),
+    recordedSessionId: uuid('recorded_session_id'),
+    clientId: uuid('client_id').notNull(),
+    createdAt: createdAt(),
+    ...voidColumns(),
+  },
+  (t) => [uniqueIndex('mar_wastes_client_key').on(t.hospitalId, t.clientId)],
+);
+
 /** Clinical. A second person confirming a risk-class give; decided once (trigger). */
 export const witnessRequests = pgTable('witness_requests', {
   id: id(),
@@ -2870,9 +3090,11 @@ export const witnessRequests = pgTable('witness_requests', {
     .notNull()
     .references(() => hospitals.id, { onDelete: 'cascade' }),
   admissionId: uuid('admission_id').notNull(),
-  marId: uuid('mar_id').notNull(),
-  marOccurredAt: timestamp('mar_occurred_at', { withTimezone: true }).notNull(),
-  action: text('action').$type<'give'>().notNull().default('give'),
+  /** A give names its dose; a waste (0050) names its waste. */
+  marId: uuid('mar_id'),
+  marOccurredAt: timestamp('mar_occurred_at', { withTimezone: true }),
+  wasteId: uuid('waste_id'),
+  action: text('action').$type<'give' | 'waste'>().notNull().default('give'),
   actorUserId: uuid('actor_user_id')
     .notNull()
     .references(() => users.id),

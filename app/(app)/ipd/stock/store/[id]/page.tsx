@@ -31,13 +31,21 @@ export default async function StorePage({ params }: PageProps<'/ipd/stock/store/
       <Link href="/ipd/stock" className="inline-flex min-h-11 items-center text-sm text-ink-500 hover:text-ink-800">
         ← Stock
       </Link>
-      <div>
-        <h1 className="text-xl font-bold text-ink-900">{location.name}</h1>
-        <p className="text-sm text-ink-600">
-          {LOCATION_KINDS[location.kind]}
-          {location.wardName ? ` · ${location.wardName}` : ''} · {location.branchName}
-          {location.active ? '' : ' · closed'}
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h1 className="text-xl font-bold text-ink-900">{location.name}</h1>
+          <p className="text-sm text-ink-600">
+            {LOCATION_KINDS[location.kind]}
+            {location.wardName ? ` · ${location.wardName}` : ''} · {location.branchName}
+            {location.active ? '' : ' · closed'}
+          </p>
+        </div>
+        <Link
+          href={`/ipd/stock/store/${location.id}/reconcile`}
+          className="inline-flex min-h-11 items-center rounded-lg px-3 text-sm font-semibold text-brand-700 ring-1 ring-brand-200 hover:bg-brand-50"
+        >
+          Reconcile
+        </Link>
       </div>
 
       <Card>
@@ -80,6 +88,7 @@ export default async function StorePage({ params }: PageProps<'/ipd/stock/store/
                   <span className="block">
                     <strong>{LEDGER_KIND_LABELS[m.kind as LedgerKind] ?? m.kind}</strong> · {m.label} · batch {m.batchNo}
                     {m.source === 'manual_register' ? <span className="ml-1 text-xs text-ink-500">(from the paper register)</span> : null}
+                    {m.source === 'mar' ? <span className="ml-1 text-xs text-ink-500">(treatment card)</span> : null}
                   </span>
                   <span className="block text-ink-500">
                     {m.recordedByName ?? 'staff'} · {time(m.recordedAt)}

@@ -5,8 +5,9 @@ import { requireModule } from '@/lib/auth/modules';
 import { requireSession } from '@/lib/auth/session';
 import { can } from '@/lib/domain/permissions';
 import { ADJUST_REASONS, LOCATION_KINDS, VARIANCE_REASONS } from '@/lib/domain/stock';
-import { getStockOverview } from '@/lib/services/stock';
-import { decideAdjustmentAction, startCountAction } from './actions';
+import { listStockToResolve } from '@/lib/services/mar';
+import { getStockOverview, getVarianceRecurrence } from '@/lib/services/stock';
+import { decideAdjustmentAction, postShortAction, startCountAction } from './actions';
 
 export const metadata = { title: 'Stock · IPD' };
 
@@ -26,11 +27,18 @@ export default async function StockPage({ searchParams }: PageProps<'/ipd/stock'
     );
   }
   const query = await searchParams;
-  const overview = await getStockOverview({ hospitalId: session.hospitalId, timezone: session.timezone });
   const writable = !session.readOnly;
   const canMove = can(session.role, 'stock.move') && writable;
   const canCount = can(session.role, 'stock.count') && writable;
   const canApprove = can(session.role, 'stock.approve') && writable;
+  // B4b: what the treatment card left to settle (names patients: clinical roles), and D13's watch list (approvers).
+  const seesPatients = can(session.role, 'ipd.view');
+  const [overview, toResolve, recurrence] = await Promise.all([
+    getStockOverview({ hospitalId: session.hospitalId, timezone: session.timezone }),
+    seesPatients ? listStockToResolve({ hospitalId: session.hospitalId }) : Promise.resolve([]),
+    can(session.role, 'stock.approve') ? getVarianceRecurrence({ hospitalId: session.hospitalId, timezone: session.timezone }) : Promise.resolve([]),
+  ]);
+  const openStores = overview.stores.filter((s) => s.location.active);
   const stage = states.get('stock')?.stage ?? 'observe';
 
   const time = (date: Date) =>
@@ -60,9 +68,68 @@ export default async function StockPage({ searchParams }: PageProps<'/ipd/stock'
             <Link href="/ipd/stock/adjust">
               <Button variant="secondary" size="sm" className="h-11">Expired, broken, found…</Button>
             </Link>
+            {seesPatients ? (
+              <Link href="/ipd/stock/register">
+                <Button variant="ghost" size="sm" className="h-11">Patient-wise register</Button>
+              </Link>
+            ) : null}
           </div>
+        ) : seesPatients ? (
+          <Link href="/ipd/stock/register">
+            <Button variant="ghost" size="sm" className="h-11">Patient-wise register</Button>
+          </Link>
         ) : null}
       </div>
+
+      {toResolve.length > 0 ? (
+        <Card>
+          <CardHeader
+            title="From the treatment card"
+            hint="Doses and waste the ward’s store could not cover, and waste still waiting for its witness. Nothing here held up the patient’s care."
+          />
+          <ul className="divide-y divide-ink-100">
+            {toResolve.map((item) => (
+              <li key={`${item.kind}-${item.id}`} className="space-y-2 px-4 py-3 text-sm sm:px-5">
+                <p>
+                  <strong>{item.description}</strong> · {item.kind === 'dose' ? 'dose' : 'waste'} of {item.units} unit{item.units === 1 ? '' : 's'} ·{' '}
+                  {item.patientName}
+                  {item.bed ? ` (${item.bed})` : ''} · {time(item.occurredAt)} by {item.recordedBy ?? 'staff'}
+                </p>
+                {item.status === 'awaiting_witness' ? (
+                  <p className="text-amber-800">Waiting for its witness: nothing comes off stock until a second person confirms it.</p>
+                ) : (
+                  <>
+                    <p className="text-amber-800">{item.storeName ? `${item.storeName} did not hold enough.` : 'The ward has no store set up.'} Take it off a store that holds it.</p>
+                    {canMove ? (
+                      <form action={postShortAction} className="flex flex-wrap items-end gap-2">
+                        <input type="hidden" name="kind" value={item.kind} />
+                        <input type="hidden" name="id" value={item.id} />
+                        <label className="block min-w-0 text-xs font-medium text-ink-700">
+                          From
+                          <select
+                            name="locationId"
+                            defaultValue={item.storeId ?? openStores[0]?.location.id}
+                            className="mt-1 block h-11 max-w-full rounded-lg border-0 px-3 text-sm ring-1 ring-inset ring-ink-300"
+                          >
+                            {openStores.map((s) => (
+                              <option key={s.location.id} value={s.location.id}>
+                                {s.location.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <Button type="submit" variant="primary" size="sm" className="h-11">
+                          Take off stock
+                        </Button>
+                      </form>
+                    ) : null}
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
 
       {overview.stores.length === 0 ? (
         <Card>
@@ -200,6 +267,23 @@ export default async function StockPage({ searchParams }: PageProps<'/ipd/stock'
                     </Button>
                   </form>
                 )}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
+
+      {recurrence.length > 0 ? (
+        <Card>
+          <CardHeader title="Repeated differences" hint="Watch list (D13, observing): two or more counts with a difference in 7 days. Look into it; it is not a finding." />
+          <ul className="divide-y divide-ink-100">
+            {recurrence.map((f) => (
+              <li key={`${f.on}-${f.key}`} className="px-4 py-2.5 text-sm sm:px-5">
+                <strong>{f.label}</strong>
+                <span className="text-ink-600">
+                  {' '}
+                  · {f.on === 'location' ? 'store' : f.on === 'person' ? 'counted by' : 'shift'} · {f.counts} counts with a difference · last {time(f.latest)}
+                </span>
               </li>
             ))}
           </ul>

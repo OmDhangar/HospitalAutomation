@@ -111,3 +111,16 @@ describe('bed codes', () => {
     expect(bedCodeFromQr('QB1:ZXB0N2')).toBeNull();
   });
 });
+
+describe('waste (B4b)', () => {
+  it('takes whole units, or the amount of a remainder, with a reason', async () => {
+    const { parseWaste } = await import('@/lib/domain/mar');
+    expect(parseWaste({ reason: 'broken', units: '1' })).toEqual({ reason: 'broken', reasonText: null, units: 1, amount: null });
+    expect(parseWaste({ reason: 'remainder', units: '', amount: ' 6 mg ' })).toEqual({ reason: 'remainder', reasonText: null, units: 0, amount: '6 mg' });
+    expect(() => parseWaste({ reason: 'remainder', units: '1', amount: '6 mg' })).toThrow(/already off stock/);
+    expect(() => parseWaste({ reason: 'broken', units: '0' })).toThrow(/how much/);
+    expect(() => parseWaste({ reason: 'other', units: '1' })).toThrow(/reason/);
+    expect(() => parseWaste({ reason: 'lost', units: '1' })).toThrow(/why/);
+    expect(() => parseWaste({ reason: 'broken', units: '1.5' })).toThrow(/whole number/);
+  });
+});

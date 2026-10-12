@@ -8,6 +8,8 @@ import { can } from '@/lib/domain/permissions';
 import { moduleAllows } from '@/lib/modules/registry';
 import { countMyWitnessRequests, listAwaitingCountersign } from '@/lib/services/mar';
 import { myEscalations } from '@/lib/services/due';
+import { listNotesAwaitingCountersign } from '@/lib/services/notes';
+import { listSummariesToSign } from '@/lib/services/discharge-summary';
 import { readWardDeviceCookie } from '@/lib/auth/ward-device-cookie';
 import { resolveWardDevice } from '@/lib/services/staff-access';
 
@@ -38,6 +40,10 @@ export default async function IpdLayout({ children }: LayoutProps<'/ipd'>) {
   if (can(session.role, 'ipd.dueQuality') && moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'mar', 'read')) {
     tabs.push({ label: 'Dose timing', href: '/ipd/quality' });
   }
+  // Deposit alerts (B2), for the desk.
+  if (can(session.role, 'ipd.depositAlerts') && moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'deposit_alert', 'read')) {
+    tabs.push({ label: 'Deposits', href: '/ipd/deposits' });
+  }
   if (can(session.role, 'ipd.configure')) tabs.push({ label: 'Set up', href: '/settings/ipd' });
 
   // Treatment card (B3-min): doses waiting for my witness, and telephone orders waiting for my countersign.
@@ -48,6 +54,16 @@ export default async function IpdLayout({ children }: LayoutProps<'/ipd'>) {
         can(session.role, 'ipd.countersign') ? listAwaitingCountersign({ hospitalId: session.hospitalId, userId: session.userId }) : [],
       ])
     : [0, []];
+  // Doctor's notes (C3) written for me by a nurse, waiting for my countersign.
+  const notesToSign =
+    can(session.role, 'ipd.countersign') && !session.readOnly && moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'doctor_notes', 'read')
+      ? await listNotesAwaitingCountersign({ hospitalId: session.hospitalId, userId: session.userId })
+      : [];
+  // Discharge summaries (B5) finalised for me, waiting for my signature.
+  const summariesToSign =
+    can(session.role, 'ipd.summary') && !session.readOnly && moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'discharge_summary', 'read')
+      ? await listSummariesToSign({ hospitalId: session.hospitalId, userId: session.userId })
+      : [];
   // Late time-critical doses (B3b): by ward and level, never the patient or the drug (no PHI in a banner).
   const device = marOn && session.channel === 'ward_device' ? await resolveWardDevice(await readWardDeviceCookie()) : null;
   const escalations =
@@ -103,7 +119,7 @@ export default async function IpdLayout({ children }: LayoutProps<'/ipd'>) {
       ))}
       {toWitness > 0 ? (
         <Link href="/ipd/witness" className="flex min-h-12 items-center justify-between rounded-xl bg-amber-100 px-4 text-sm font-semibold text-amber-950 ring-1 ring-amber-300">
-          {toWitness} dose{toWitness === 1 ? '' : 's'} waiting for your witness <span aria-hidden>→</span>
+          {toWitness === 1 ? '1 dose or waste' : `${toWitness} doses or wastes`} waiting for your witness <span aria-hidden>→</span>
         </Link>
       ) : null}
       {toCountersign.length > 0 ? (
@@ -112,6 +128,22 @@ export default async function IpdLayout({ children }: LayoutProps<'/ipd'>) {
           className="flex min-h-12 items-center justify-between rounded-xl bg-amber-50 px-4 text-sm font-semibold text-amber-950 ring-1 ring-amber-200"
         >
           {toCountersign.length} telephone order{toCountersign.length === 1 ? '' : 's'} waiting for your countersign <span aria-hidden>→</span>
+        </Link>
+      ) : null}
+      {notesToSign.length > 0 ? (
+        <Link
+          href={`/ipd/admissions/${notesToSign[0].admissionId}/notes`}
+          className="flex min-h-12 items-center justify-between rounded-xl bg-amber-50 px-4 text-sm font-semibold text-amber-950 ring-1 ring-amber-200"
+        >
+          {notesToSign.length} note{notesToSign.length === 1 ? '' : 's'} written for you, waiting for your countersign <span aria-hidden>→</span>
+        </Link>
+      ) : null}
+      {summariesToSign.length > 0 ? (
+        <Link
+          href={`/ipd/admissions/${summariesToSign[0].admissionId}/discharge-summary`}
+          className="flex min-h-12 items-center justify-between rounded-xl bg-amber-50 px-4 text-sm font-semibold text-amber-950 ring-1 ring-amber-200"
+        >
+          {summariesToSign.length} discharge summar{summariesToSign.length === 1 ? 'y' : 'ies'} waiting for your signature <span aria-hidden>→</span>
         </Link>
       ) : null}
       {children}

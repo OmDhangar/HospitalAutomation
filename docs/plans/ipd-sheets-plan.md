@@ -971,7 +971,7 @@ TPR first, then counts, then drug accountability. Week 1 is assumed to start **M
 | 7a | **C4a Test orders and follow-up** [Rev 5.1] **(built 11 Oct 2026)** | Doctor orders tests (OPD consultation and IPD); service points (lab/room, floor, section, en/mr/hi) with assigned staff; worklist with waiting clock and Call button; call outcomes and patient feedback; not-arrived task after the hospital's set time (from order or from payment, per service point), raised to the admin after 15 more minutes; arrived / done / report added; admin **Today** screen per lab and per person, day-end pending list; all steps in the evidence log. Calls only, no WhatsApp | 0047 | 3 | wk 14–16 |
 | 8 | B3-min | Orders + MAR for **risk-class and time-critical drugs**; countersign; witness (ward device + approval request); bed-scan rule. **Built 11 Oct 2026** (typed bed codes; QR, waste witness and timing follow — see progress.md) | 0048 | 3 | wk 17–19 |
 | 9 | **B3b** | Due engine + due board + time-critical windows, alerts, escalation, offline board, round-list print. **Built 11 Oct 2026** (with bed QR codes from our own encoder; offline recording and phone push follow — see progress.md) | 0049 | 2.5 | wk 20–22 |
-| 10 | **B4b MAR linking** | Gives and wastes from MAR post to the ledger automatically (idempotent); the manual "used" figure retired; full reconciliation; D13 in observe | (0046 expand) | 1.5 | wk 22–23 |
+| 10 | **B4b MAR linking** | Gives and wastes from MAR post to the ledger automatically (idempotent); the manual "used" figure retired; full reconciliation; D13 in observe. **Built 11 Oct 2026** (migration 0050, with waste witness and the patient-wise register draft — see progress.md) | 0050 (0046 expand) | 1.5 | wk 22–23 |
 | — | **Go/no-go review** (§11.4) | | — | — | **wk 25–26 (≈ 5–16 Apr 2027)** [Rev 5.1], after ≥ 4 weeks of B1 primary, ≥ 2 weeks of B3b warn and ≥ 3 weeks of C4a in use |
 
 **Moving the counts earlier:** splitting B4 into B4a and B4b costs **≈ 0.5 week** (the manual
@@ -1003,14 +1003,14 @@ change with what the pilot teaches.
 |---|---|---|---|
 | A4-full | Roles/scopes, branch RLS + benchmark (§4.3), break-glass, access reviews, `authz_v2` shadow (§4.4) | 0048 | 5 |
 | A7 | File storage + scanner | 0049 | 2 |
-| B2 | Allergy, medication reconciliation, deposit alerts | 0050 | 2.5 |
+| B2 | Allergy, medication reconciliation, deposit alerts. **Built 11 Oct 2026** (migration 0051; see progress.md) | 0051 | 2.5 |
 | B3-full | MAR for all drugs, timed tasks, dose guard everywhere | (0045/0046 expand) | 3 |
 | B4-full | Stock for all tracked items, NDPS/H1 register reports | (0047 expand) | 2 |
-| B5 | Discharge summary | 0051 | 3 |
+| B5 | Discharge summary. **Built 11 Oct 2026** (migration 0053; see progress.md) | 0053 | 3 |
 | B6 | Detectors v1 (basic tier incl. D15, D16) + rollups + cases | 0052 | 4 |
 | C1 | Billing sheet + category bill | 0053 | 3 |
 | C2 | Consents | 0054 | 3 |
-| C3 | Doctor notes + initial assessments | 0055 | 3 |
+| C3 | Doctor notes + initial assessments. **Built 11 Oct 2026** (case sheet and progress notes, migration 0052; see progress.md) | 0052 | 3 |
 | C4b [Rev 5.1] | Typed lab and radiology results, report files, lab detectors (C4a is in the pilot slice) | — | 3 |
 | **C5** | **Family page `/f` + final-bill WhatsApp message (§16)** | 0057 | 3 |
 | C6 | Readiness, leakage, handover, EWS | 0058 | 4 |

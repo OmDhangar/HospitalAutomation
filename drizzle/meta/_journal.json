@@ -344,6 +344,34 @@
       "when": 1790650000000,
       "tag": "0049_due_engine",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1790740000000,
+      "tag": "0050_mar_stock",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1790830000000,
+      "tag": "0051_allergy_medrec",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1790920000000,
+      "tag": "0052_doctor_notes",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1791010000000,
+      "tag": "0053_discharge_summary",
+      "breakpoints": true
     }
   ]
 }
