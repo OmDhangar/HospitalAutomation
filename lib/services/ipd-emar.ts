@@ -22,6 +22,7 @@ export interface RecordAdministrationInput {
   doseGiven: string;
   routeGiven: string;
   clinicalNote?: string | null;
+  notes?: string | null;
   recordedChannel?: 'personal' | 'ward_device' | null;
   recordedDeviceId?: string | null;
 }
@@ -384,7 +385,7 @@ export async function recordAdministration(args: {
           doseAmountNumeric: args.input.doseAmount,
           doseGiven: args.input.doseGiven,
           routeGiven: args.input.routeGiven,
-          clinicalNote: args.input.clinicalNote ?? null,
+          clinicalNote: args.input.clinicalNote ?? args.input.notes ?? null,
           nurseUserId: args.actorUserId,
           recordedChannel: args.input.recordedChannel ?? null,
           recordedDeviceId: args.input.recordedDeviceId ?? null,

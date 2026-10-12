@@ -35,8 +35,8 @@ export interface DraftOrderInput {
 
 export type OrderResolution =
   | { type: 'continue'; orderId: string }
-  | { type: 'renew'; orderId: string; newEndsAt: Date }
-  | { type: 'modify'; orderId: string; modifiedOrder: Partial<DraftOrderInput> }
+  | { type: 'renew'; orderId: string; newEndsAt: Date; reason?: string }
+  | { type: 'modify'; orderId: string; modifiedOrder: Partial<DraftOrderInput>; reason?: string }
   | { type: 'hold'; orderId: string; reason: string }
   | { type: 'discontinue'; orderId: string; reason: string }
   | { type: 'new'; order: DraftOrderInput };
@@ -365,7 +365,7 @@ export async function signRoundOrders(args: {
             specialInstructions: mod.specialInstructions !== undefined ? mod.specialInstructions : prior.specialInstructions,
             origin: prior.origin,
             patientSupplied: prior.patientSupplied,
-            startsAt: now,
+            startsAt: mod.startsAt ?? now,
             endsAt: mod.endsAt !== undefined ? mod.endsAt : prior.endsAt,
             durationDays: mod.durationDays !== undefined ? mod.durationDays : prior.durationDays,
             status: 'active',
@@ -481,7 +481,7 @@ export async function signRoundOrders(args: {
             scheduleType: o.scheduleType,
             frequencyCode: o.frequencyCode ?? null,
             scheduleTimes: o.scheduleTimes ?? [],
-            isPrn: o.isPrn ?? false,
+            isPrn: o.isPrn !== undefined ? o.isPrn : o.scheduleType === 'prn',
             prnIndication: o.prnIndication ?? null,
             prnMaxDailyDoses: o.prnMaxDailyDoses ?? null,
             prnMaxDailyQuantity: o.prnMaxDailyQuantity ?? null,

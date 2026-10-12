@@ -3107,3 +3107,12 @@ export type NewIpdOrderSetItem = typeof ipdOrderSetItems.$inferInsert;
 export type IpdEmarIntegrationOutboxRow = typeof ipdEmarIntegrationOutbox.$inferSelect;
 export type NewIpdEmarIntegrationOutbox = typeof ipdEmarIntegrationOutbox.$inferInsert;
 
+export type SelectIpdMedicationOrder = IpdMedicationOrderRow;
+export type InsertIpdMedicationOrder = NewIpdMedicationOrder;
+export type SelectIpdMedicationAdministration = IpdMedicationAdministrationRow;
+export type InsertIpdMedicationAdministration = NewIpdMedicationAdministration;
+export type SelectIpdEmarIntegrationOutbox = IpdEmarIntegrationOutboxRow;
+export type InsertIpdEmarIntegrationOutbox = NewIpdEmarIntegrationOutbox;
+export type SelectIpdClinicalRound = IpdClinicalRoundRow;
+export type InsertIpdClinicalRound = NewIpdClinicalRound;
+
