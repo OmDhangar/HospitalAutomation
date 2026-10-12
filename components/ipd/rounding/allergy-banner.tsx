@@ -54,7 +54,7 @@ export function AllergyBanner({
         });
         onUpdated?.();
       } catch (err) {
-        setErrorMsg(err instanceof Error ? err.message : 'Failed to record NKDA');
+        setErrorMsg(err instanceof Error ? err.message : 'Failed to record no allergies');
       }
     });
   };
@@ -151,7 +151,7 @@ export function AllergyBanner({
                 disabled={isPending}
                 className="inline-flex items-center rounded-lg border border-emerald-400 bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-xs transition hover:bg-emerald-700 disabled:opacity-50"
               >
-                {isPending ? 'Saving...' : '✓ 1-Tap NKDA'}
+                {isPending ? 'Saving...' : '✓ No Allergies'}
               </button>
               <button
                 type="button"
@@ -179,7 +179,7 @@ export function AllergyBanner({
             </span>
             <div className="flex flex-wrap items-baseline gap-2">
               <span className="text-sm font-semibold text-emerald-950">
-                No Known Drug Allergies (NKDA)
+                No allergies
               </span>
               {formattedDate && (
                 <span className="text-xs text-emerald-700">
@@ -298,7 +298,7 @@ export function AllergyBanner({
                     : 'text-ink-600 hover:text-ink-900',
                 )}
               >
-                ✓ No Known Allergies (NKDA)
+                ✓ No allergies
               </button>
               <button
                 type="button"
@@ -317,7 +317,7 @@ export function AllergyBanner({
             {modalStatus === 'nkda' ? (
               <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50/50 p-4 text-center">
                 <p className="text-sm font-medium text-emerald-950">
-                  Confirm No Known Drug Allergies
+                  Confirm No Allergies
                 </p>
                 <p className="mt-1 text-xs text-emerald-700">
                   You are verifying that the patient has denied known adverse reactions to medications.

@@ -74,10 +74,10 @@ describe('Doctor Rounding Cockpit UI Components', () => {
       );
 
       expect(html).toContain('Allergy Assessment Required');
-      expect(html).toContain('1-Tap NKDA');
+      expect(html).toContain('No Allergies');
     });
 
-    it('renders green confirmation when NKDA', () => {
+    it('renders green confirmation when no allergies', () => {
       const html = renderToString(
         <AllergyBanner
           admissionId="adm-1"
@@ -90,7 +90,7 @@ describe('Doctor Rounding Cockpit UI Components', () => {
         />,
       );
 
-      expect(html).toContain('No Known Drug Allergies (NKDA)');
+      expect(html).toContain('No allergies');
       expect(html).toContain('Dr. House');
     });
 

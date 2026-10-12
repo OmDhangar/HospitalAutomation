@@ -181,7 +181,7 @@ describe('BedsideEmar Orchestrator Component', () => {
     expect(html).toContain('Allergies Unreviewed');
   });
 
-  it('renders NKDA badge when status is nkda', () => {
+  it('renders No allergies badge when status is nkda', () => {
     const html = renderToString(
       <BedsideEmar
         admissionId="adm-1"
@@ -196,6 +196,6 @@ describe('BedsideEmar Orchestrator Component', () => {
     );
 
     expect(html).toContain('Kavita Rao');
-    expect(html).toContain('NKDA');
+    expect(html).toContain('No allergies');
   });
 });
