@@ -4,6 +4,9 @@ import { renderToString } from 'react-dom/server';
 import { VitalsFreshnessBar } from '../vitals-freshness-bar';
 import { AllergyBanner } from '../allergy-banner';
 import { ActiveOrdersReview } from '../active-orders-review';
+import { QuickPrescribeSection } from '../quick-prescribe-section';
+import { RoundNoteEditor } from '../round-note-editor';
+import { OrderSigningModal } from '../order-signing-modal';
 import type { SelectIpdMedicationOrder } from '@/lib/db/schema';
 
 describe('Doctor Rounding Cockpit UI Components', () => {
@@ -123,11 +126,8 @@ describe('Doctor Rounding Cockpit UI Components', () => {
       encounterId: 'enc-1',
       patientId: 'pat-1',
       orderChainId: 'chain-1',
-      version: 1,
-      supersedesOrderId: null,
       medicineId: 'med-1',
       medicineName: 'Ceftriaxone 1g IV',
-      genericName: 'Ceftriaxone',
       form: 'injection',
       strength: '1g',
       doseAmount: '1',
@@ -143,20 +143,23 @@ describe('Doctor Rounding Cockpit UI Components', () => {
       prnMaxDailyUnit: null,
       prnMinIntervalHours: null,
       specialInstructions: 'Slow IV push over 5 minutes',
+      origin: 'inpatient_order',
+      patientSupplied: false,
       startsAt: new Date(),
       endsAt: new Date(Date.now() + 86400000 * 2),
       durationDays: 3,
       status: 'active',
-      statusReason: null,
-      statusChangedAt: new Date(),
-      statusChangedByUserId: 'usr-1',
+      supersedesOrderId: null,
+      supersededByOrderId: null,
+      orderSetId: null,
+      orderSetVersion: null,
+      voidedAt: null,
+      voidedByUserId: null,
+      voidReason: null,
+      prescriberDoctorId: 'doc-1',
+      createdByUserId: 'usr-1',
       signedAt: new Date(),
-      signedByDoctorId: 'doc-1',
-      signedByUserId: 'usr-1',
-      supersededAt: null,
-      discontinuedAt: null,
-      discontinuedByUserId: null,
-      discontinueReason: null,
+      roundNoteId: 'round-1',
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -205,6 +208,100 @@ describe('Doctor Rounding Cockpit UI Components', () => {
       expect(html).toContain('Modify');
       expect(html).toContain('Hold');
       expect(html).toContain('Discontinue');
+    });
+  });
+
+  describe('QuickPrescribeSection', () => {
+    it('renders quick presets and handles staged orders', () => {
+      const html = renderToString(
+        <QuickPrescribeSection
+          frequentMedicines={[
+            { id: 'fm-1', name: 'Diclofenac 50mg', genericName: 'Diclofenac', form: 'tablet', unit: 'tab' },
+          ]}
+          newOrders={[
+            {
+              medicineId: 'new-1',
+              medicineName: 'Azithromycin 500mg Oral',
+              doseAmount: '500',
+              doseUnit: 'mg',
+              route: 'oral',
+              scheduleType: 'scheduled',
+              frequencyCode: 'OD',
+              scheduleTimes: ['08:00'],
+              durationDays: 3,
+            },
+          ]}
+          onAddNewOrder={() => {}}
+          onRemoveNewOrder={() => {}}
+        />,
+      );
+
+      expect(html).toContain('Inpatient Prescribing');
+      expect(html).toContain('Pantoprazole 40mg IV');
+      expect(html).toContain('Diclofenac 50mg');
+      expect(html).toContain('New Orders to Authorize');
+      expect(html).toContain('Azithromycin 500mg Oral');
+    });
+  });
+
+  describe('RoundNoteEditor', () => {
+    it('renders clinical note textarea with snippet buttons and action buttons', () => {
+      const html = renderToString(
+        <RoundNoteEditor
+          notes="Patient progressing satisfactorily."
+          onChangeNotes={() => {}}
+          onSaveDraft={async () => {}}
+          onOpenSigningModal={() => {}}
+          totalOrdersToAuthorize={2}
+        />,
+      );
+
+      expect(html).toContain('Clinical Round Notes');
+      expect(html).toContain('SOAP Note');
+      expect(html).toContain('Save Draft');
+      expect(html).toContain('Authorize Orders');
+      expect(html).toContain('2'); // badge count
+    });
+  });
+
+  describe('OrderSigningModal', () => {
+    it('renders signing diff breakdown with allergy warning if applicable', () => {
+      const html = renderToString(
+        <OrderSigningModal
+          isOpen={true}
+          onClose={() => {}}
+          admissionId="adm-1"
+          roundNotes="Morning round: Vitals stable, weaning IV meds."
+          activeOrders={[]}
+          resolutions={{}}
+          newOrders={[
+            {
+              medicineId: 'new-1',
+              medicineName: 'Amoxicillin 500mg',
+              doseAmount: '500',
+              doseUnit: 'mg',
+              route: 'oral',
+              scheduleType: 'scheduled',
+              frequencyCode: 'TDS',
+              scheduleTimes: ['08:00', '14:00', '20:00'],
+              durationDays: 5,
+            },
+          ]}
+          allergyAssessment={{
+            status: 'allergies_documented',
+            allergens: [{ substance: 'Penicillin', severity: 'severe' }],
+            reviewedAt: new Date(),
+          }}
+          onSignedSuccess={() => {}}
+        />,
+      );
+
+      expect(html).toContain('Sign Clinical Round Orders');
+      expect(html).toContain('Patient has documented drug allergies');
+      expect(html).toContain('Penicillin');
+      expect(html).toContain('New Inpatient Prescriptions');
+      expect(html).toContain('Amoxicillin 500mg');
+      expect(html).toContain('Morning round: Vitals stable');
     });
   });
 });
