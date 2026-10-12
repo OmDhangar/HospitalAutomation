@@ -130,3 +130,47 @@ export function getTaskTimeCategory(scheduledTime: Date, targetTime: Date): Task
   }
   return 'due_now';
 }
+
+/**
+ * Convenience helper for eMAR bed task occurrence generation.
+ */
+export function generateScheduleOccurrences(args: {
+  scheduleType?: string;
+  scheduleTimes: string[];
+  startsAt: Date;
+  endsAt?: Date | null;
+  windowStart: Date;
+  windowEnd: Date;
+  timezone?: string;
+}): Date[] {
+  return calculateScheduledOccurrences({
+    scheduleTimes: args.scheduleTimes,
+    startsAt: args.startsAt,
+    endsAt: args.endsAt,
+    from: args.windowStart,
+    to: args.windowEnd,
+    timezone: args.timezone,
+  });
+}
+
+/**
+ * Categorizes a scheduled time into dueNow, overdue, or upcoming based on targetTime.
+ */
+export function categorizeDueWindow(args: {
+  scheduledTime: Date;
+  targetTime: Date;
+  windowMinutes?: number;
+}): 'dueNow' | 'overdue' | 'upcoming' {
+  const diffMs = args.scheduledTime.getTime() - args.targetTime.getTime();
+  const diffMinutes = diffMs / (60 * 1000);
+  const win = args.windowMinutes ?? 60;
+
+  if (diffMinutes < -win) {
+    return 'overdue';
+  }
+  if (diffMinutes > win) {
+    return 'upcoming';
+  }
+  return 'dueNow';
+}
+
