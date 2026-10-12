@@ -54,6 +54,10 @@ export default async function RecordPage({ params }: PageProps<'/ipd/ward/[wardI
     can(session.role, 'ipd.chart') && moduleAllows(states, 'charts', 'read')
       ? `/ipd/admissions/${occupant.admissionId}/tpr`
       : null;
+  const emarHref =
+    can(session.role, 'ipd.view')
+      ? `/ipd/admissions/${occupant.admissionId}/emar`
+      : null;
   const ageSex = [occupant.age !== null ? String(occupant.age) : null, occupant.gender?.[0]?.toUpperCase() ?? null]
     .filter(Boolean)
     .join(' ');
@@ -77,6 +81,7 @@ export default async function RecordPage({ params }: PageProps<'/ipd/ward/[wardI
         recent={picks.recent}
         common={picks.common}
         chartHref={chartHref}
+        emarHref={emarHref}
       />
     </>
   );
