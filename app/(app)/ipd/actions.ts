@@ -39,6 +39,13 @@ import {
   signRoundOrders,
   type OrderResolution,
 } from '@/lib/services/ipd-medication-orders';
+import {
+  recordAdministration,
+  recordException,
+  voidAdministration,
+  type RecordAdministrationInput,
+  type RecordExceptionInput,
+} from '@/lib/services/ipd-emar';
 
 /**
  * The desk's IPD actions (IPD plan §5.3–5.5, task T1.6). Form posts that
@@ -419,5 +426,71 @@ export async function signRoundOrdersAction(args: {
   revalidatePath('/ipd/my-patients');
   return { ok: true, roundId: res.roundId, signedOrderIds: res.signedOrderIds };
 }
+
+export async function recordAdministrationAction(args: {
+  admissionId: string;
+  orderId: string;
+  input: RecordAdministrationInput;
+}): Promise<{ ok: boolean; administrationId: string }> {
+  const session = await authorize('ipd.administer');
+
+  const res = await recordAdministration({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    orderId: args.orderId,
+    input: args.input,
+    actorUserId: session.userId,
+  });
+
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/emar`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  revalidatePath('/ipd');
+  return { ok: true, administrationId: res.administrationId };
+}
+
+export async function recordExceptionAction(args: {
+  admissionId: string;
+  orderId: string;
+  input: RecordExceptionInput;
+}): Promise<{ ok: boolean; administrationId: string }> {
+  const session = await authorize('ipd.administer');
+
+  const res = await recordException({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    orderId: args.orderId,
+    input: args.input,
+    actorUserId: session.userId,
+  });
+
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/emar`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  revalidatePath('/ipd');
+  return { ok: true, administrationId: res.administrationId };
+}
+
+export async function voidAdministrationAction(args: {
+  admissionId: string;
+  administrationId: string;
+  reason: string;
+}): Promise<{ ok: boolean }> {
+  const session = await authorize('ipd.administer');
+
+  await voidAdministration({
+    hospitalId: session.hospitalId,
+    administrationId: args.administrationId,
+    reason: args.reason,
+    actorUserId: session.userId,
+  });
+
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/emar`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  revalidatePath('/ipd');
+  return { ok: true };
+}
+
 
 
