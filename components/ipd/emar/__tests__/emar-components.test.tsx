@@ -4,6 +4,9 @@ import { renderToString } from 'react-dom/server';
 import { EmarBucketTabs } from '../emar-bucket-tabs';
 import { EmarTaskCard } from '../emar-task-card';
 import { EmarRecentHistory } from '../emar-recent-history';
+import { AdministerModal } from '../administer-modal';
+import { ExceptionModal } from '../exception-modal';
+import { PrnAdminModal } from '../prn-admin-modal';
 import type { BedsideDueItem, BedsidePrnItem } from '@/lib/services/ipd-emar';
 import type { SelectIpdMedicationOrder, SelectIpdMedicationAdministration } from '@/lib/db/schema';
 
@@ -213,6 +216,108 @@ describe('Bedside eMAR Task Bucket Components', () => {
       expect(html).toContain('Administered');
       expect(html).toContain('Given in left forearm cannula');
       expect(html).toContain('Strike / Void');
+    });
+  });
+
+  describe('AdministerModal', () => {
+    it('renders verification modal with patient and medication details', () => {
+      const html = renderToString(
+        <AdministerModal
+          isOpen={true}
+          onClose={() => {}}
+          admissionId="adm-1"
+          dueItem={{
+            orderId: 'ord-1',
+            orderChainId: 'chain-1',
+            medicineId: 'med-1',
+            medicineName: 'Pantoprazole 40mg IV',
+            doseAmount: '40',
+            doseUnit: 'mg',
+            route: 'iv_push',
+            scheduleType: 'scheduled',
+            scheduledTime: new Date(),
+            status: 'dueNow',
+          }}
+          patientName="Ramesh Verma"
+          bedLabel="A-102"
+          activeAllergies={[{ substance: 'Penicillin', severity: 'severe' }]}
+          onSuccess={() => {}}
+        />,
+      );
+
+      expect(html).toContain('Bedside Dose Administration Verification');
+      expect(html).toContain('Ramesh Verma');
+      expect(html).toContain('A-102');
+      expect(html).toContain('Pantoprazole 40mg IV');
+      expect(html).toContain('Confirm Dose Administered');
+    });
+  });
+
+  describe('ExceptionModal', () => {
+    it('renders exception options and preset structured reasons', () => {
+      const html = renderToString(
+        <ExceptionModal
+          isOpen={true}
+          onClose={() => {}}
+          admissionId="adm-1"
+          dueItem={{
+            orderId: 'ord-1',
+            orderChainId: 'chain-1',
+            medicineId: 'med-1',
+            medicineName: 'Metoprolol 25mg Oral',
+            doseAmount: '25',
+            doseUnit: 'mg',
+            route: 'oral',
+            scheduleType: 'scheduled',
+            scheduledTime: new Date(),
+            status: 'dueNow',
+          }}
+          onSuccess={() => {}}
+        />,
+      );
+
+      expect(html).toContain('Record Non-Administration Exception');
+      expect(html).toContain('Metoprolol 25mg Oral');
+      expect(html).toContain('Omitted');
+      expect(html).toContain('Held (Clinical)');
+      expect(html).toContain('Refused');
+      expect(html).toContain('NPO for procedure / fasting');
+      expect(html).toContain('Record Exception');
+    });
+  });
+
+  describe('PrnAdminModal', () => {
+    it('renders PRN modal with indication and allowed dose counts', () => {
+      const html = renderToString(
+        <PrnAdminModal
+          isOpen={true}
+          onClose={() => {}}
+          admissionId="adm-1"
+          prnItem={{
+            orderId: 'ord-2',
+            orderChainId: 'chain-2',
+            medicineId: 'med-2',
+            medicineName: 'Ondansetron 4mg IV',
+            doseAmount: '4',
+            doseUnit: 'mg',
+            route: 'iv_push',
+            prnIndication: 'For post-chemo nausea or vomiting',
+            eligibility: {
+              eligible: true,
+              dosesRemainingToday: 2,
+            },
+          }}
+          patientName="Sunita Sharma"
+          onSuccess={() => {}}
+        />,
+      );
+
+      expect(html).toContain('Administer PRN (As Needed / SOS) Medication');
+      expect(html).toContain('Ondansetron 4mg IV');
+      expect(html).toContain('For post-chemo nausea or vomiting');
+      expect(html).toContain('Remaining Allowed:');
+      expect(html).toContain('doses today');
+      expect(html).toContain('Confirm PRN Dose');
     });
   });
 });
