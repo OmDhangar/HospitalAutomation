@@ -26,6 +26,7 @@ describe('Nurse Bedside Simplified Experience', () => {
     dueNow: [
       {
         orderId: 'ord-1',
+        orderChainId: 'chain-1',
         medicineId: 'med-1',
         medicineName: 'Paracetamol',
         strength: '500mg',
@@ -33,10 +34,10 @@ describe('Nurse Bedside Simplified Experience', () => {
         doseAmount: '500',
         doseUnit: 'mg',
         route: 'oral',
-        scheduleType: 'scheduled' as const,
-        scheduledSlot: new Date().toISOString(),
-        frequencyCode: 'TDS',
-        scheduleTimes: ['08:00', '14:00', '20:00'],
+        scheduleType: 'scheduled',
+        scheduledTime: new Date(),
+        status: 'dueNow' as const,
+        instructions: 'Take after food',
       },
     ],
     overdue: [],

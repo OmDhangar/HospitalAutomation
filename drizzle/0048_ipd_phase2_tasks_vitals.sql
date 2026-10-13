@@ -14,17 +14,6 @@ CREATE TABLE IF NOT EXISTS clinical_audit_logs (
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS clinical_audit_logs_hospital_record_idx ON clinical_audit_logs (hospital_id, table_name, record_id);
---> statement-breakpoint
-ALTER TABLE clinical_audit_logs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE clinical_audit_logs FORCE ROW LEVEL SECURITY;
-DO $$ BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_policies WHERE tablename = 'clinical_audit_logs' AND policyname = 'clinical_audit_logs_tenant'
-  ) THEN
-    CREATE POLICY clinical_audit_logs_tenant ON clinical_audit_logs
-      USING (hospital_id = current_setting('app.current_hospital_id', true)::uuid);
-  END IF;
-END $$;
 
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS ipd_clinical_tasks (
@@ -47,17 +36,6 @@ CREATE TABLE IF NOT EXISTS ipd_clinical_tasks (
 CREATE INDEX IF NOT EXISTS ipd_clinical_tasks_adm_idx ON ipd_clinical_tasks (hospital_id, admission_id, scheduled_at);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS ipd_clinical_tasks_order_idx ON ipd_clinical_tasks (hospital_id, order_id);
---> statement-breakpoint
-ALTER TABLE ipd_clinical_tasks ENABLE ROW LEVEL SECURITY;
-ALTER TABLE ipd_clinical_tasks FORCE ROW LEVEL SECURITY;
-DO $$ BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_policies WHERE tablename = 'ipd_clinical_tasks' AND policyname = 'ipd_clinical_tasks_tenant'
-  ) THEN
-    CREATE POLICY ipd_clinical_tasks_tenant ON ipd_clinical_tasks
-      USING (hospital_id = current_setting('app.current_hospital_id', true)::uuid);
-  END IF;
-END $$;
 
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS draft_rounds (
@@ -77,17 +55,6 @@ CREATE TABLE IF NOT EXISTS draft_rounds (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT draft_rounds_user_adm_uq UNIQUE (hospital_id, admission_id, author_user_id)
 );
---> statement-breakpoint
-ALTER TABLE draft_rounds ENABLE ROW LEVEL SECURITY;
-ALTER TABLE draft_rounds FORCE ROW LEVEL SECURITY;
-DO $$ BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_policies WHERE tablename = 'draft_rounds' AND policyname = 'draft_rounds_tenant'
-  ) THEN
-    CREATE POLICY draft_rounds_tenant ON draft_rounds
-      USING (hospital_id = current_setting('app.current_hospital_id', true)::uuid);
-  END IF;
-END $$;
 
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS vitals_readings (
@@ -114,17 +81,6 @@ CREATE TABLE IF NOT EXISTS vitals_readings (
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS vitals_readings_adm_idx ON vitals_readings (hospital_id, admission_id, recorded_at);
---> statement-breakpoint
-ALTER TABLE vitals_readings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE vitals_readings FORCE ROW LEVEL SECURITY;
-DO $$ BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_policies WHERE tablename = 'vitals_readings' AND policyname = 'vitals_readings_tenant'
-  ) THEN
-    CREATE POLICY vitals_readings_tenant ON vitals_readings
-      USING (hospital_id = current_setting('app.current_hospital_id', true)::uuid);
-  END IF;
-END $$;
 
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS intake_output (
@@ -141,14 +97,51 @@ CREATE TABLE IF NOT EXISTS intake_output (
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS intake_output_adm_idx ON intake_output (hospital_id, admission_id, recorded_at);
+
 --> statement-breakpoint
-ALTER TABLE intake_output ENABLE ROW LEVEL SECURITY;
-ALTER TABLE intake_output FORCE ROW LEVEL SECURITY;
-DO $$ BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_policies WHERE tablename = 'intake_output' AND policyname = 'intake_output_tenant'
-  ) THEN
-    CREATE POLICY intake_output_tenant ON intake_output
-      USING (hospital_id = current_setting('app.current_hospital_id', true)::uuid);
-  END IF;
+DO $$
+DECLARE
+  t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY[
+    'clinical_audit_logs',
+    'ipd_clinical_tasks',
+    'draft_rounds',
+    'vitals_readings',
+    'intake_output'
+  ] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', t);
+    EXECUTE format('DROP POLICY IF EXISTS %I_tenant ON %I', t, t);
+    EXECUTE format(
+      'CREATE POLICY tenant_isolation ON %I
+         USING (hospital_id = nullif(current_setting(''app.hospital_id'', true), '''')::uuid)
+         WITH CHECK (hospital_id = nullif(current_setting(''app.hospital_id'', true), '''')::uuid)',
+      t
+    );
+    EXECUTE format('DROP POLICY IF EXISTS read_only_write ON %I', t);
+    EXECUTE format('CREATE POLICY read_only_write ON %I AS RESTRICTIVE FOR ALL USING (true) WITH CHECK (NOT public.app_read_only())', t);
+    EXECUTE format('DROP POLICY IF EXISTS read_only_delete ON %I', t);
+    EXECUTE format('CREATE POLICY read_only_delete ON %I AS RESTRICTIVE FOR DELETE USING (NOT public.app_read_only())', t);
+  END LOOP;
+END $$;
+
+--> statement-breakpoint
+DO $$
+DECLARE
+  app_role text := coalesce(nullif(current_setting('app.db_app_role', true), ''), 'opd_app');
+  t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY[
+    'clinical_audit_logs',
+    'ipd_clinical_tasks',
+    'draft_rounds',
+    'vitals_readings',
+    'intake_output'
+  ] LOOP
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = app_role) THEN
+      EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %I TO %I', t, app_role);
+    END IF;
+  END LOOP;
 END $$;

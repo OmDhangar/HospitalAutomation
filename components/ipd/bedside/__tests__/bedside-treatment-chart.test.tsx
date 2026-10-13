@@ -91,9 +91,9 @@ describe('BedsideTreatmentChart Component', () => {
     expect(html).toContain('Bed 2');
     expect(html).toContain('Acute Gastroenteritis with dehydration');
     expect(html).toContain('No allergies');
-    expect(html).toContain('1. Daily Scheduled Medicines');
+    expect(html).toContain('1. Daily Medicines');
     expect(html).toContain('2. As Needed (SOS)');
-    expect(html).toContain('+ Supplies &amp; Consumables');
+    expect(html).toContain('+ Syringes &amp; Items');
   });
 
   it('renders scheduled medications to give with Mark Given button', () => {
@@ -120,7 +120,9 @@ describe('BedsideTreatmentChart Component', () => {
 
     expect(html).toContain('Pantoprazole 40mg');
     expect(html).toContain('IV Injection (Direct)');
-    expect(html).toContain('Mark Given');
-    expect(html).toContain('Did Not Give');
+    expect(html).toContain('Give Medicine');
+    expect(html).toContain('Skip Dose');
+    expect(html).toContain('Change Time');
+    expect(html).toContain('+ Give Extra Medicine');
   });
 });
