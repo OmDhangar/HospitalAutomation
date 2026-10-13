@@ -1,14 +1,16 @@
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { withTenant, type Tx } from '@/lib/db';
 import {
   admissions,
   ipdClinicalRounds,
   ipdMedicationOrders,
   ipdMedicationOrderActions,
+  medicines,
   type SelectIpdMedicationOrder,
   type InsertIpdMedicationOrder,
 } from '@/lib/db/schema';
 import { validateOrderTransition } from '@/lib/domain/ipd-order-state';
+import { isId } from '@/lib/domain/undo';
 
 export interface DraftOrderInput {
   medicineId: string;
@@ -41,6 +43,15 @@ export type OrderResolution =
   | { type: 'discontinue'; orderId: string; reason: string }
   | { type: 'new'; order: DraftOrderInput };
 
+export class AuthorNotLinkedDoctorError extends Error {
+  constructor(
+    message = 'The current user is not linked to an active doctor profile in this hospital. Clinical orders and rounds must be signed by an authenticated, linked doctor.',
+  ) {
+    super(message);
+    this.name = 'AuthorNotLinkedDoctorError';
+  }
+}
+
 /**
  * Lists active and held medication orders for an admitted patient.
  * Excludes drafts, superseded, discontinued, and voided orders.
@@ -69,6 +80,68 @@ export async function listActiveOrders(args: {
     },
     { clinical: true },
   );
+}
+
+/**
+ * Ensures a valid UUID medicineId exists for medication orders.
+ * If medicineId is already a valid UUID, checks whether it exists in this hospital.
+ * If not a valid UUID (or not in DB), matches case-insensitively by name in medicines,
+ * or provisions a new unpriced formulary entry so prescribing and billing workflow succeed.
+ */
+export async function resolveMedicineIdInTx(
+  tx: Tx,
+  args: {
+    hospitalId: string;
+    medicineId?: string;
+    medicineName: string;
+    strength?: string | null;
+    form?: string | null;
+    unit?: string | null;
+    actorUserId?: string;
+  },
+): Promise<string> {
+  const { hospitalId, medicineId, medicineName, strength, form, unit, actorUserId } = args;
+
+  // 1. If medicineId is a valid UUID, verify if it already exists in this hospital's formulary
+  if (medicineId && isId(medicineId)) {
+    const [existing] = await tx
+      .select({ id: medicines.id })
+      .from(medicines)
+      .where(and(eq(medicines.hospitalId, hospitalId), eq(medicines.id, medicineId)));
+    if (existing) return existing.id;
+  }
+
+  // 2. Search for existing medicine by case-insensitive name in this hospital
+  const trimmedName = medicineName.trim();
+  const [match] = await tx
+    .select({ id: medicines.id })
+    .from(medicines)
+    .where(
+      and(
+        eq(medicines.hospitalId, hospitalId),
+        sql`lower(${medicines.name}) = lower(${trimmedName})`,
+      ),
+    )
+    .limit(1);
+
+  if (match) return match.id;
+
+  // 3. Auto-provision unpriced medicine in hospital formulary so prescribing succeeds
+  const [created] = await tx
+    .insert(medicines)
+    .values({
+      hospitalId,
+      name: trimmedName,
+      strength: strength ?? null,
+      form: form ?? null,
+      unit: unit || 'unit',
+      sellingPricePaise: null, // Left unpriced until hospital owner configures formulary price
+      active: true,
+      createdByUserId: actorUserId,
+    })
+    .returning({ id: medicines.id });
+
+  return created.id;
 }
 
 /**
@@ -138,13 +211,23 @@ export async function saveRoundDraft(args: {
 
       if (args.draftOrders && args.draftOrders.length > 0) {
         for (const draft of args.draftOrders) {
+          const resolvedMedicineId = await resolveMedicineIdInTx(tx, {
+            hospitalId: args.hospitalId,
+            medicineId: draft.medicineId,
+            medicineName: draft.medicineName,
+            strength: draft.strength,
+            form: draft.form,
+            unit: draft.doseUnit,
+            actorUserId: args.authorUserId,
+          });
+
           await tx.insert(ipdMedicationOrders).values({
             hospitalId: args.hospitalId,
             admissionId: args.admissionId,
             encounterId: admission.encounterId,
             patientId: admission.patientId,
             orderChainId: crypto.randomUUID(),
-            medicineId: draft.medicineId,
+            medicineId: resolvedMedicineId,
             medicineName: draft.medicineName,
             strength: draft.strength ?? null,
             form: draft.form ?? null,
@@ -338,6 +421,19 @@ export async function signRoundOrders(args: {
 
           const mod = res.modifiedOrder;
 
+          let resolvedMedicineId = prior.medicineId;
+          if (mod.medicineId || (mod.medicineName && mod.medicineName !== prior.medicineName)) {
+            resolvedMedicineId = await resolveMedicineIdInTx(tx, {
+              hospitalId: args.hospitalId,
+              medicineId: mod.medicineId,
+              medicineName: mod.medicineName ?? prior.medicineName,
+              strength: mod.strength !== undefined ? mod.strength : prior.strength,
+              form: mod.form !== undefined ? mod.form : prior.form,
+              unit: mod.doseUnit ?? prior.doseUnit,
+              actorUserId: args.authorUserId,
+            });
+          }
+
           // 1. Insert successor order first so newOrderId exists for the foreign key
           await tx.insert(ipdMedicationOrders).values({
             id: newOrderId,
@@ -346,7 +442,7 @@ export async function signRoundOrders(args: {
             encounterId: admission.encounterId,
             patientId: admission.patientId,
             orderChainId: prior.orderChainId,
-            medicineId: mod.medicineId ?? prior.medicineId,
+            medicineId: resolvedMedicineId,
             medicineName: mod.medicineName ?? prior.medicineName,
             strength: mod.strength !== undefined ? mod.strength : prior.strength,
             form: mod.form !== undefined ? mod.form : prior.form,
@@ -463,6 +559,16 @@ export async function signRoundOrders(args: {
 
         if (res.type === 'new') {
           const o = res.order;
+          const resolvedMedicineId = await resolveMedicineIdInTx(tx, {
+            hospitalId: args.hospitalId,
+            medicineId: o.medicineId,
+            medicineName: o.medicineName,
+            strength: o.strength,
+            form: o.form,
+            unit: o.doseUnit,
+            actorUserId: args.authorUserId,
+          });
+
           const newOrderId = crypto.randomUUID();
           await tx.insert(ipdMedicationOrders).values({
             id: newOrderId,
@@ -471,7 +577,7 @@ export async function signRoundOrders(args: {
             encounterId: admission.encounterId,
             patientId: admission.patientId,
             orderChainId: crypto.randomUUID(),
-            medicineId: o.medicineId,
+            medicineId: resolvedMedicineId,
             medicineName: o.medicineName,
             strength: o.strength ?? null,
             form: o.form ?? null,
@@ -640,3 +746,117 @@ export async function voidOrder(args: {
     { clinical: true },
   );
 }
+
+/**
+ * Adjusts schedule administration times for an active medication order.
+ * Records clinical rationale and preserves audit trail for prescriber visibility.
+ */
+export async function adjustMedicationScheduleTimes(args: {
+  hospitalId: string;
+  orderId: string;
+  newScheduleTimes: string[];
+  reason: string;
+  actorUserId: string;
+}): Promise<{ success: boolean; orderId: string; newScheduleTimes: string[] }> {
+  return withTenant(
+    args.hospitalId,
+    async (tx: Tx) => {
+      const [order] = await tx
+        .select()
+        .from(ipdMedicationOrders)
+        .where(
+          and(
+            eq(ipdMedicationOrders.hospitalId, args.hospitalId),
+            eq(ipdMedicationOrders.id, args.orderId),
+          ),
+        );
+
+      if (!order) throw new Error('Order not found');
+      if (order.status !== 'active') throw new Error(`Cannot adjust schedule times on a ${order.status} order`);
+
+      if (!args.newScheduleTimes || args.newScheduleTimes.length === 0) {
+        throw new Error('At least one schedule time slot is required');
+      }
+
+      if (!args.reason || args.reason.trim().length < 3) {
+        throw new Error('A clinical reason of at least 3 characters is required to adjust timings');
+      }
+
+      const now = new Date();
+      const oldTimes = (order.scheduleTimes as string[]) || [];
+      const auditNote = `[Timing adjusted: from [${oldTimes.join(', ')}] to [${args.newScheduleTimes.join(', ')}]. Reason: ${args.reason.trim()}]`;
+
+      const existingInstructions = order.specialInstructions ? `${order.specialInstructions}\n` : '';
+      const updatedInstructions = `${existingInstructions}${auditNote}`;
+
+      const newOrderId = crypto.randomUUID();
+
+      // 1. Insert successor order first with updated schedule times so newOrderId exists
+      await tx.insert(ipdMedicationOrders).values({
+        id: newOrderId,
+        hospitalId: args.hospitalId,
+        admissionId: order.admissionId,
+        encounterId: order.encounterId,
+        patientId: order.patientId,
+        orderChainId: order.orderChainId,
+        medicineId: order.medicineId,
+        medicineName: order.medicineName,
+        strength: order.strength,
+        form: order.form,
+        doseAmount: order.doseAmount,
+        doseUnit: order.doseUnit,
+        route: order.route,
+        scheduleType: order.scheduleType,
+        frequencyCode: order.frequencyCode,
+        scheduleTimes: args.newScheduleTimes,
+        isPrn: order.isPrn,
+        prnIndication: order.prnIndication,
+        prnMaxDailyDoses: order.prnMaxDailyDoses,
+        prnMaxDailyQuantity: order.prnMaxDailyQuantity,
+        prnMaxDailyUnit: order.prnMaxDailyUnit,
+        prnMinIntervalHours: order.prnMinIntervalHours,
+        specialInstructions: updatedInstructions,
+        origin: order.origin,
+        patientSupplied: order.patientSupplied,
+        startsAt: order.startsAt,
+        endsAt: order.endsAt,
+        durationDays: order.durationDays,
+        status: 'active',
+        supersedesOrderId: order.id,
+        prescriberDoctorId: order.prescriberDoctorId,
+        createdByUserId: args.actorUserId,
+        signedAt: now,
+        roundNoteId: order.roundNoteId,
+      });
+
+      // 2. Mark prior order superseded referencing newOrderId
+      await tx
+        .update(ipdMedicationOrders)
+        .set({
+          status: 'superseded',
+          supersededByOrderId: newOrderId,
+          updatedAt: now,
+        })
+        .where(eq(ipdMedicationOrders.id, order.id));
+
+      // 3. Action audit row
+      await tx.insert(ipdMedicationOrderActions).values({
+        hospitalId: args.hospitalId,
+        orderId: newOrderId,
+        action: 'modify',
+        reason: `Timing adjusted: ${args.reason.trim()}`,
+        actorUserId: args.actorUserId,
+        doctorId: order.prescriberDoctorId,
+        occurredAt: now,
+      });
+
+      return {
+        success: true,
+        orderId: newOrderId,
+        newScheduleTimes: args.newScheduleTimes,
+      };
+    },
+    { clinical: true },
+  );
+}
+

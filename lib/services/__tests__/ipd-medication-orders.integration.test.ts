@@ -7,6 +7,7 @@ import {
   signRoundOrders,
   executeOrderAction,
   voidOrder,
+  adjustMedicationScheduleTimes,
 } from '@/lib/services/ipd-medication-orders';
 
 const adminUrl = process.env.DATABASE_ADMIN_URL;
@@ -331,5 +332,64 @@ describe.skipIf(!enabled)('ipd-medication-orders service', () => {
     expect(voidedOrder.status).toBe('voided');
     expect(voidedOrder.void_reason).toBe('Entered on wrong patient bed chart');
     expect(voidedOrder.voided_by_user_id).toBe(ids.userA);
+  });
+
+  it('adjusts schedule times creating successor order version without triggering immutability violation', async () => {
+    // 1. Prescribe initial order at 08:00
+    const signRes = await signRoundOrders({
+      hospitalId: ids.hospitalA,
+      admissionId: ids.admissionA,
+      doctorId: ids.doctorA,
+      authorUserId: ids.userA,
+      notes: 'Prescribe Pantoprazole',
+      resolutions: [
+        {
+          type: 'new',
+          order: {
+            medicineId: ids.medicineB,
+            medicineName: 'Pantoprazole 40mg Tab',
+            doseAmount: '40',
+            doseUnit: 'mg',
+            route: 'oral',
+            scheduleType: 'scheduled',
+            frequencyCode: 'OD',
+            scheduleTimes: ['08:00'],
+            startsAt: new Date(),
+          },
+        },
+      ],
+    });
+
+    const originalOrderId = signRes.signedOrderIds[0];
+
+    // 2. Adjust timing to 11:00
+    const adjustRes = await adjustMedicationScheduleTimes({
+      hospitalId: ids.hospitalA,
+      orderId: originalOrderId,
+      newScheduleTimes: ['11:00'],
+      reason: 'Doctor verbal instruction to change timings',
+      actorUserId: ids.userA,
+    });
+
+    expect(adjustRes.success).toBe(true);
+    expect(adjustRes.orderId).not.toBe(originalOrderId);
+    expect(adjustRes.newScheduleTimes).toEqual(['11:00']);
+
+    // 3. Verify prior order was superseded
+    const [prior] = await admin`
+      select status, superseded_by_order_id, schedule_times from ipd_medication_orders where id = ${originalOrderId}
+    `;
+    expect(prior.status).toBe('superseded');
+    expect(prior.superseded_by_order_id).toBe(adjustRes.orderId);
+    expect(prior.schedule_times).toEqual(['08:00']);
+
+    // 4. Verify new order is active with new times
+    const [successor] = await admin`
+      select status, supersedes_order_id, schedule_times, special_instructions from ipd_medication_orders where id = ${adjustRes.orderId}
+    `;
+    expect(successor.status).toBe('active');
+    expect(successor.supersedes_order_id).toBe(originalOrderId);
+    expect(successor.schedule_times).toEqual(['11:00']);
+    expect(successor.special_instructions).toContain('Timing adjusted');
   });
 });

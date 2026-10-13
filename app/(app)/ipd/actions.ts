@@ -518,6 +518,9 @@ export async function adjustMedicationTimingAction(args: {
     actorUserId: session.userId,
   });
 
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/orders`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/emar`);
   revalidatePath(`/ipd/admissions/${args.admissionId}`);
   revalidatePath(`/ipd/admissions/${args.admissionId}/treatment`);
   revalidatePath(`/ipd/admissions/${args.admissionId}/emar`);
