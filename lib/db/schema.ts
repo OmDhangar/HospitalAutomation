@@ -3116,3 +3116,145 @@ export type InsertIpdEmarIntegrationOutbox = NewIpdEmarIntegrationOutbox;
 export type SelectIpdClinicalRound = IpdClinicalRoundRow;
 export type InsertIpdClinicalRound = NewIpdClinicalRound;
 
+/* ---------------------------------------------------- IPD Phase 2 Clinical Ledger & Tasks */
+
+export const clinicalAuditLogs = pgTable(
+  'clinical_audit_logs',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    tableName: text('table_name').notNull(),
+    recordId: text('record_id').notNull(),
+    action: text('action').notNull(),
+    oldValue: jsonb('old_value'),
+    newValue: jsonb('new_value'),
+    reason: text('reason'),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('clinical_audit_logs_hospital_record_idx').on(t.hospitalId, t.tableName, t.recordId),
+  ],
+);
+
+export const ipdClinicalTasks = pgTable(
+  'ipd_clinical_tasks',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'restrict' }),
+    orderId: uuid('order_id').notNull(),
+    admissionId: uuid('admission_id').notNull(),
+    scheduledAt: timestamp('scheduled_at', { withTimezone: true }).notNull(),
+    status: text('status')
+      .$type<'DUE' | 'OVERDUE' | 'GIVEN' | 'HELD' | 'REFUSED' | 'NOT_AVAILABLE' | 'MISSED'>()
+      .notNull()
+      .default('DUE'),
+    actedByUserId: uuid('acted_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    actedAt: timestamp('acted_at', { withTimezone: true }),
+    doseGiven: text('dose_given'),
+    site: text('site'),
+    reason: text('reason'),
+    note: text('note'),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('ipd_clinical_tasks_adm_idx').on(t.hospitalId, t.admissionId, t.scheduledAt),
+    index('ipd_clinical_tasks_order_idx').on(t.hospitalId, t.orderId),
+  ],
+);
+
+export const draftRounds = pgTable(
+  'draft_rounds',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id').notNull(),
+    authorUserId: uuid('author_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    doctorId: uuid('doctor_id'),
+    soapS: text('soap_s'),
+    soapO: text('soap_o'),
+    soapA: text('soap_a'),
+    soapP: text('soap_p'),
+    body: text('body'),
+    status: text('status').$type<'DRAFT' | 'SIGNED'>().notNull().default('DRAFT'),
+    signedAt: timestamp('signed_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('draft_rounds_user_adm_idx').on(t.hospitalId, t.admissionId, t.authorUserId),
+  ],
+);
+
+export const vitalsReadings = pgTable(
+  'vitals_readings',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id').notNull(),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    temperatureF: numeric('temperature_f', { precision: 4, scale: 1 }),
+    pulseBpm: integer('pulse_bpm'),
+    bpSystolic: integer('bp_systolic'),
+    bpDiastolic: integer('bp_diastolic'),
+    respiratoryRate: integer('respiratory_rate'),
+    spo2Percent: integer('spo2_percent'),
+    painScore: integer('pain_score'),
+    avpu: text('avpu').$type<'A' | 'V' | 'P' | 'U'>(),
+    o2Support: text('o2_support'),
+    news2Score: integer('news2_score'),
+    abdGirthCm: numeric('abd_girth_cm', { precision: 5, scale: 1 }),
+    bsl: integer('bsl'),
+    scheduledSlot: text('scheduled_slot'),
+    recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('vitals_readings_adm_idx').on(t.hospitalId, t.admissionId, t.recordedAt),
+  ],
+);
+
+export const intakeOutput = pgTable(
+  'intake_output',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id').notNull(),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    kind: text('kind').$type<'ORAL' | 'IV' | 'URINE' | 'DRAIN' | 'RT_ASPIRATE'>().notNull(),
+    ml: integer('ml').notNull(),
+    notes: text('notes'),
+    recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('intake_output_adm_idx').on(t.hospitalId, t.admissionId, t.recordedAt),
+  ],
+);
+
+export type ClinicalAuditLogRow = typeof clinicalAuditLogs.$inferSelect;
+export type NewClinicalAuditLog = typeof clinicalAuditLogs.$inferInsert;
+export type IpdClinicalTaskRow = typeof ipdClinicalTasks.$inferSelect;
+export type NewIpdClinicalTask = typeof ipdClinicalTasks.$inferInsert;
+export type DraftRoundRow = typeof draftRounds.$inferSelect;
+export type NewDraftRound = typeof draftRounds.$inferInsert;
+export type VitalsReadingRow = typeof vitalsReadings.$inferSelect;
+export type NewVitalsReading = typeof vitalsReadings.$inferInsert;
+export type IntakeOutputRow = typeof intakeOutput.$inferSelect;
+export type NewIntakeOutput = typeof intakeOutput.$inferInsert;
+
