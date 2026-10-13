@@ -28,7 +28,7 @@ import { formatUndoToken, idList, isId, parseUndoToken } from '@/lib/domain/undo
 import { PatientBillingError } from '@/lib/services/patient-billing';
 import { DoctorIpdError, orderTests } from '@/lib/services/doctor-ipd';
 import { withTenant } from '@/lib/db';
-import { admissions, doctors, vitalsReadings, intakeOutput } from '@/lib/db/schema';
+import { admissions, doctors, vitalsReadings, intakeOutput, clinicalAuditLogs } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import {
   recordAllergyAssessment,
@@ -663,4 +663,45 @@ export async function recordIntakeOutputAction(args: {
   revalidatePath(`/ipd/patients/${args.admissionId}/summary`);
   return { ok: true, id: res.id };
 }
+
+export async function recordClinicalNoteAction(args: {
+  admissionId: string;
+  noteType: 'SOAP' | 'NURSING' | 'HANDOVER';
+  soapS?: string | null;
+  soapO?: string | null;
+  soapA?: string | null;
+  soapP?: string | null;
+  body?: string | null;
+}): Promise<{ ok: boolean; id: string }> {
+  const session = await authorize('ipd.view');
+  const res = await withTenant(
+    session.hospitalId,
+    async (tx) => {
+      const [inserted] = await tx
+        .insert(clinicalAuditLogs)
+        .values({
+          hospitalId: session.hospitalId,
+          tableName: 'clinical_notes',
+          recordId: args.admissionId,
+          action: 'NOTE_RECORDED',
+          newValue: {
+            noteType: args.noteType,
+            soapS: args.soapS ?? null,
+            soapO: args.soapO ?? null,
+            soapA: args.soapA ?? null,
+            soapP: args.soapP ?? null,
+            body: args.body ?? null,
+          },
+          reason: args.noteType,
+          userId: session.userId,
+        })
+        .returning({ id: clinicalAuditLogs.id });
+      return inserted;
+    },
+    { clinical: true },
+  );
+  revalidatePath(`/ipd/patients/${args.admissionId}/notes`);
+  return { ok: true, id: res.id };
+}
+
 
