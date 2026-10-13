@@ -48,8 +48,8 @@ export function TabNavigation({
       hrefSegment: 'summary',
     },
     {
-      id: 'orders',
-      label: 'Orders',
+      id: 'prescriptions',
+      label: 'Prescriptions',
       hrefSegment: 'orders',
       badge: counts?.unverifiedOrders && counts.unverifiedOrders > 0 ? counts.unverifiedOrders : null,
       badgeVariant: 'warning',
@@ -104,7 +104,10 @@ export function TabNavigation({
         {tabs.map((tab) => {
           const isActive =
             activeTabId.toLowerCase() === tab.id.toLowerCase() ||
-            activeTabId.toLowerCase() === tab.hrefSegment.toLowerCase();
+            activeTabId.toLowerCase() === tab.hrefSegment.toLowerCase() ||
+            (tab.id === 'prescriptions' &&
+              (activeTabId.toLowerCase() === 'orders' ||
+                activeTabId.toLowerCase() === 'prescriptions'));
 
           return (
             <li key={tab.id} className="inline-block">

@@ -1,6 +1,7 @@
 import React from 'react';
 import { notFound } from 'next/navigation';
 import { requireSession } from '@/lib/auth/session';
+import { can } from '@/lib/domain/permissions';
 import { getAdmissionSummary } from '@/lib/services/ipd-census';
 import { listActiveOrders } from '@/lib/services/ipd-medication-orders';
 import { MinimalOrdersTab } from '@/components/ipd/orders/minimal-orders-tab';
@@ -50,6 +51,8 @@ export default async function OrdersPage({ params }: { params: Promise<any> }) {
         patientName={admission.patientName}
         uhid={admission.mrn ?? '—'}
         bedLabel={admission.bed?.label ?? undefined}
+        initialDiagnosis={admission.reason}
+        canPrescribe={can(session.role, 'ipd.prescribe') && !session.readOnly}
         onStopOrder={handleStopOrder}
       />
     </div>

@@ -1,5 +1,9 @@
-import React from 'react';
+'use client';
+
+import React, { useState } from 'react';
 import Link from 'next/link';
+import { CreateTreatmentPlanModal } from '@/components/ipd/prescriptions/create-treatment-plan-modal';
+import { PlusIcon } from '@/components/icons';
 
 export interface DailyMedSlot {
   time: string;
@@ -23,20 +27,56 @@ export interface DailyMedicationItem {
 export interface DailyMedicationMatrixProps {
   medications: DailyMedicationItem[];
   admissionId?: string;
+  patientName?: string;
+  initialDiagnosis?: string | null;
+  canPrescribe?: boolean;
   className?: string;
 }
 
 export function DailyMedicationMatrix({
   medications,
   admissionId,
+  patientName = 'Patient',
+  initialDiagnosis,
+  canPrescribe = true,
   className = '',
 }: DailyMedicationMatrixProps) {
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
   if (medications.length === 0) {
     return (
-      <div className={`p-4 bg-surface rounded-lg border border-ink-200 text-center ${className}`}>
-        <p className="text-xs text-ink-500 italic">
-          No active medication orders recorded for this patient stay.
-        </p>
+      <div className={`p-5 bg-surface rounded-lg border border-ink-200 text-center space-y-3 shadow-2xs ${className}`}>
+        <div>
+          <h3 className="text-xs font-bold text-ink-900">
+            No active prescriptions recorded yet for this patient stay.
+          </h3>
+          <p className="text-xs text-ink-500 mt-0.5">
+            Set up the patient's disease-based IPD prescriptions, IV fluids, and medication schedule before bedside treatment starts.
+          </p>
+        </div>
+
+        {canPrescribe && admissionId && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setIsModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded bg-emerald-600 text-white hover:bg-emerald-700 shadow-2xs transition-colors"
+            >
+              <PlusIcon className="size-3.5" />
+              <span>Create Treatment Plan &amp; Prescribe</span>
+            </button>
+          </div>
+        )}
+
+        {admissionId && (
+          <CreateTreatmentPlanModal
+            admissionId={admissionId}
+            isOpen={isModalOpen}
+            onClose={() => setIsModalOpen(false)}
+            patientName={patientName}
+            initialDiagnosis={initialDiagnosis}
+          />
+        )}
       </div>
     );
   }
@@ -47,20 +87,32 @@ export function DailyMedicationMatrix({
       <div className="px-3 py-2 bg-ink-50/70 border-b border-ink-200 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-xs font-bold text-ink-900 tracking-tight">
-            Today's Daily Medicines &amp; Doses
+            Today's Prescriptions &amp; Doses
           </span>
           <span className="inline-flex items-center px-1.5 py-0.2 rounded-full text-[10px] font-semibold bg-brand-50 text-brand-800 ring-1 ring-inset ring-brand-200">
             {medications.length} active
           </span>
         </div>
-        {admissionId && (
-          <Link
-            href={`/ipd/patients/${admissionId}/orders`}
-            className="text-[11px] font-semibold text-primary hover:underline"
-          >
-            All Orders &rarr;
-          </Link>
-        )}
+        <div className="flex items-center gap-2.5">
+          {canPrescribe && admissionId && (
+            <button
+              type="button"
+              onClick={() => setIsModalOpen(true)}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-2xs font-semibold rounded bg-emerald-600 text-white hover:bg-emerald-700 shadow-2xs transition-colors"
+            >
+              <PlusIcon className="size-3" />
+              <span>+ Add Prescription</span>
+            </button>
+          )}
+          {admissionId && (
+            <Link
+              href={`/ipd/patients/${admissionId}/orders`}
+              className="text-[11px] font-semibold text-primary hover:underline"
+            >
+              All Prescriptions &rarr;
+            </Link>
+          )}
+        </div>
       </div>
 
       {/* Excel-style Dense Flowsheet Table */}
@@ -167,6 +219,16 @@ export function DailyMedicationMatrix({
           </tbody>
         </table>
       </div>
+
+      {admissionId && (
+        <CreateTreatmentPlanModal
+          admissionId={admissionId}
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          patientName={patientName}
+          initialDiagnosis={initialDiagnosis}
+        />
+      )}
     </div>
   );
 }

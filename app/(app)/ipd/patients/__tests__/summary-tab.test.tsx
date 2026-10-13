@@ -48,9 +48,12 @@ describe('Doctor Summary Cockpit Components', () => {
     expect(html).toContain('Pulse');
   });
 
-  it('renders empty fallback cleanly when no vitals or medications are recorded', () => {
-    const htmlMeds = renderToString(<DailyMedicationMatrix medications={[]} />);
-    expect(htmlMeds).toContain('No active medication orders recorded');
+  it('renders empty fallback cleanly with Create Treatment Plan button', () => {
+    const htmlMeds = renderToString(
+      <DailyMedicationMatrix medications={[]} admissionId="adm-101" canPrescribe={true} />,
+    );
+    expect(htmlMeds).toContain('No active prescriptions recorded yet');
+    expect(htmlMeds).toContain('Create Treatment Plan &amp; Prescribe');
 
     const htmlVitals = renderToString(<TprFlowsheet readings={[]} />);
     expect(htmlVitals).toContain('No vital readings recorded yet');

@@ -35,7 +35,8 @@ describe('PatientBanner Component', () => {
     expect(html).not.toContain('Dr. Dr.');
     expect(html).toContain('Allergies: Penicillin, Sulfa');
     expect(html).toContain('Acute Gastroenteritis');
-    expect(html).toContain('Admitted');
+    expect(html).toContain('Back');
+    expect(html).toContain('href="/ipd/my-patients"');
     expect(html).toContain('History');
     expect(html).toContain('Print file');
   });

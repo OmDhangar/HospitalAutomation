@@ -45,7 +45,7 @@ describe('PatientBanner & TabNavigation Density', () => {
     // Verify compact height & padding
     expect(html).toContain('py-1.5');
     expect(html).toContain('Summary');
-    expect(html).toContain('Orders');
+    expect(html).toContain('Prescriptions');
     expect(html).toContain('eMAR');
     expect(html).toContain('Vitals &amp; I/O');
   });

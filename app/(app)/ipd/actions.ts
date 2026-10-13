@@ -29,7 +29,7 @@ import { PatientBillingError } from '@/lib/services/patient-billing';
 import { DoctorIpdError, orderTests } from '@/lib/services/doctor-ipd';
 import { withTenant } from '@/lib/db';
 import { admissions, doctors, vitalsReadings, intakeOutput, clinicalAuditLogs } from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import {
   recordAllergyAssessment,
   saveRoundDraft,
@@ -41,6 +41,7 @@ import {
   executeOrderAction,
   AuthorNotLinkedDoctorError,
   type OrderResolution,
+  type DraftOrderInput,
 } from '@/lib/services/ipd-medication-orders';
 import {
   recordAdministration,
@@ -431,6 +432,50 @@ export async function signRoundOrdersAction(args: {
   revalidatePath(`/ipd/admissions/${args.admissionId}`);
   revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
   revalidatePath('/ipd/my-patients');
+  return { ok: true, roundId: res.roundId, signedOrderIds: res.signedOrderIds };
+}
+
+export async function createTreatmentPlanAction(args: {
+  admissionId: string;
+  diagnosis?: string;
+  notes?: string;
+  newOrders: DraftOrderInput[];
+  doctorId?: string;
+}): Promise<{ ok: boolean; roundId: string; signedOrderIds: string[] }> {
+  const session = await authorize('ipd.prescribe');
+  const docId = await resolveDoctorId(session.hospitalId, session.userId, args.admissionId, args.doctorId);
+
+  // If a diagnosis was entered, save it to admission.reason if not yet set
+  if (args.diagnosis?.trim()) {
+    await withTenant(session.hospitalId, async (tx) => {
+      await tx
+        .update(admissions)
+        .set({ reason: args.diagnosis?.trim(), updatedAt: new Date() })
+        .where(and(eq(admissions.id, args.admissionId), eq(admissions.hospitalId, session.hospitalId)));
+    });
+  }
+
+  const resolutions: OrderResolution[] = args.newOrders.map((order) => ({
+    type: 'new' as const,
+    order,
+  }));
+
+  const res = await signRoundOrders({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    doctorId: docId,
+    authorUserId: session.userId,
+    notes: args.notes?.trim() || (args.diagnosis ? `Initial IPD Treatment Plan: ${args.diagnosis.trim()}` : 'Initial IPD Treatment Plan Prescriptions'),
+    resolutions,
+  });
+
+  revalidatePath(`/ipd/patients/${args.admissionId}/summary`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/orders`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/emar`);
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath('/ipd/my-patients');
+
   return { ok: true, roundId: res.roundId, signedOrderIds: res.signedOrderIds };
 }
 

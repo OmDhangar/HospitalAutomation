@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useState } from 'react';
+import Link from 'next/link';
 import { formatDoctor, toTitleCase } from '@/lib/domain/doctor';
 import { StatusBadge } from '@/components/ipd/status-badge';
 import { Drawer } from '@/components/ipd/drawer';
-import { PrinterIcon, FileTextIcon } from '@/components/icons';
+import { PrinterIcon, FileTextIcon, ArrowLeftIcon } from '@/components/icons';
 import type { BadgeColorKey } from '@/constants/clinical';
 
 export interface PatientBannerData {
@@ -97,6 +98,17 @@ export function PatientBanner({
         <div className="flex flex-col gap-1.5 lg:flex-row lg:items-center lg:justify-between">
           {/* Main demographics block */}
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs">
+            {/* Back to Patients Navigation */}
+            <Link
+              href="/ipd/my-patients"
+              className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-semibold text-ink-700 bg-surface rounded border border-ink-200 hover:bg-ink-100 hover:text-ink-950 transition-colors shadow-2xs mr-1"
+              aria-label="Back to Patients"
+              title="Back to patient list"
+            >
+              <ArrowLeftIcon className="size-3.5 text-ink-500" />
+              <span>Back</span>
+            </Link>
+
             {/* Patient Name */}
             <h1 className="text-sm font-semibold text-ink-950 tracking-tight">
               {formattedName}

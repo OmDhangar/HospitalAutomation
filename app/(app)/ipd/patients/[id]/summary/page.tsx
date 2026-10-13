@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { requireSession } from '@/lib/auth/session';
 import { getDoctorSummaryCockpitData } from '@/lib/services/ipd-summary';
 import { formatDoctor } from '@/lib/domain/doctor';
+import { can } from '@/lib/domain/permissions';
 import { DailyMedicationMatrix } from '@/components/ipd/summary/daily-medication-matrix';
 import { TprFlowsheet } from '@/components/ipd/summary/tpr-flowsheet';
 import { AlertTriangleIcon } from '@/components/icons';
@@ -59,7 +60,13 @@ export default async function SummaryPage({ params }: { params: Promise<any> }) 
         {/* Left Column (60%): Clinical Flowsheet & Treatment Checkboxes */}
         <div className="lg:col-span-7 space-y-3">
           {/* Daily Medication Fulfillment Matrix with Checkboxes */}
-          <DailyMedicationMatrix medications={medications} admissionId={id} />
+          <DailyMedicationMatrix
+            medications={medications}
+            admissionId={id}
+            patientName={admission.patientName}
+            initialDiagnosis={admission.reason}
+            canPrescribe={can(session.role, 'ipd.prescribe') && !session.readOnly}
+          />
 
           {/* Embedded TPR & Vitals Flowsheet */}
           <TprFlowsheet readings={vitals} admissionId={id} />
@@ -177,8 +184,8 @@ export default async function SummaryPage({ params }: { params: Promise<any> }) 
                 href={`/ipd/patients/${id}/orders`}
                 className="p-2 rounded border border-ink-200 bg-white hover:bg-slate-50 transition-colors"
               >
-                <div className="font-semibold text-ink-900">Doctor Orders</div>
-                <div className="text-[10px] text-ink-500">Prescriptions &amp; IVs</div>
+                <div className="font-semibold text-ink-900">Doctor Prescriptions</div>
+                <div className="text-[10px] text-ink-500">Prescriptions &amp; IV fluids</div>
               </Link>
               <Link
                 href={`/ipd/patients/${id}/emar`}
