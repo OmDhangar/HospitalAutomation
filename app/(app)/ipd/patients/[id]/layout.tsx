@@ -10,18 +10,17 @@ import { ipdAllergyAssessments } from '@/lib/db/schema';
 import { PatientBanner, type PatientBannerData } from '@/components/ipd/shell/patient-banner';
 import { TabNavigation } from '@/components/ipd/shell/tab-navigation';
 
-interface PatientChartLayoutProps {
-  children: React.ReactNode;
-  params: Promise<{ id: string }>;
-}
-
 export default async function PatientChartLayout({
   children,
   params,
-}: PatientChartLayoutProps) {
+}: {
+  children: React.ReactNode;
+  params: Promise<any>;
+}) {
   const session = await requireSession();
   await requireModule(session, 'patient_file');
-  const { id } = await params;
+  const resolvedParams = await params;
+  const id = resolvedParams?.id as string;
 
   const admission = await getAdmissionSummary(session.hospitalId, id);
   if (!admission) notFound();
@@ -97,8 +96,8 @@ export default async function PatientChartLayout({
     name: admission.patientName,
     age: admission.age,
     gender: admission.gender,
-    uhid: admission.mrn,
-    ipdNumber: admission.ipdNumber,
+    uhid: admission.mrn ?? '—',
+    ipdNumber: admission.ipdNumber ?? '—',
     wardName: admission.bed?.wardName ?? null,
     bedLabel: admission.bed?.label ?? null,
     dayOfStay,

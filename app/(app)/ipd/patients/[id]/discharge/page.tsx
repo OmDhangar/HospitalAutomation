@@ -6,13 +6,10 @@ import { can } from '@/lib/domain/permissions';
 import { DischargeTab } from '@/components/ipd/discharge/discharge-tab';
 import { toggleDischargeReadyClientAction } from '@/app/(app)/ipd/actions';
 
-interface DischargePageProps {
-  params: Promise<{ id: string }>;
-}
-
-export default async function DischargePage({ params }: DischargePageProps) {
+export default async function DischargePage({ params }: { params: Promise<any> }) {
   const session = await requireSession();
-  const { id } = await params;
+  const resolvedParams = await params;
+  const id = resolvedParams?.id as string;
 
   const admission = await getAdmissionSummary(session.hospitalId, id);
   if (!admission) notFound();

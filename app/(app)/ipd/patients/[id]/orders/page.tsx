@@ -7,13 +7,10 @@ import { MinimalOrdersTab } from '@/components/ipd/orders/minimal-orders-tab';
 import { stopMedicationOrderAction } from '@/app/(app)/ipd/actions';
 import type { StopReason } from '@/constants/clinical';
 
-interface OrdersPageProps {
-  params: Promise<{ id: string }>;
-}
-
-export default async function OrdersPage({ params }: OrdersPageProps) {
+export default async function OrdersPage({ params }: { params: Promise<any> }) {
   const session = await requireSession();
-  const { id } = await params;
+  const resolvedParams = await params;
+  const id = resolvedParams?.id as string;
 
   const [admission, orders] = await Promise.all([
     getAdmissionSummary(session.hospitalId, id),
@@ -51,8 +48,8 @@ export default async function OrdersPage({ params }: OrdersPageProps) {
         admissionId={id}
         orders={formattedOrders}
         patientName={admission.patientName}
-        uhid={admission.mrn}
-        bedLabel={admission.bed?.label}
+        uhid={admission.mrn ?? '—'}
+        bedLabel={admission.bed?.label ?? undefined}
         onStopOrder={handleStopOrder}
       />
     </div>

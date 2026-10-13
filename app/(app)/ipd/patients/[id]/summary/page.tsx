@@ -8,13 +8,10 @@ import { formatDoctor } from '@/lib/domain/doctor';
 import { can } from '@/lib/domain/permissions';
 import { AlertTriangleIcon, CheckIcon, ClockIcon, PillIcon } from '@/components/icons';
 
-interface SummaryPageProps {
-  params: Promise<{ id: string }>;
-}
-
-export default async function SummaryPage({ params }: SummaryPageProps) {
+export default async function SummaryPage({ params }: { params: Promise<any> }) {
   const session = await requireSession();
-  const { id } = await params;
+  const resolvedParams = await params;
+  const id = resolvedParams?.id as string;
 
   const [admission, activeOrders] = await Promise.all([
     getAdmissionSummary(session.hospitalId, id),
