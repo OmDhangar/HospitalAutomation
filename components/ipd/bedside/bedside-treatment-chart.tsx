@@ -8,6 +8,8 @@ import { ArrowLeftIcon, CheckIcon, SearchIcon, UndoIcon, WifiOffIcon } from '@/c
 import { AdministerModal } from '@/components/ipd/emar/administer-modal';
 import { ExceptionModal } from '@/components/ipd/emar/exception-modal';
 import { PrnAdminModal } from '@/components/ipd/emar/prn-admin-modal';
+import { AdjustScheduleTimingModal } from '@/components/ipd/emar/adjust-schedule-timing-modal';
+import { NurseUrgentAdminModal } from '@/components/ipd/emar/nurse-urgent-admin-modal';
 import { voidAdministrationAction } from '@/app/(app)/ipd/actions';
 import { queueEntries, sendEntries, type OutboxEntry } from '@/components/ipd/outbox';
 import { useOnline } from '@/components/ipd/use-online';
@@ -112,6 +114,12 @@ export function BedsideTreatmentChart({
   const [administerItem, setAdministerItem] = useState<BedsideDueItem | null>(null);
   const [exceptionItem, setExceptionItem] = useState<BedsideDueItem | null>(null);
   const [prnItem, setPrnItem] = useState<BedsidePrnItem | null>(null);
+  const [adjustTimingItem, setAdjustTimingItem] = useState<{
+    orderId: string;
+    medicineName: string;
+    scheduleTimes: string[];
+  } | null>(null);
+  const [isUrgentModalOpen, setIsUrgentModalOpen] = useState(false);
   const [actionNotice, setActionNotice] = useState<{
     tone: 'success' | 'error';
     text: string;
@@ -211,12 +219,22 @@ export function BedsideTreatmentChart({
           Back to {patient.wardName}
         </Link>
         <div className="flex items-center gap-2">
+          {canAdminister && (
+            <button
+              type="button"
+              onClick={() => setIsUrgentModalOpen(true)}
+              className="inline-flex min-h-10 items-center gap-1 rounded-lg bg-rose-600 px-3 text-xs font-bold text-white shadow-2xs hover:bg-rose-700 cursor-pointer"
+              title="Give extra medicine under verbal order or standing protocol"
+            >
+              + Give Extra Medicine
+            </button>
+          )}
           {chartHref && (
             <Link
               href={chartHref}
               className="inline-flex min-h-10 items-center rounded-lg border border-ink-200 bg-white px-3 text-xs font-semibold text-ink-700 shadow-2xs hover:bg-ink-50"
             >
-              TPR Chart
+              Fever &amp; BP (TPR)
             </Link>
           )}
           <Link
@@ -238,16 +256,16 @@ export function BedsideTreatmentChart({
       </div>
 
       {/* Main Patient Identification Card */}
-      <div className="rounded-2xl border-2 border-brand-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="rounded-xl border border-brand-200 bg-white p-3.5 sm:p-4 shadow-2xs">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <div className="flex flex-wrap items-center gap-2.5">
-              <h1 className="text-2xl font-black text-ink-950 tracking-tight">
-                {patient.name}
-              </h1>
-              <span className="rounded-lg bg-brand-700 px-3 py-1 font-mono text-sm font-bold text-white shadow-2xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-md bg-brand-700 px-2.5 py-0.5 font-mono text-xs font-bold text-white shadow-2xs">
                 {`Bed ${patient.bedLabel}`}
               </span>
+              <h1 className="text-lg font-black text-ink-950 tracking-tight">
+                {patient.name}
+              </h1>
               {patient.ipdNumber && (
                 <span className="rounded bg-ink-100 px-2 py-0.5 font-mono text-xs font-semibold text-ink-600">
                   IPD #{patient.ipdNumber}
@@ -255,7 +273,7 @@ export function BedsideTreatmentChart({
               )}
             </div>
 
-            <p className="mt-1 text-sm font-medium text-ink-600">
+            <p className="mt-1 text-xs font-medium text-ink-600">
               {[
                 patient.ageSex,
                 patient.wardName,
@@ -265,17 +283,24 @@ export function BedsideTreatmentChart({
                 .filter(Boolean)
                 .join(' · ')}
             </p>
+
+            <div className="mt-2 flex items-baseline gap-1.5 text-xs text-ink-800">
+              <span className="font-semibold text-ink-600 shrink-0">Diagnosis:</span>
+              <span className="font-medium text-ink-900 bg-sky-50 px-2 py-0.5 rounded border border-sky-200">
+                {patient.diagnosis ? patient.diagnosis : 'No formal diagnosis noted.'}
+              </span>
+            </div>
           </div>
 
           {/* Allergy Pill */}
           <div className="shrink-0">
             {allergyStatus === 'nkda' && (
-              <span className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-800">
+              <span className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-0.5 text-xs font-bold text-emerald-800">
                 ✓ No allergies
               </span>
             )}
             {allergyStatus === 'unreviewed' && (
-              <span className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-bold text-amber-900">
+              <span className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-0.5 text-xs font-bold text-amber-900">
                 ⚠️ Allergies Unreviewed
               </span>
             )}
@@ -285,29 +310,19 @@ export function BedsideTreatmentChart({
                   allergies.map((all, i) => (
                     <span
                       key={i}
-                      className="inline-flex items-center rounded-lg border border-rose-300 bg-rose-50 px-2.5 py-1 text-xs font-bold text-rose-900"
+                      className="inline-flex items-center rounded-md border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-bold text-rose-900"
                     >
                       ⚠️ Allergic to {all.substance} {all.severity ? `(${all.severity})` : ''}
                     </span>
                   ))
                 ) : (
-                  <span className="inline-flex items-center rounded-lg border border-rose-300 bg-rose-50 px-2.5 py-1 text-xs font-bold text-rose-900">
+                  <span className="inline-flex items-center rounded-md border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-bold text-rose-900">
                     ⚠️ Specific Allergies Documented
                   </span>
                 )}
               </div>
             )}
           </div>
-        </div>
-
-        {/* Highlighted Diagnosis & Reason Box */}
-        <div className="mt-3.5 flex items-baseline gap-2 rounded-xl border border-sky-200 bg-sky-50/70 p-3 text-sm">
-          <span className="font-bold text-sky-950 shrink-0">
-            📋 Reason for Admission / Diagnosis:
-          </span>
-          <span className="font-semibold text-sky-900">
-            {patient.diagnosis ? patient.diagnosis : 'No formal diagnosis noted in admission record.'}
-          </span>
         </div>
       </div>
 
@@ -325,29 +340,29 @@ export function BedsideTreatmentChart({
           <button
             type="button"
             onClick={() => setActionNotice(null)}
-            className="text-xs font-bold underline hover:opacity-75"
+            className="text-xs font-bold underline hover:opacity-75 cursor-pointer"
           >
             Dismiss
           </button>
         </div>
       )}
 
-      {/* 2 Clean Patient Care Windows / Tabs */}
+      {/* Patient Care Tabs */}
       <div className="flex items-center gap-2 border-b border-ink-200 pb-2">
         <button
           type="button"
           onClick={() => setActiveTab('daily')}
           className={cn(
-            'flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition shadow-2xs',
+            'flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-bold transition shadow-2xs cursor-pointer',
             activeTab === 'daily'
               ? 'bg-brand-700 text-white shadow-sm'
               : 'bg-white text-ink-700 border border-ink-200 hover:bg-ink-50',
           )}
         >
-          <span>1. Daily Scheduled Medicines</span>
+          <span>1. Daily Medicines</span>
           <span
             className={cn(
-              'rounded-full px-2 py-0.5 text-xs font-extrabold',
+              'rounded-full px-1.5 py-0.2 text-[10px] font-extrabold',
               activeTab === 'daily'
                 ? 'bg-white/20 text-white'
                 : activeDosesToGive.length > 0
@@ -363,7 +378,7 @@ export function BedsideTreatmentChart({
           type="button"
           onClick={() => setActiveTab('sos')}
           className={cn(
-            'flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition shadow-2xs',
+            'flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-bold transition shadow-2xs cursor-pointer',
             activeTab === 'sos'
               ? 'bg-sky-700 text-white shadow-sm'
               : 'bg-white text-ink-700 border border-ink-200 hover:bg-ink-50',
@@ -372,7 +387,7 @@ export function BedsideTreatmentChart({
           <span>2. As Needed (SOS)</span>
           <span
             className={cn(
-              'rounded-full px-2 py-0.5 text-xs font-extrabold',
+              'rounded-full px-1.5 py-0.2 text-[10px] font-extrabold',
               activeTab === 'sos'
                 ? 'bg-white/20 text-white'
                 : 'bg-sky-100 text-sky-800',
@@ -386,13 +401,13 @@ export function BedsideTreatmentChart({
           type="button"
           onClick={() => setActiveTab('supplies')}
           className={cn(
-            'ml-auto flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition',
+            'ml-auto flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition cursor-pointer',
             activeTab === 'supplies'
               ? 'bg-ink-800 text-white'
-              : 'text-ink-500 hover:bg-ink-100 hover:text-ink-800',
+              : 'text-ink-600 hover:bg-ink-100 hover:text-ink-800 border border-ink-200',
           )}
         >
-          <span>+ Supplies & Consumables</span>
+          <span>+ Syringes &amp; Items</span>
         </button>
       </div>
 
@@ -455,17 +470,37 @@ export function BedsideTreatmentChart({
                         <div className="flex shrink-0 items-center gap-2">
                           <button
                             type="button"
-                            onClick={() => setExceptionItem(item)}
-                            className="rounded-xl border border-ink-300 bg-white px-3 py-2 text-xs font-bold text-ink-700 shadow-2xs hover:bg-ink-100"
+                            onClick={() =>
+                              setAdjustTimingItem({
+                                orderId: item.orderId,
+                                medicineName: item.medicineName,
+                                scheduleTimes: [
+                                  new Date(item.scheduledTime).toLocaleTimeString(undefined, {
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    hour12: false,
+                                  }),
+                                ],
+                              })
+                            }
+                            className="rounded-xl border border-ink-300 bg-white px-2.5 py-2 text-xs font-semibold text-ink-700 shadow-2xs hover:bg-ink-100"
+                            title="Adjust scheduled timing with reason"
                           >
-                            Did Not Give
+                            Change Time
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setExceptionItem(item)}
+                            className="rounded-xl border border-ink-300 bg-white px-3 py-2 text-xs font-bold text-ink-700 shadow-2xs hover:bg-ink-100 cursor-pointer"
+                          >
+                            Skip Dose
                           </button>
                           <button
                             type="button"
                             onClick={() => setAdministerItem(item)}
-                            className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-black text-white shadow-sm hover:bg-emerald-700 transition"
+                            className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-black text-white shadow-sm hover:bg-emerald-700 transition cursor-pointer"
                           >
-                            ✓ Mark Given
+                            ✓ Give Medicine
                           </button>
                         </div>
                       )}
@@ -510,15 +545,35 @@ export function BedsideTreatmentChart({
                       <div className="flex shrink-0 items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => setExceptionItem(item)}
-                          className="rounded-lg border border-ink-200 bg-white px-2.5 py-1.5 text-xs font-medium text-ink-600 hover:bg-ink-50"
+                          onClick={() =>
+                            setAdjustTimingItem({
+                              orderId: item.orderId,
+                              medicineName: item.medicineName,
+                              scheduleTimes: [
+                                new Date(item.scheduledTime).toLocaleTimeString(undefined, {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                  hour12: false,
+                                }),
+                              ],
+                            })
+                          }
+                          className="rounded-lg border border-ink-200 bg-white px-2.5 py-1.5 text-xs font-medium text-ink-700 hover:bg-ink-50 cursor-pointer"
+                          title="Change scheduled timing with reason"
                         >
-                          Did Not Give
+                          Change Time
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setExceptionItem(item)}
+                          className="rounded-lg border border-ink-200 bg-white px-2.5 py-1.5 text-xs font-medium text-ink-600 hover:bg-ink-50 cursor-pointer"
+                        >
+                          Skip Dose
                         </button>
                         <button
                           type="button"
                           onClick={() => setAdministerItem(item)}
-                          className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-800 hover:bg-emerald-100"
+                          className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-800 hover:bg-emerald-100 cursor-pointer"
                         >
                           ✓ Give Early
                         </button>
@@ -889,6 +944,48 @@ export function BedsideTreatmentChart({
             setActionNotice({
               tone: 'success',
               text: `Given SOS dose: ${prnItem.medicineName} recorded.`,
+            });
+            startTransition(() => {
+              router.refresh();
+            });
+          }}
+        />
+      )}
+
+      {/* Adjust Timing Modal */}
+      {adjustTimingItem && (
+        <AdjustScheduleTimingModal
+          isOpen={true}
+          onClose={() => setAdjustTimingItem(null)}
+          admissionId={admissionId}
+          orderId={adjustTimingItem.orderId}
+          medicineName={adjustTimingItem.medicineName}
+          currentScheduleTimes={adjustTimingItem.scheduleTimes}
+          onSuccess={(newTimes) => {
+            setActionNotice({
+              tone: 'success',
+              text: `Timing updated for ${adjustTimingItem.medicineName} to [${newTimes.join(', ')}].`,
+            });
+            startTransition(() => {
+              router.refresh();
+            });
+          }}
+        />
+      )}
+
+      {/* Nurse Urgent Administration Modal */}
+      {isUrgentModalOpen && (
+        <NurseUrgentAdminModal
+          isOpen={true}
+          onClose={() => setIsUrgentModalOpen(false)}
+          admissionId={admissionId}
+          patientName={patient.name}
+          bedLabel={patient.bedLabel}
+          activeAllergies={allergies}
+          onSuccess={() => {
+            setActionNotice({
+              tone: 'success',
+              text: `Urgent medication administered & recorded. Billed and queued for doctor review.`,
             });
             startTransition(() => {
               router.refresh();
