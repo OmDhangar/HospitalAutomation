@@ -31,6 +31,10 @@ export default async function DischargePage({ params }: { params: Promise<any> }
         status={admission.status}
         canDischarge={canDischarge}
         dischargeReadyAt={admission.dischargeReadyAt}
+        doctorName={admission.doctorName ?? undefined}
+        patientName={admission.patientName}
+        bedLabel={admission.bed?.label}
+        wardName={admission.bed?.wardName}
         onToggleDischargeReady={handleToggleReady}
       />
     </div>
