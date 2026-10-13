@@ -19,8 +19,8 @@ import type {
   BedsidePrnItem,
   BedsideEmarView,
 } from '@/lib/services/ipd-emar';
-import type { SelectIpdMedicationOrder, SelectIpdMedicationAdministration } from '@/lib/db/schema';
 import type { AllergenItem } from '@/lib/services/ipd-rounding-cockpit';
+import { formatDoctor } from '@/lib/domain/doctor';
 
 export type Pick = { ref: { type: 'medicine' | 'charge'; id: string }; label: string; unit: string };
 type NewItem = { type: 'new'; kind: 'medicine' | 'consumable' | 'procedure'; name: string };
@@ -278,7 +278,7 @@ export function BedsideTreatmentChart({
                 patient.ageSex,
                 patient.wardName,
                 patient.day ? `Day ${patient.day} of stay` : null,
-                patient.doctorName ? `Admitted by Dr. ${patient.doctorName}` : null,
+                patient.doctorName ? `Admitted by ${formatDoctor(patient.doctorName)}` : null,
               ]
                 .filter(Boolean)
                 .join(' · ')}
