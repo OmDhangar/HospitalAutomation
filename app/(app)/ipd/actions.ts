@@ -37,14 +37,19 @@ import {
 } from '@/lib/services/ipd-rounding-cockpit';
 import {
   signRoundOrders,
+  adjustMedicationScheduleTimes,
+  executeOrderAction,
+  AuthorNotLinkedDoctorError,
   type OrderResolution,
 } from '@/lib/services/ipd-medication-orders';
 import {
   recordAdministration,
   recordException,
   voidAdministration,
+  recordNurseUrgentAdministration,
   type RecordAdministrationInput,
   type RecordExceptionInput,
+  type RecordNurseUrgentAdminInput,
 } from '@/lib/services/ipd-emar';
 
 /**
@@ -367,19 +372,21 @@ async function resolveDoctorId(
   admissionId: string,
   requestedDoctorId?: string,
 ): Promise<string> {
-  if (requestedDoctorId) return requestedDoctorId;
   return withTenant(hospitalId, async (tx) => {
     const [linked] = await tx
       .select({ id: doctors.id })
       .from(doctors)
       .where(eq(doctors.userId, userId));
-    if (linked) return linked.id;
-    const [adm] = await tx
-      .select({ docId: admissions.admittingDoctorId })
-      .from(admissions)
-      .where(eq(admissions.id, admissionId));
-    if (adm?.docId) return adm.docId;
-    throw new Error('No doctor associated with this round');
+
+    if (!linked) {
+      throw new AuthorNotLinkedDoctorError();
+    }
+
+    if (requestedDoctorId && requestedDoctorId !== linked.id) {
+      throw new Error('Doctor ID mismatch: cannot sign orders or notes on behalf of another practitioner');
+    }
+
+    return linked.id;
   });
 }
 
@@ -443,6 +450,7 @@ export async function recordAdministrationAction(args: {
   });
 
   revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/treatment`);
   revalidatePath(`/ipd/admissions/${args.admissionId}/emar`);
   revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
   revalidatePath('/ipd');
@@ -465,6 +473,7 @@ export async function recordExceptionAction(args: {
   });
 
   revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/treatment`);
   revalidatePath(`/ipd/admissions/${args.admissionId}/emar`);
   revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
   revalidatePath('/ipd');
@@ -486,11 +495,89 @@ export async function voidAdministrationAction(args: {
   });
 
   revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/treatment`);
   revalidatePath(`/ipd/admissions/${args.admissionId}/emar`);
   revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
   revalidatePath('/ipd');
   return { ok: true };
 }
 
+export async function adjustMedicationTimingAction(args: {
+  admissionId: string;
+  orderId: string;
+  newScheduleTimes: string[];
+  reason: string;
+}): Promise<{ ok: boolean; orderId: string; newScheduleTimes: string[] }> {
+  const session = await authorize('ipd.administer');
 
+  const res = await adjustMedicationScheduleTimes({
+    hospitalId: session.hospitalId,
+    orderId: args.orderId,
+    newScheduleTimes: args.newScheduleTimes,
+    reason: args.reason,
+    actorUserId: session.userId,
+  });
 
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/treatment`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/emar`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  revalidatePath('/ipd');
+  return { ok: true, orderId: res.orderId, newScheduleTimes: res.newScheduleTimes };
+}
+
+export async function recordNurseUrgentAdministrationAction(args: {
+  admissionId: string;
+  input: RecordNurseUrgentAdminInput;
+}): Promise<{ ok: boolean; orderId: string; administrationId: string }> {
+  const session = await authorize('ipd.administer');
+
+  const res = await recordNurseUrgentAdministration({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    input: args.input,
+    actorUserId: session.userId,
+  });
+
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/treatment`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/emar`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  revalidatePath('/ipd');
+  return { ok: true, orderId: res.orderId, administrationId: res.administrationId };
+}
+
+export async function stopMedicationOrderAction(args: {
+  admissionId: string;
+  orderId: string;
+  reason: string;
+}): Promise<{ ok: boolean }> {
+  const session = await authorize('ipd.prescribe');
+  const docId = await resolveDoctorId(session.hospitalId, session.userId, args.admissionId);
+  await executeOrderAction({
+    hospitalId: session.hospitalId,
+    orderId: args.orderId,
+    action: 'discontinue',
+    reason: args.reason,
+    actorUserId: session.userId,
+    doctorId: docId,
+  });
+  revalidatePath(`/ipd/patients/${args.admissionId}/orders`);
+  return { ok: true };
+}
+
+export async function toggleDischargeReadyClientAction(args: {
+  admissionId: string;
+  ready: boolean;
+}): Promise<{ ok: boolean; ready: boolean }> {
+  const session = await authorize('ipd.dischargeReady');
+  await setDischargeReady({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    ready: args.ready,
+    actorUserId: session.userId,
+  });
+  revalidatePath(`/ipd/patients/${args.admissionId}/discharge`);
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  return { ok: true, ready: args.ready };
+}
