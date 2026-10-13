@@ -98,9 +98,9 @@ export function TabNavigation({
   return (
     <nav
       aria-label="Patient Chart Navigation"
-      className={`border-b border-ink-100 bg-surface px-4 sm:px-6 sticky top-[57px] z-20 overflow-x-auto no-scrollbar whitespace-nowrap ${className}`}
+      className={`border-b border-ink-100 bg-surface px-3.5 sm:px-5 sticky top-[56px] z-20 overflow-x-auto no-scrollbar whitespace-nowrap ${className}`}
     >
-      <ul className="flex items-center gap-1 sm:gap-2 -mb-px">
+      <ul className="flex items-center gap-1 sm:gap-1.5 -mb-px">
         {tabs.map((tab) => {
           const isActive =
             activeTabId.toLowerCase() === tab.id.toLowerCase() ||
@@ -110,7 +110,7 @@ export function TabNavigation({
             <li key={tab.id} className="inline-block">
               <Link
                 href={`/ipd/patients/${admissionId}/${tab.hrefSegment}`}
-                className={`group inline-flex items-center gap-1.5 px-3 py-3 text-xs sm:text-sm font-semibold border-b-2 transition-colors min-h-[44px] ${
+                className={`group inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold border-b-2 transition-colors min-h-[32px] ${
                   isActive
                     ? 'border-primary text-primary'
                     : 'border-transparent text-ink-500 hover:text-ink-800 hover:border-ink-200'
@@ -120,7 +120,7 @@ export function TabNavigation({
                 <span>{tab.label}</span>
                 {tab.badge != null && (
                   <span
-                    className={`inline-flex items-center justify-center px-1.5 py-0.2 rounded-full text-[11px] font-semibold ${
+                    className={`inline-flex items-center justify-center px-1.5 py-0.2 rounded-full text-[10px] font-semibold ${
                       tab.badgeVariant === 'danger'
                         ? 'bg-rose-100 text-rose-800'
                         : tab.badgeVariant === 'warning'

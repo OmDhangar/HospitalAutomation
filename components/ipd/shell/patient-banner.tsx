@@ -92,13 +92,13 @@ export function PatientBanner({
     <>
       <section
         aria-label="Patient Banner"
-        className={`sticky top-0 z-30 bg-surface border-b border-ink-100 shadow-xs px-4 py-3 sm:px-6 ${className}`}
+        className={`sticky top-0 z-30 bg-surface border-b border-ink-100 shadow-xs px-3.5 py-1.5 sm:px-5 ${className}`}
       >
-        <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-col gap-1.5 lg:flex-row lg:items-center lg:justify-between">
           {/* Main demographics block */}
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs">
             {/* Patient Name */}
-            <h1 className="text-base font-semibold text-ink-950 tracking-tight">
+            <h1 className="text-sm font-semibold text-ink-950 tracking-tight">
               {formattedName}
             </h1>
 
@@ -136,7 +136,7 @@ export function PatientBanner({
 
             {/* Day of Stay */}
             {patient.dayOfStay != null && (
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-200">
+              <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[11px] font-semibold bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-200">
                 {`Day ${patient.dayOfStay}`}
               </span>
             )}
@@ -152,23 +152,23 @@ export function PatientBanner({
           </div>
 
           {/* Clinical chips, status badge, action buttons */}
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             {/* Diagnosis Chip */}
             {patient.diagnosis ? (
               <button
                 type="button"
                 onClick={() => setIsDiagnosisDrawerOpen(true)}
-                className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-normal bg-ink-50 text-ink-800 ring-1 ring-inset ring-ink-200 hover:bg-ink-100 min-h-[32px]"
+                className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-normal bg-ink-50 text-ink-800 ring-1 ring-inset ring-ink-200 hover:bg-ink-100 min-h-[26px]"
                 title="Click to view/edit diagnosis"
               >
                 <span className="font-semibold text-ink-600 mr-1">Dx:</span>
-                <span className="truncate max-w-[200px]">{patient.diagnosis}</span>
+                <span className="truncate max-w-[180px]">{patient.diagnosis}</span>
               </button>
             ) : (
               <button
                 type="button"
                 onClick={() => setIsDiagnosisDrawerOpen(true)}
-                className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-900 ring-1 ring-inset ring-amber-300 hover:bg-amber-100 min-h-[32px]"
+                className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-900 ring-1 ring-inset ring-amber-300 hover:bg-amber-100 min-h-[26px]"
                 title="Diagnosis not recorded. Click to enter diagnosis."
               >
                 Diagnosis not recorded
@@ -180,7 +180,7 @@ export function PatientBanner({
               <button
                 type="button"
                 onClick={() => setIsAllergyDrawerOpen(true)}
-                className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-900 ring-1 ring-inset ring-rose-300 hover:bg-rose-100 min-h-[32px]"
+                className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-900 ring-1 ring-inset ring-rose-300 hover:bg-rose-100 min-h-[26px]"
                 title="Click to review allergies"
               >
                 {`Allergies: ${patient.allergies!.join(', ')}`}
@@ -191,7 +191,7 @@ export function PatientBanner({
               <button
                 type="button"
                 onClick={() => setIsAllergyDrawerOpen(true)}
-                className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-ink-100 text-ink-600 ring-1 ring-inset ring-ink-200 hover:bg-ink-200 min-h-[32px]"
+                className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-ink-100 text-ink-600 ring-1 ring-inset ring-ink-200 hover:bg-ink-200 min-h-[26px]"
                 title="No known drug allergies. Click to review."
               >
                 No known allergies
@@ -202,7 +202,7 @@ export function PatientBanner({
               <button
                 type="button"
                 onClick={() => setIsAllergyDrawerOpen(true)}
-                className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-900 ring-1 ring-inset ring-amber-300 hover:bg-amber-100 min-h-[32px]"
+                className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-900 ring-1 ring-inset ring-amber-300 hover:bg-amber-100 min-h-[26px]"
                 title="Allergies not recorded. Click to assess allergies."
               >
                 Allergies not recorded
@@ -216,10 +216,10 @@ export function PatientBanner({
             <button
               type="button"
               onClick={() => setIsHistoryDrawerOpen(true)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-ink-700 bg-surface rounded-md border border-ink-200 hover:bg-ink-50 focus:outline-none focus:ring-2 focus:ring-primary min-h-[36px]"
+              className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-semibold text-ink-700 bg-surface rounded border border-ink-200 hover:bg-ink-50 focus:outline-none focus:ring-1 focus:ring-primary min-h-[28px]"
               aria-label="View admission history"
             >
-              <FileTextIcon className="h-3.5 w-3.5" />
+              <FileTextIcon className="h-3 w-3" />
               <span>History</span>
             </button>
 
@@ -231,10 +231,10 @@ export function PatientBanner({
                   window.print();
                 }
               }}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-ink-700 bg-surface rounded-md border border-ink-200 hover:bg-ink-50 focus:outline-none focus:ring-2 focus:ring-primary min-h-[36px]"
+              className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-semibold text-ink-700 bg-surface rounded border border-ink-200 hover:bg-ink-50 focus:outline-none focus:ring-1 focus:ring-primary min-h-[28px]"
               aria-label="Print patient file"
             >
-              <PrinterIcon className="h-3.5 w-3.5" />
+              <PrinterIcon className="h-3 w-3" />
               <span>Print file</span>
             </button>
           </div>
