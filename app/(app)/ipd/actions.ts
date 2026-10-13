@@ -28,7 +28,7 @@ import { formatUndoToken, idList, isId, parseUndoToken } from '@/lib/domain/undo
 import { PatientBillingError } from '@/lib/services/patient-billing';
 import { DoctorIpdError, orderTests } from '@/lib/services/doctor-ipd';
 import { withTenant } from '@/lib/db';
-import { admissions, doctors } from '@/lib/db/schema';
+import { admissions, doctors, vitalsReadings, intakeOutput } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import {
   recordAllergyAssessment,
@@ -584,3 +584,83 @@ export async function toggleDischargeReadyClientAction(args: {
   revalidatePath(`/ipd/patients/${args.admissionId}`);
   return { ok: true, ready: args.ready };
 }
+
+export async function recordVitalReadingAction(args: {
+  admissionId: string;
+  temperatureF?: number | string | null;
+  pulseBpm?: number | null;
+  bpSystolic?: number | null;
+  bpDiastolic?: number | null;
+  respiratoryRate?: number | null;
+  spo2Percent?: number | null;
+  painScore?: number | null;
+  avpu?: 'A' | 'V' | 'P' | 'U';
+  o2Support?: string | null;
+  news2Score?: number | null;
+  bsl?: number | null;
+  scheduledSlot?: string | null;
+}): Promise<{ ok: boolean; id: string }> {
+  const session = await authorize('ipd.view');
+  const tempStr = args.temperatureF != null ? String(args.temperatureF) : null;
+  const res = await withTenant(
+    session.hospitalId,
+    async (tx) => {
+      const [inserted] = await tx
+        .insert(vitalsReadings)
+        .values({
+          hospitalId: session.hospitalId,
+          admissionId: args.admissionId,
+          temperatureF: tempStr,
+          pulseBpm: args.pulseBpm ?? null,
+          bpSystolic: args.bpSystolic ?? null,
+          bpDiastolic: args.bpDiastolic ?? null,
+          respiratoryRate: args.respiratoryRate ?? null,
+          spo2Percent: args.spo2Percent ?? null,
+          painScore: args.painScore ?? null,
+          avpu: args.avpu ?? null,
+          o2Support: args.o2Support ?? null,
+          news2Score: args.news2Score ?? null,
+          bsl: args.bsl ?? null,
+          scheduledSlot: args.scheduledSlot ?? null,
+          recordedByUserId: session.userId,
+        })
+        .returning({ id: vitalsReadings.id });
+      return inserted;
+    },
+    { clinical: true },
+  );
+  revalidatePath(`/ipd/patients/${args.admissionId}/vitals`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/summary`);
+  return { ok: true, id: res.id };
+}
+
+export async function recordIntakeOutputAction(args: {
+  admissionId: string;
+  kind: 'ORAL' | 'IV' | 'URINE' | 'DRAIN' | 'RT_ASPIRATE';
+  ml: number;
+  notes?: string | null;
+}): Promise<{ ok: boolean; id: string }> {
+  const session = await authorize('ipd.view');
+  const res = await withTenant(
+    session.hospitalId,
+    async (tx) => {
+      const [inserted] = await tx
+        .insert(intakeOutput)
+        .values({
+          hospitalId: session.hospitalId,
+          admissionId: args.admissionId,
+          kind: args.kind,
+          ml: args.ml,
+          notes: args.notes ?? null,
+          recordedByUserId: session.userId,
+        })
+        .returning({ id: intakeOutput.id });
+      return inserted;
+    },
+    { clinical: true },
+  );
+  revalidatePath(`/ipd/patients/${args.admissionId}/vitals`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/summary`);
+  return { ok: true, id: res.id };
+}
+
