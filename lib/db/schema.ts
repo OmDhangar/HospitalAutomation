@@ -3300,4 +3300,107 @@ export const patientMeasurements = pgTable(
 export type PatientMeasurementRow = typeof patientMeasurements.$inferSelect;
 export type NewPatientMeasurement = typeof patientMeasurements.$inferInsert;
 
+export const ipdAdmissionHomeMedications = pgTable(
+  'ipd_admission_home_medications',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id')
+      .notNull()
+      .references(() => admissions.id, { onDelete: 'cascade' }),
+    medicineName: text('medicine_name').notNull(),
+    dosage: text('dosage'),
+    frequency: text('frequency'),
+    lastTakenAt: text('last_taken_at'),
+    reconciliationStatus: text('reconciliation_status')
+      .$type<'continued' | 'stopped' | 'modified'>()
+      .notNull()
+      .default('continued'),
+    reconciliationNotes: text('reconciliation_notes'),
+    recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('ipd_home_meds_adm_idx').on(t.hospitalId, t.admissionId),
+  ],
+);
+
+export const ipdDischargeSummaries = pgTable(
+  'ipd_discharge_summaries',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id')
+      .notNull()
+      .references(() => admissions.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull().default(1),
+    dischargeType: text('discharge_type')
+      .$type<'regular' | 'lama' | 'dama' | 'transfer' | 'death'>()
+      .notNull()
+      .default('regular'),
+    status: text('status')
+      .$type<'draft' | 'finalized'>()
+      .notNull()
+      .default('draft'),
+    primaryDiagnosis: text('primary_diagnosis'),
+    secondaryDiagnoses: text('secondary_diagnoses'),
+    hospitalCourse: text('hospital_course'),
+    conditionAtDischarge: text('condition_at_discharge'),
+    investigationSummary: text('investigation_summary'),
+    dischargeAdvice: text('discharge_advice'),
+    dietAdvice: text('diet_advice'),
+    urgentWarningSigns: text('urgent_warning_signs'),
+    followUpDate: text('follow_up_date'),
+    prescriberDoctorId: uuid('prescriber_doctor_id').references(() => doctors.id, { onDelete: 'set null' }),
+    prescriberRegistrationNo: text('prescriber_registration_no'),
+    finalizedAt: timestamp('finalized_at', { withTimezone: true }),
+    finalizedByUserId: uuid('finalized_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('ipd_discharge_summaries_adm_idx').on(t.hospitalId, t.admissionId),
+  ],
+);
+
+export const ipdTakeHomePrescriptions = pgTable(
+  'ipd_take_home_prescriptions',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    dischargeSummaryId: uuid('discharge_summary_id')
+      .notNull()
+      .references(() => ipdDischargeSummaries.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id')
+      .notNull()
+      .references(() => admissions.id, { onDelete: 'cascade' }),
+    medicineName: text('medicine_name').notNull(),
+    dosage: text('dosage').notNull(),
+    route: text('route').notNull().default('oral'),
+    frequency: text('frequency').notNull(),
+    duration: text('duration'),
+    instructions: text('instructions'),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('ipd_take_home_prescriptions_summary_idx').on(t.hospitalId, t.dischargeSummaryId),
+  ],
+);
+
+export type IpdAdmissionHomeMedicationRow = typeof ipdAdmissionHomeMedications.$inferSelect;
+export type NewIpdAdmissionHomeMedication = typeof ipdAdmissionHomeMedications.$inferInsert;
+export type IpdDischargeSummaryRow = typeof ipdDischargeSummaries.$inferSelect;
+export type NewIpdDischargeSummary = typeof ipdDischargeSummaries.$inferInsert;
+export type IpdTakeHomePrescriptionRow = typeof ipdTakeHomePrescriptions.$inferSelect;
+export type NewIpdTakeHomePrescription = typeof ipdTakeHomePrescriptions.$inferInsert;
+
+
 

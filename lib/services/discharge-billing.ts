@@ -40,6 +40,7 @@ import { postBedDaysForAdmissionInTx } from '@/lib/services/bed-days';
 import { getActivePayerInTx, setPayerInTx } from '@/lib/services/encounter-payers';
 import { getEncounterInTx } from '@/lib/services/encounters';
 import { resolveRow } from '@/lib/services/patients';
+import { assertDischargeSummaryFinalized, DischargeSummaryRequiredError } from '@/lib/services/ipd-discharge-summary';
 
 /**
  * Discharge billing (IPD plan §T2.1–T2.4): by the time the doctor says the
@@ -535,6 +536,7 @@ export async function finalizeDischarge(args: {
   admissionId: string;
   actorUserId: string;
   now?: Date;
+  enforceDischargeSummaryGate?: boolean;
 }): Promise<{ billId: string; billNumber: string }> {
   const now = args.now ?? new Date();
   return withTenant(
@@ -547,6 +549,11 @@ export async function finalizeDischarge(args: {
           admission.status === 'discharged' ? 'This patient is already discharged' : 'Only an admitted patient can be discharged',
         );
       }
+
+      if (args.enforceDischargeSummaryGate !== false) {
+        await assertDischargeSummaryFinalized(args.hospitalId, args.admissionId, tx);
+      }
+
       const [hospital] = await tx
         .select({ timezone: hospitals.timezone })
         .from(hospitals)

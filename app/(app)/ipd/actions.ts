@@ -56,6 +56,11 @@ import {
 } from '@/lib/services/ipd-emar';
 import { retryDeadLetterItem } from '@/lib/services/ipd-emar-outbox';
 import { recordPatientMeasurement } from '@/lib/services/patient-measurements';
+import {
+  saveDischargeSummary,
+  finalizeDischargeSummary,
+  reconcileHomeMedication,
+} from '@/lib/services/ipd-discharge-summary';
 
 /**
  * The desk's IPD actions (IPD plan §5.3–5.5, task T1.6). Form posts that
@@ -849,6 +854,107 @@ export async function recordPatientMeasurementAction(args: {
 
   return { ok: true, id: res.id, bmi: res.bmi };
 }
+
+export async function saveDischargeSummaryAction(args: {
+  admissionId: string;
+  dischargeType: 'regular' | 'lama' | 'dama' | 'transfer' | 'death';
+  primaryDiagnosis?: string;
+  secondaryDiagnoses?: string;
+  hospitalCourse?: string;
+  conditionAtDischarge?: string;
+  investigationSummary?: string;
+  dischargeAdvice?: string;
+  dietAdvice?: string;
+  urgentWarningSigns?: string;
+  followUpDate?: string;
+  doctorId?: string;
+  takeHomePrescriptions?: Array<{
+    medicineName: string;
+    dosage: string;
+    route?: string;
+    frequency: string;
+    duration?: string;
+    instructions?: string;
+  }>;
+}): Promise<{ ok: boolean; summaryId: string; version: number }> {
+  const session = await authorize('ipd.prescribe');
+  const docId = await resolveDoctorId(session.hospitalId, session.userId, args.admissionId, args.doctorId);
+
+  const res = await saveDischargeSummary({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    dischargeType: args.dischargeType,
+    primaryDiagnosis: args.primaryDiagnosis,
+    secondaryDiagnoses: args.secondaryDiagnoses,
+    hospitalCourse: args.hospitalCourse,
+    conditionAtDischarge: args.conditionAtDischarge,
+    investigationSummary: args.investigationSummary,
+    dischargeAdvice: args.dischargeAdvice,
+    dietAdvice: args.dietAdvice,
+    urgentWarningSigns: args.urgentWarningSigns,
+    followUpDate: args.followUpDate,
+    prescriberDoctorId: docId,
+    takeHomePrescriptions: args.takeHomePrescriptions,
+    userId: session.userId,
+  });
+
+  revalidatePath(`/ipd/patients/${args.admissionId}/discharge`);
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  return { ok: true, summaryId: res.summaryId, version: res.version };
+}
+
+export async function finalizeDischargeSummaryAction(args: {
+  admissionId: string;
+  summaryId: string;
+  doctorId?: string;
+}): Promise<{ ok: boolean }> {
+  const session = await authorize('ipd.prescribe');
+  const docId = await resolveDoctorId(session.hospitalId, session.userId, args.admissionId, args.doctorId);
+
+  await finalizeDischargeSummary({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    summaryId: args.summaryId,
+    prescriberDoctorId: docId,
+    userId: session.userId,
+  });
+
+  revalidatePath(`/ipd/patients/${args.admissionId}/discharge`);
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/bill`);
+  return { ok: true };
+}
+
+export async function reconcileHomeMedicationAction(args: {
+  admissionId: string;
+  medicineName: string;
+  dosage?: string;
+  frequency?: string;
+  lastTakenAt?: string;
+  reconciliationStatus?: 'continued' | 'stopped' | 'modified';
+  reconciliationNotes?: string;
+}): Promise<{ ok: boolean; id: string }> {
+  const session = await authorize('ipd.care');
+
+  const res = await reconcileHomeMedication({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    medicineName: args.medicineName,
+    dosage: args.dosage,
+    frequency: args.frequency,
+    lastTakenAt: args.lastTakenAt,
+    reconciliationStatus: args.reconciliationStatus,
+    reconciliationNotes: args.reconciliationNotes,
+    recordedByUserId: session.userId,
+  });
+
+  revalidatePath(`/ipd/patients/${args.admissionId}/discharge`);
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  return { ok: true, id: res.id };
+}
+
 
 
 

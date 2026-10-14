@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { StatusBadge } from '@/components/ipd/status-badge';
+import { DischargeSummaryDrawer } from './discharge-summary-drawer';
 import { CheckIcon, FileTextIcon, PrinterIcon } from '@/components/icons';
 
 export interface DischargeTabProps {
@@ -16,6 +17,9 @@ export interface DischargeTabProps {
   bedLabel?: string;
   wardName?: string;
   dischargeMedicationsCount?: number;
+  dischargeSummary?: any;
+  homeMedications?: any[];
+  attendingDoctor?: any;
   className?: string;
 }
 
@@ -30,12 +34,16 @@ export function DischargeTab({
   bedLabel,
   wardName,
   dischargeMedicationsCount = 0,
+  dischargeSummary,
+  homeMedications,
+  attendingDoctor,
   className = '',
 }: DischargeTabProps) {
   const [currentStatus, setCurrentStatus] = useState(status);
   const [isUpdating, setIsUpdating] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
   const [pharmacyReturned, setPharmacyReturned] = useState(false);
+  const [isSummaryDrawerOpen, setIsSummaryDrawerOpen] = useState(false);
 
   const isReady = currentStatus === 'discharge_ready';
   const isDischarged = currentStatus === 'discharged';
@@ -278,8 +286,20 @@ export function DischargeTab({
                 Take-home medications, post-discharge diet, and follow-up consultation dates.
               </p>
             </div>
-            <span className="text-2xs font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">
-              Ready to Print
+            <span
+              className={`text-2xs font-bold px-2 py-0.5 rounded ${
+                dischargeSummary?.status === 'finalized'
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : dischargeSummary?.status === 'draft'
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-rose-100 text-rose-800'
+              }`}
+            >
+              {dischargeSummary?.status === 'finalized'
+                ? `Finalized (v${dischargeSummary.version})`
+                : dischargeSummary?.status === 'draft'
+                  ? 'Draft Summary'
+                  : 'Pending Summary'}
             </span>
           </div>
 
@@ -287,25 +307,41 @@ export function DischargeTab({
             <div className="flex items-center justify-between text-2xs text-ink-600 bg-ink-50/70 p-2 rounded border border-ink-100">
               <span>Take-Home Prescriptions:</span>
               <span className="font-bold text-ink-900">
-                {`${dischargeMedicationsCount} take-home medications`}
+                {dischargeSummary?.takeHomePrescriptions?.length ?? dischargeMedicationsCount} take-home medications
               </span>
             </div>
             <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setIsSummaryDrawerOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded bg-brand-600 text-white hover:bg-brand-700 shadow-2xs"
+              >
+                <FileTextIcon className="size-3.5" />
+                <span>{dischargeSummary?.status === 'finalized' ? 'View Final Summary' : 'Edit & Finalize Summary'}</span>
+              </button>
               <button
                 type="button"
                 onClick={handlePrintCard}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded border border-ink-200 text-ink-800 bg-surface hover:bg-ink-50 shadow-2xs"
               >
                 <PrinterIcon className="size-3.5" />
-                <span>Print Discharge Card</span>
+                <span>Print Card</span>
               </button>
-              <span className="text-2xs text-ink-500">
-                Includes instructions &amp; emergency numbers
-              </span>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Discharge Summary Versioned Drawer */}
+      <DischargeSummaryDrawer
+        admissionId={admissionId}
+        isOpen={isSummaryDrawerOpen}
+        onClose={() => setIsSummaryDrawerOpen(false)}
+        patientName={patientName ?? 'Patient'}
+        initialSummary={dischargeSummary}
+        homeMedications={homeMedications}
+        attendingDoctor={attendingDoctor}
+      />
     </div>
   );
 }
