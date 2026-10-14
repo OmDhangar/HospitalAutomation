@@ -147,6 +147,13 @@ describe('Bedside eMAR Task Bucket Components', () => {
         createdByUserId: 'usr-1',
         signedAt: new Date(),
         roundNoteId: null,
+        isVerbal: false,
+        verbalOrderStatus: 'none',
+        verbalDoctorName: null,
+        verbalClinicalRationale: null,
+        cosignedByDoctorId: null,
+        cosignedAt: null,
+        cosignNotes: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -318,6 +325,76 @@ describe('Bedside eMAR Task Bucket Components', () => {
       expect(html).toContain('Remaining Allowed:');
       expect(html).toContain('doses today');
       expect(html).toContain('Confirm PRN Dose');
+    });
+  });
+
+  describe('AdjustScheduleTimingModal', () => {
+    it('renders timing slots, hospital shifts, and clinical reason options', async () => {
+      const { AdjustScheduleTimingModal } = await import('../adjust-schedule-timing-modal');
+      const html = renderToString(
+        <AdjustScheduleTimingModal
+          isOpen={true}
+          onClose={() => {}}
+          admissionId="adm-1"
+          orderId="ord-1"
+          medicineName="Ceftriaxone 1g IV"
+          currentScheduleTimes={['08:00']}
+          onSuccess={() => {}}
+        />,
+      );
+
+      expect(html).toContain('Adjust Medication Administration Timing');
+      expect(html).toContain('Ceftriaxone 1g IV');
+      expect(html).toContain('Morning 8 AM');
+      expect(html).toContain('Morning 10 AM (Post-Breakfast)');
+      expect(html).toContain('BD: 8 AM &amp; 8 PM');
+      expect(html).toContain('Clinical Reason for Timing Change');
+      expect(html).toContain('Patient sleep cycle / home routine alignment');
+      expect(html).toContain('Save &amp; Update Timing');
+    });
+  });
+
+  describe('NurseUrgentAdminModal', () => {
+    it('renders emergency presets, route selection, and verbal order authority', async () => {
+      const { NurseUrgentAdminModal } = await import('../nurse-urgent-admin-modal');
+      const html = renderToString(
+        <NurseUrgentAdminModal
+          isOpen={true}
+          onClose={() => {}}
+          admissionId="adm-1"
+          patientName="Raj Patil"
+          bedLabel="2"
+          activeAllergies={[{ substance: 'Penicillin', severity: 'severe' }]}
+          onSuccess={() => {}}
+        />,
+      );
+
+      expect(html).toContain('Urgent / Emergency Nurse Administration');
+      expect(html).toContain('Paracetamol IV 1g Infusion');
+      expect(html).toContain('Ondansetron 4mg Injection');
+      expect(html).toContain('Tramadol 50mg Injection');
+      expect(html).toContain('Clinical Authority');
+      expect(html).toContain('Verbal / Telephone Order from Doctor');
+      expect(html).toContain('Clinical Rationale / Patient Symptoms');
+      expect(html).toContain('Confirm Urgent Administration');
+    });
+
+    it('displays active allergy alert when allergic medicine is selected', async () => {
+      const { NurseUrgentAdminModal } = await import('../nurse-urgent-admin-modal');
+      const html = renderToString(
+        <NurseUrgentAdminModal
+          isOpen={true}
+          onClose={() => {}}
+          admissionId="adm-1"
+          patientName="Raj Patil"
+          bedLabel="2"
+          activeAllergies={[{ substance: 'Paracetamol', severity: 'severe' }]}
+          onSuccess={() => {}}
+        />,
+      );
+
+      expect(html).toContain('Urgent / Emergency Nurse Administration');
+      expect(html).toContain('Paracetamol');
     });
   });
 });

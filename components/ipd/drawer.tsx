@@ -7,6 +7,7 @@ export interface DrawerProps {
   isOpen: boolean;
   onClose: () => void;
   title: string;
+  subtitle?: string;
   patient?: {
     name: string;
     uhid: string;
@@ -15,16 +16,19 @@ export interface DrawerProps {
   children: React.ReactNode;
   footer?: React.ReactNode;
   className?: string;
+  size?: 'sm' | 'md' | 'lg' | 'xl' | string;
 }
 
 export function Drawer({
   isOpen,
   onClose,
   title,
+  subtitle,
   patient,
   children,
   footer,
   className = '',
+  size = 'md',
 }: DrawerProps) {
   useEffect(() => {
     if (!isOpen) return;
@@ -38,6 +42,13 @@ export function Drawer({
   }, [isOpen, onClose]);
 
   if (!isOpen) return null;
+
+  const widthClass =
+    size === 'lg' || size === 'xl'
+      ? 'sm:w-[640px]'
+      : size === 'sm'
+        ? 'sm:w-[380px]'
+        : 'sm:w-[480px]';
 
   return (
     <div
@@ -55,12 +66,15 @@ export function Drawer({
 
       <div className="fixed inset-y-0 right-0 flex max-w-full">
         <aside
-          className={`w-screen max-w-full sm:w-[480px] bg-surface flex flex-col shadow-2xl border-l border-ink-100 ${className}`}
+          className={`w-screen max-w-full ${widthClass} bg-surface flex flex-col shadow-2xl border-l border-ink-100 ${className}`}
         >
           {/* Sticky Header */}
           <header className="sticky top-0 z-10 flex flex-col gap-1 border-b border-ink-100 bg-surface px-5 py-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold text-ink-900">{title}</h2>
+              <div>
+                <h2 className="text-base font-semibold text-ink-900">{title}</h2>
+                {subtitle && <p className="text-xs text-ink-500 mt-0.5">{subtitle}</p>}
+              </div>
               <button
                 type="button"
                 onClick={onClose}

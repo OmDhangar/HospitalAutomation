@@ -1,5 +1,5 @@
 import { and, desc, eq } from 'drizzle-orm';
-import { db as defaultDb, withTenant } from '@/lib/db';
+import { withTenant } from '@/lib/db';
 import {
   ipdAdmissionHomeMedications,
   ipdDischargeSummaries,
@@ -65,14 +65,31 @@ export async function listHomeMedications(
   admissionId: string,
   executorDb?: any,
 ) {
-  const queryRunner = executorDb?.query?.ipdAdmissionHomeMedications ?? defaultDb.query.ipdAdmissionHomeMedications;
-  return queryRunner.findMany({
-    where: and(
-      eq(ipdAdmissionHomeMedications.hospitalId, hospitalId),
-      eq(ipdAdmissionHomeMedications.admissionId, admissionId),
-    ),
-    orderBy: [desc(ipdAdmissionHomeMedications.createdAt)],
-  });
+  if (executorDb?.query?.ipdAdmissionHomeMedications) {
+    return executorDb.query.ipdAdmissionHomeMedications.findMany({
+      where: and(
+        eq(ipdAdmissionHomeMedications.hospitalId, hospitalId),
+        eq(ipdAdmissionHomeMedications.admissionId, admissionId),
+      ),
+      orderBy: [desc(ipdAdmissionHomeMedications.createdAt)],
+    });
+  }
+
+  return withTenant(
+    hospitalId,
+    (tx) =>
+      tx
+        .select()
+        .from(ipdAdmissionHomeMedications)
+        .where(
+          and(
+            eq(ipdAdmissionHomeMedications.hospitalId, hospitalId),
+            eq(ipdAdmissionHomeMedications.admissionId, admissionId),
+          ),
+        )
+        .orderBy(desc(ipdAdmissionHomeMedications.createdAt)),
+    { clinical: true },
+  );
 }
 
 export interface TakeHomePrescriptionInput {
@@ -107,14 +124,29 @@ export async function saveDischargeSummary(
   executorDb?: any,
 ): Promise<{ summaryId: string; version: number }> {
   const executeWork = async (tx: any) => {
-    const queryRunner = tx.query?.ipdDischargeSummaries ?? defaultDb.query.ipdDischargeSummaries;
-    const existing = await queryRunner.findFirst({
-      where: and(
-        eq(ipdDischargeSummaries.hospitalId, input.hospitalId),
-        eq(ipdDischargeSummaries.admissionId, input.admissionId),
-      ),
-      orderBy: [desc(ipdDischargeSummaries.version)],
-    });
+    let existing: any = null;
+    if (tx.query?.ipdDischargeSummaries) {
+      existing = await tx.query.ipdDischargeSummaries.findFirst({
+        where: and(
+          eq(ipdDischargeSummaries.hospitalId, input.hospitalId),
+          eq(ipdDischargeSummaries.admissionId, input.admissionId),
+        ),
+        orderBy: [desc(ipdDischargeSummaries.version)],
+      });
+    } else {
+      const [row] = await tx
+        .select()
+        .from(ipdDischargeSummaries)
+        .where(
+          and(
+            eq(ipdDischargeSummaries.hospitalId, input.hospitalId),
+            eq(ipdDischargeSummaries.admissionId, input.admissionId),
+          ),
+        )
+        .orderBy(desc(ipdDischargeSummaries.version))
+        .limit(1);
+      existing = row ?? null;
+    }
 
     let summaryId: string;
     let version = 1;
@@ -211,11 +243,20 @@ export async function finalizeDischargeSummary(
 ): Promise<{ ok: boolean }> {
   const executeWork = async (tx: any) => {
     // 1. Verify doctor exists and has a non-empty registrationNo
-    const docQuery = tx.query?.doctors ?? defaultDb.query.doctors;
-    const doc = await docQuery.findFirst({
-      where: and(eq(doctors.id, input.prescriberDoctorId), eq(doctors.hospitalId, input.hospitalId)),
-      columns: { id: true, name: true, registrationNo: true },
-    });
+    let doc: any = null;
+    if (tx.query?.doctors) {
+      doc = await tx.query.doctors.findFirst({
+        where: and(eq(doctors.id, input.prescriberDoctorId), eq(doctors.hospitalId, input.hospitalId)),
+        columns: { id: true, name: true, registrationNo: true },
+      });
+    } else {
+      const [row] = await tx
+        .select({ id: doctors.id, name: doctors.name, registrationNo: doctors.registrationNo })
+        .from(doctors)
+        .where(and(eq(doctors.id, input.prescriberDoctorId), eq(doctors.hospitalId, input.hospitalId)))
+        .limit(1);
+      doc = row ?? null;
+    }
 
     if (!doc || !doc.registrationNo || !doc.registrationNo.trim()) {
       throw new PrescriberRegistrationRequiredError(
@@ -256,20 +297,71 @@ export async function getLatestDischargeSummary(
   admissionId: string,
   executorDb?: any,
 ) {
-  const queryRunner = executorDb?.query?.ipdDischargeSummaries ?? defaultDb.query.ipdDischargeSummaries;
-  const summary = await queryRunner.findFirst({
-    where: and(
-      eq(ipdDischargeSummaries.hospitalId, hospitalId),
-      eq(ipdDischargeSummaries.admissionId, admissionId),
-    ),
-    orderBy: [desc(ipdDischargeSummaries.version)],
-    with: {
-      prescriberDoctor: true,
-      takeHomePrescriptions: true,
-    },
-  });
+  if (executorDb?.query?.ipdDischargeSummaries) {
+    const summary = await executorDb.query.ipdDischargeSummaries.findFirst({
+      where: and(
+        eq(ipdDischargeSummaries.hospitalId, hospitalId),
+        eq(ipdDischargeSummaries.admissionId, admissionId),
+      ),
+      orderBy: [desc(ipdDischargeSummaries.version)],
+      with: {
+        prescriberDoctor: true,
+        takeHomePrescriptions: true,
+      },
+    });
+    return summary ?? null;
+  }
 
-  return summary ?? null;
+  return withTenant(
+    hospitalId,
+    async (tx) => {
+      const [summary] = await tx
+        .select()
+        .from(ipdDischargeSummaries)
+        .where(
+          and(
+            eq(ipdDischargeSummaries.hospitalId, hospitalId),
+            eq(ipdDischargeSummaries.admissionId, admissionId),
+          ),
+        )
+        .orderBy(desc(ipdDischargeSummaries.version))
+        .limit(1);
+
+      if (!summary) return null;
+
+      const takeHomePrescriptions = await tx
+        .select()
+        .from(ipdTakeHomePrescriptions)
+        .where(
+          and(
+            eq(ipdTakeHomePrescriptions.hospitalId, hospitalId),
+            eq(ipdTakeHomePrescriptions.dischargeSummaryId, summary.id),
+          ),
+        );
+
+      let prescriberDoctor = null;
+      if (summary.prescriberDoctorId) {
+        const [doc] = await tx
+          .select()
+          .from(doctors)
+          .where(
+            and(
+              eq(doctors.hospitalId, hospitalId),
+              eq(doctors.id, summary.prescriberDoctorId),
+            ),
+          )
+          .limit(1);
+        prescriberDoctor = doc ?? null;
+      }
+
+      return {
+        ...summary,
+        takeHomePrescriptions,
+        prescriberDoctor,
+      };
+    },
+    { clinical: true },
+  );
 }
 
 export async function assertDischargeSummaryFinalized(
@@ -277,18 +369,41 @@ export async function assertDischargeSummaryFinalized(
   admissionId: string,
   executorDb?: any,
 ): Promise<void> {
-  const queryRunner = executorDb?.query?.ipdDischargeSummaries ?? defaultDb.query.ipdDischargeSummaries;
-  const finalized = await queryRunner.findFirst({
-    where: and(
-      eq(ipdDischargeSummaries.hospitalId, hospitalId),
-      eq(ipdDischargeSummaries.admissionId, admissionId),
-      eq(ipdDischargeSummaries.status, 'finalized'),
-    ),
-  });
+  const check = (finalized: any) => {
+    if (!finalized || finalized.status !== 'finalized') {
+      throw new DischargeSummaryRequiredError(
+        'Cannot finalize discharge bill. Discharge summary must be finalized with a registered doctor signature before financial settlement.',
+      );
+    }
+  };
 
-  if (!finalized || finalized.status !== 'finalized') {
-    throw new DischargeSummaryRequiredError(
-      'Cannot finalize discharge bill. Discharge summary must be finalized with a registered doctor signature before financial settlement.',
+  if (executorDb?.query?.ipdDischargeSummaries) {
+    const finalized = await executorDb.query.ipdDischargeSummaries.findFirst({
+      where: and(
+        eq(ipdDischargeSummaries.hospitalId, hospitalId),
+        eq(ipdDischargeSummaries.admissionId, admissionId),
+        eq(ipdDischargeSummaries.status, 'finalized'),
+      ),
+    });
+    check(finalized);
+  } else {
+    await withTenant(
+      hospitalId,
+      async (tx) => {
+        const [finalized] = await tx
+          .select({ id: ipdDischargeSummaries.id, status: ipdDischargeSummaries.status })
+          .from(ipdDischargeSummaries)
+          .where(
+            and(
+              eq(ipdDischargeSummaries.hospitalId, hospitalId),
+              eq(ipdDischargeSummaries.admissionId, admissionId),
+              eq(ipdDischargeSummaries.status, 'finalized'),
+            ),
+          )
+          .limit(1);
+        check(finalized);
+      },
+      { clinical: true },
     );
   }
 }

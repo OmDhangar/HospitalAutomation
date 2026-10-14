@@ -1,5 +1,4 @@
 import { and, desc, eq } from 'drizzle-orm';
-import { db as defaultDb } from '@/lib/db';
 import { patientMeasurements } from '@/lib/db/schema';
 import { withTenant } from '@/lib/db';
 
@@ -76,27 +75,59 @@ export async function getLatestMeasurementForAdmission(
   admissionId: string,
   executorDb?: any,
 ): Promise<FormattedMeasurement | null> {
-  const queryRunner = executorDb?.query?.patientMeasurements ?? defaultDb.query.patientMeasurements;
+  if (executorDb?.query?.patientMeasurements) {
+    const row = await executorDb.query.patientMeasurements.findFirst({
+      where: and(
+        eq(patientMeasurements.hospitalId, hospitalId),
+        eq(patientMeasurements.admissionId, admissionId),
+      ),
+      orderBy: [desc(patientMeasurements.recordedAt)],
+    });
 
-  const row = await queryRunner.findFirst({
-    where: and(
-      eq(patientMeasurements.hospitalId, hospitalId),
-      eq(patientMeasurements.admissionId, admissionId),
-    ),
-    orderBy: [desc(patientMeasurements.recordedAt)],
-  });
+    if (!row) return null;
 
-  if (!row) return null;
+    return {
+      id: row.id,
+      hospitalId: row.hospitalId,
+      patientId: row.patientId,
+      admissionId: row.admissionId,
+      recordedAt: row.recordedAt,
+      weightKg: row.weightKg ? Number(row.weightKg) : null,
+      heightCm: row.heightCm ? Number(row.heightCm) : null,
+      bmi: row.bmi ? Number(row.bmi) : null,
+      notes: row.notes,
+    };
+  }
 
-  return {
-    id: row.id,
-    hospitalId: row.hospitalId,
-    patientId: row.patientId,
-    admissionId: row.admissionId,
-    recordedAt: row.recordedAt,
-    weightKg: row.weightKg ? Number(row.weightKg) : null,
-    heightCm: row.heightCm ? Number(row.heightCm) : null,
-    bmi: row.bmi ? Number(row.bmi) : null,
-    notes: row.notes,
-  };
+  return withTenant(
+    hospitalId,
+    async (tx) => {
+      const [row] = await tx
+        .select()
+        .from(patientMeasurements)
+        .where(
+          and(
+            eq(patientMeasurements.hospitalId, hospitalId),
+            eq(patientMeasurements.admissionId, admissionId),
+          ),
+        )
+        .orderBy(desc(patientMeasurements.recordedAt))
+        .limit(1);
+
+      if (!row) return null;
+
+      return {
+        id: row.id,
+        hospitalId: row.hospitalId,
+        patientId: row.patientId,
+        admissionId: row.admissionId,
+        recordedAt: row.recordedAt,
+        weightKg: row.weightKg ? Number(row.weightKg) : null,
+        heightCm: row.heightCm ? Number(row.heightCm) : null,
+        bmi: row.bmi ? Number(row.bmi) : null,
+        notes: row.notes,
+      };
+    },
+    { clinical: true },
+  );
 }

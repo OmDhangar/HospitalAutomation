@@ -307,7 +307,7 @@ export function DischargeTab({
             <div className="flex items-center justify-between text-2xs text-ink-600 bg-ink-50/70 p-2 rounded border border-ink-100">
               <span>Take-Home Prescriptions:</span>
               <span className="font-bold text-ink-900">
-                {dischargeSummary?.takeHomePrescriptions?.length ?? dischargeMedicationsCount} take-home medications
+                {`${dischargeSummary?.takeHomePrescriptions?.length ?? dischargeMedicationsCount} take-home medications`}
               </span>
             </div>
             <div className="flex items-center justify-between gap-2">

@@ -160,6 +160,13 @@ describe('Doctor Rounding Cockpit UI Components', () => {
       createdByUserId: 'usr-1',
       signedAt: new Date(),
       roundNoteId: 'round-1',
+      isVerbal: false,
+      verbalOrderStatus: 'none',
+      verbalDoctorName: null,
+      verbalClinicalRationale: null,
+      cosignedByDoctorId: null,
+      cosignedAt: null,
+      cosignNotes: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -241,6 +248,8 @@ describe('Doctor Rounding Cockpit UI Components', () => {
       expect(html).toContain('Diclofenac 50mg');
       expect(html).toContain('New Orders to Authorize');
       expect(html).toContain('Azithromycin 500mg Oral');
+      expect(html).toContain('Assigned Times:');
+      expect(html).toContain('08:00');
     });
   });
 

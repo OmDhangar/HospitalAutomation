@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Alert, Badge, Button, Card, Modal } from '@/components/ui';
-import { AlertTriangleIcon, CheckIcon, RefreshCwIcon, ClockIcon } from '@/components/icons';
+import { Alert, Button } from '@/components/ui';
+import { AlertTriangleIcon, ClockIcon } from '@/components/icons';
 import type { GivenWithoutBillItem } from '@/lib/services/discharge-billing';
 
 interface GivenWithoutBillModalProps {
@@ -25,13 +25,13 @@ export function GivenWithoutBillModal({
   const statusTone = (status: string | null) => {
     switch (status) {
       case 'failed':
-        return 'error';
+        return 'bg-rose-100 text-rose-800 ring-1 ring-inset ring-rose-300';
       case 'pending_pricing':
-        return 'warn';
+        return 'bg-amber-100 text-amber-800 ring-1 ring-inset ring-amber-300';
       case 'pending':
-        return 'neutral';
+        return 'bg-ink-100 text-ink-700 ring-1 ring-inset ring-ink-300';
       default:
-        return 'warn';
+        return 'bg-amber-100 text-amber-800 ring-1 ring-inset ring-amber-300';
     }
   };
 
@@ -64,12 +64,19 @@ export function GivenWithoutBillModal({
       )}
 
       {isOpen && (
-        <Modal
-          title="Given-Without-Bill Audit"
-          onClose={() => setIsOpen(false)}
-          className="max-w-2xl"
-        >
-          <div className="space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/40 p-4 backdrop-blur-2xs">
+          <div className="w-full max-w-2xl rounded-2xl border border-ink-200 bg-white p-5 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-ink-100 pb-3">
+              <h3 className="text-base font-bold text-ink-950">Given-Without-Bill Audit</h3>
+              <button
+                type="button"
+                onClick={() => setIsOpen(false)}
+                className="text-ink-400 hover:text-ink-700 text-sm font-semibold"
+              >
+                ✕
+              </button>
+            </div>
+
             <Alert tone="warn">
               <div className="text-xs sm:text-sm">
                 <strong>Bedside doses pending billing:</strong> The following medications were administered at the bedside by nursing staff, but have not yet been posted to the active bill lines. Review and resolve prior to discharge billing finalization.
@@ -88,9 +95,9 @@ export function GivenWithoutBillModal({
                         Dose: <span className="font-medium text-ink-800">{item.doseGiven ?? 'Standard dose'}</span> · Route: {item.routeGiven ?? 'Bedside'}
                       </div>
                     </div>
-                    <Badge tone={statusTone(item.outboxStatus)} size="sm">
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold ${statusTone(item.outboxStatus)}`}>
                       {statusLabel(item.outboxStatus)}
-                    </Badge>
+                    </span>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-500 pt-1">
@@ -129,7 +136,7 @@ export function GivenWithoutBillModal({
               </Button>
             </div>
           </div>
-        </Modal>
+        </div>
       )}
     </>
   );

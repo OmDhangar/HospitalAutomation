@@ -39,9 +39,9 @@ export default async function DischargePage({ params }: { params: Promise<any> }
   // Look up doctor registration details
   try {
     attendingDoctor = await withTenant(session.hospitalId, async (tx) => {
-      if (admission.admittingDoctorId) {
+      if (admission.doctorId) {
         return tx.query.doctors.findFirst({
-          where: and(eq(doctors.id, admission.admittingDoctorId), eq(doctors.hospitalId, session.hospitalId)),
+          where: and(eq(doctors.id, admission.doctorId), eq(doctors.hospitalId, session.hospitalId)),
           columns: { id: true, name: true, registrationNo: true },
         });
       }

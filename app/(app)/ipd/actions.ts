@@ -380,7 +380,7 @@ export async function recordAllergyAssessmentAction(args: {
 async function resolveDoctorId(
   hospitalId: string,
   userId: string,
-  admissionId: string,
+  admissionId?: string,
   requestedDoctorId?: string,
 ): Promise<string> {
   return withTenant(hospitalId, async (tx) => {
@@ -951,7 +951,7 @@ export async function reconcileHomeMedicationAction(args: {
   reconciliationStatus?: 'continued' | 'stopped' | 'modified';
   reconciliationNotes?: string;
 }): Promise<{ ok: boolean; id: string }> {
-  const session = await authorize('ipd.care');
+  const session = await authorize('ipd.view');
 
   const res = await reconcileHomeMedication({
     hospitalId: session.hospitalId,

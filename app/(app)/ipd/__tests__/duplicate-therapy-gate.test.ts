@@ -33,7 +33,7 @@ vi.mock('@/lib/db', () => ({
           where: () => {
             const rows = [
               {
-                id: 'adm-1',
+                admissionId: 'adm-1',
                 encounterId: 'enc-1',
                 patientId: 'pat-1',
                 status: 'nkda',

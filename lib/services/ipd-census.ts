@@ -1,5 +1,5 @@
 import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
-import { withTenant, db as defaultDb } from '@/lib/db';
+import { withTenant } from '@/lib/db';
 import {
   admissions,
   bedAssignments,
@@ -80,16 +80,27 @@ export async function assertBedAvailableForAdmission(
   bedId: string,
   executorDb?: any,
 ): Promise<void> {
-  const queryRunner = executorDb?.query?.beds ?? defaultDb.query.beds;
-  const bed = await queryRunner.findFirst({
-    where: and(eq(beds.id, bedId), eq(beds.hospitalId, hospitalId)),
-  });
+  const check = (bed: any) => {
+    if (!bed) throw new Error('Bed not found');
+    if (bed.status === 'cleaning') {
+      throw new BedCleaningInProgressError(
+        `Bed ${bed.label} is currently in cleaning status. Housekeeping must sanitize and mark bed cleaned before admitting a patient.`,
+      );
+    }
+  };
 
-  if (!bed) throw new Error('Bed not found');
-  if (bed.status === 'cleaning') {
-    throw new BedCleaningInProgressError(
-      `Bed ${bed.label} is currently in cleaning status. Housekeeping must sanitize and mark bed cleaned before admitting a patient.`,
-    );
+  if (executorDb?.query?.beds) {
+    const bed = await executorDb.query.beds.findFirst({
+      where: and(eq(beds.id, bedId), eq(beds.hospitalId, hospitalId)),
+    });
+    check(bed);
+  } else {
+    await withTenant(hospitalId, async (tx) => {
+      const bed = await tx.query.beds.findFirst({
+        where: and(eq(beds.id, bedId), eq(beds.hospitalId, hospitalId)),
+      });
+      check(bed);
+    });
   }
 }
 

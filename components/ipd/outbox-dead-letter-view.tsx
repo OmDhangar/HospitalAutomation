@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useTransition } from 'react';
-import { Badge, Button, Card, EmptyState } from '@/components/ui';
-import { AlertTriangleIcon, CheckIcon, RefreshCwIcon, ClockIcon } from '@/components/icons';
+import { Button, EmptyState } from '@/components/ui';
+import { AlertTriangleIcon, RefreshCwIcon, ClockIcon } from '@/components/icons';
 import { retryDeadLetterAction } from '@/app/(app)/ipd/actions';
 import type { SelectIpdEmarIntegrationOutbox } from '@/lib/db/schema';
 
@@ -32,12 +32,12 @@ export function OutboxDeadLetterView({ items }: OutboxDeadLetterViewProps) {
 
   if (activeItems.length === 0) {
     return (
-      <Card className="p-6 text-center">
+      <div className="rounded-xl border border-ink-200 bg-white p-6 text-center shadow-2xs">
         <EmptyState
           title="Outbox is healthy"
           hint="There are no dead-lettered or failed eMAR integration events. All administered medications have posted to billing and stock."
         />
-      </Card>
+      </div>
     );
   }
 
@@ -58,7 +58,7 @@ export function OutboxDeadLetterView({ items }: OutboxDeadLetterViewProps) {
             </h3>
           </div>
           <span className="text-xs text-ink-500">
-            eMAR Bedside Billing & Stock Sync
+            eMAR Bedside Billing &amp; Stock Sync
           </span>
         </div>
 
@@ -83,9 +83,15 @@ export function OutboxDeadLetterView({ items }: OutboxDeadLetterViewProps) {
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <Badge tone={item.status === 'failed' ? 'error' : 'warn'} size="sm">
+                    <span
+                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold ${
+                        item.status === 'failed'
+                          ? 'bg-rose-100 text-rose-800 ring-1 ring-inset ring-rose-300'
+                          : 'bg-amber-100 text-amber-800 ring-1 ring-inset ring-amber-300'
+                      }`}
+                    >
                       {item.status === 'failed' ? 'Failed (Dead-Letter)' : 'Pending Pricing'}
-                    </Badge>
+                    </span>
                     <Button
                       type="button"
                       size="sm"

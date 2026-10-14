@@ -351,7 +351,7 @@ export async function signRoundOrders(args: {
   admissionId: string;
   doctorId: string;
   authorUserId: string;
-  notes: string;
+  notes?: string;
   resolutions: OrderResolution[];
   allergyOverrideReason?: string;
   duplicateOverrideReason?: string;
@@ -495,7 +495,7 @@ export async function signRoundOrders(args: {
           .set({
             status: 'signed',
             signedAt: now,
-            evaluationNotes: args.notes,
+            evaluationNotes: args.notes ?? '',
             doctorId: args.doctorId,
             authorUserId: args.authorUserId,
             updatedAt: now,
@@ -511,7 +511,7 @@ export async function signRoundOrders(args: {
             patientId: admission.patientId,
             doctorId: args.doctorId,
             authorUserId: args.authorUserId,
-            evaluationNotes: args.notes,
+            evaluationNotes: args.notes ?? '',
             status: 'signed',
             signedAt: now,
           })
