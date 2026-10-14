@@ -1,8 +1,10 @@
 import { and, desc, eq, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { withTenant, type Tx } from '@/lib/db';
+import { getAdminDb } from '@/lib/db/admin';
 import {
   admissions,
   careEntries,
+  hospitals,
   ipdEmarIntegrationOutbox,
   ipdMedicationAdministrations,
   medicines,
@@ -48,7 +50,7 @@ export async function claimOutboxBatch(args: {
         RETURNING ipd_emar_integration_outbox.*;
       `);
 
-      return result.map((r: any) => ({
+      return (result || []).map((r: any) => ({
         id: r.id,
         hospitalId: r.hospital_id,
         administrationId: r.administration_id,
@@ -92,10 +94,18 @@ export async function recoverStuckOutboxClaims(args: {
         RETURNING id;
       `);
 
-      return result.length;
+      return result?.length ?? 0;
     },
     { clinical: true },
   );
+}
+
+/**
+ * Exponential backoff calculation for outbox retries.
+ * Formula: min(300, 2^attempts * 5)
+ */
+export function calculateOutboxBackoffSeconds(attempts: number): number {
+  return Math.min(300, Math.pow(2, attempts) * 5);
 }
 
 /**
@@ -314,7 +324,7 @@ export async function processOutboxItem(args: {
           return { outcome: 'failed', error: err?.message };
         }
 
-        const backoffSeconds = Math.pow(2, attempts) * 30;
+        const backoffSeconds = calculateOutboxBackoffSeconds(attempts);
         const scheduledFor = new Date(Date.now() + backoffSeconds * 1000);
 
         await tx
@@ -333,6 +343,66 @@ export async function processOutboxItem(args: {
       { clinical: true },
     );
   }
+}
+
+/**
+ * Lists outbox items that are failed or pending pricing (dead-letter queue).
+ */
+export async function listDeadLetterOutboxItems(args: {
+  hospitalId: string;
+  limit?: number;
+}): Promise<SelectIpdEmarIntegrationOutbox[]> {
+  const limit = args.limit ?? 50;
+  return withTenant(
+    args.hospitalId,
+    async (tx: Tx) => {
+      const rows = await tx
+        .select()
+        .from(ipdEmarIntegrationOutbox)
+        .where(
+          and(
+            eq(ipdEmarIntegrationOutbox.hospitalId, args.hospitalId),
+            inArray(ipdEmarIntegrationOutbox.status, ['failed', 'pending_pricing']),
+          ),
+        )
+        .orderBy(desc(ipdEmarIntegrationOutbox.createdAt))
+        .limit(limit);
+
+      return rows as SelectIpdEmarIntegrationOutbox[];
+    },
+    { clinical: true },
+  );
+}
+
+/**
+ * Resets a dead-lettered or failed outbox item back to pending for immediate retry.
+ */
+export async function retryDeadLetterItem(args: {
+  hospitalId: string;
+  outboxId: string;
+}): Promise<boolean> {
+  return withTenant(
+    args.hospitalId,
+    async (tx: Tx) => {
+      await tx
+        .update(ipdEmarIntegrationOutbox)
+        .set({
+          status: 'pending',
+          attempts: 0,
+          scheduledFor: new Date(),
+          claimedAt: null,
+          lastError: null,
+        })
+        .where(
+          and(
+            eq(ipdEmarIntegrationOutbox.hospitalId, args.hospitalId),
+            eq(ipdEmarIntegrationOutbox.id, args.outboxId),
+          ),
+        );
+      return true;
+    },
+    { clinical: true },
+  );
 }
 
 /**
@@ -355,7 +425,7 @@ export async function reconcilePendingPricingItems(args: {
         RETURNING id;
       `);
 
-      return result.length;
+      return result?.length ?? 0;
     },
     { clinical: true },
   );
@@ -385,4 +455,50 @@ export async function processPendingOutboxBatch(args: {
   }
 
   return { processed, pendingPricing, failed };
+}
+
+/**
+ * Cross-tenant drain of IPD eMAR outbox across all hospitals.
+ * Recovers stuck claims past lease timeout and processes pending batches.
+ */
+export async function drainAllHospitalsIpdEmarOutbox(now: Date = new Date()): Promise<{
+  processed: number;
+  pendingPricing: number;
+  failed: number;
+  recoveredStuckClaims: number;
+}> {
+  const adminDb = getAdminDb();
+  let hospitalIds: string[] = [];
+  try {
+    const rows = await adminDb.select({ id: hospitals.id }).from(hospitals);
+    hospitalIds = rows.map((r: { id: string }) => r.id);
+  } catch {
+    hospitalIds = [];
+  }
+
+  let totalProcessed = 0;
+  let totalPendingPricing = 0;
+  let totalFailed = 0;
+  let totalRecovered = 0;
+
+  for (const hospitalId of hospitalIds) {
+    try {
+      const recovered = await recoverStuckOutboxClaims({ hospitalId, now });
+      totalRecovered += recovered;
+
+      const batch = await processPendingOutboxBatch({ hospitalId });
+      totalProcessed += batch.processed;
+      totalPendingPricing += batch.pendingPricing;
+      totalFailed += batch.failed;
+    } catch (err) {
+      console.error(`[ipd-outbox-drain] Failed processing for hospital ${hospitalId}:`, err);
+    }
+  }
+
+  return {
+    processed: totalProcessed,
+    pendingPricing: totalPendingPricing,
+    failed: totalFailed,
+    recoveredStuckClaims: totalRecovered,
+  };
 }

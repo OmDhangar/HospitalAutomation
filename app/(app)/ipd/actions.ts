@@ -52,6 +52,7 @@ import {
   type RecordExceptionInput,
   type RecordNurseUrgentAdminInput,
 } from '@/lib/services/ipd-emar';
+import { retryDeadLetterItem } from '@/lib/services/ipd-emar-outbox';
 
 /**
  * The desk's IPD actions (IPD plan §5.3–5.5, task T1.6). Form posts that
@@ -747,6 +748,18 @@ export async function recordClinicalNoteAction(args: {
   );
   revalidatePath(`/ipd/patients/${args.admissionId}/notes`);
   return { ok: true, id: res.id };
+}
+
+export async function retryDeadLetterAction(args: {
+  outboxId: string;
+}): Promise<{ ok: boolean }> {
+  const session = await authorize('ipd.view');
+  await retryDeadLetterItem({
+    hospitalId: session.hospitalId,
+    outboxId: args.outboxId,
+  });
+  revalidatePath('/settings/ipd');
+  return { ok: true };
 }
 
 

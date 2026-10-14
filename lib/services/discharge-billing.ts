@@ -943,3 +943,95 @@ export async function getEncounterPayer(hospitalId: string, encounterId: string)
       .where(and(eq(encounterPayers.encounterId, encounterId), isNull(encounterPayers.voidedAt))),
   );
 }
+
+export type GivenWithoutBillItem = {
+  administrationId: string;
+  admissionId: string;
+  patientName: string;
+  patientMrn: string | null;
+  medicineName: string;
+  doseGiven: string | null;
+  routeGiven: string | null;
+  actualTime: Date;
+  nurseName: string | null;
+  outboxStatus: string | null;
+  lastError: string | null;
+};
+
+/**
+ * Returns administered medication doses that do not have an active matching bill item.
+ * Audits unbilled doses prior to discharge billing finalization.
+ */
+export async function getGivenWithoutBillReport(args: {
+  hospitalId: string;
+  admissionId?: string;
+}): Promise<GivenWithoutBillItem[]> {
+  return withTenant(
+    args.hospitalId,
+    async (tx: Tx) => {
+      const rows = await tx.execute<{
+        administration_id: string;
+        admission_id: string;
+        patient_name: string;
+        patient_mrn: string | null;
+        medicine_name: string;
+        dose_given: string | null;
+        route_given: string | null;
+        actual_time: string | Date;
+        nurse_name: string | null;
+        outbox_status: string | null;
+        last_error: string | null;
+      }>(sql`
+        SELECT
+          a.id AS administration_id,
+          a.admission_id,
+          p.name AS patient_name,
+          p.mrn AS patient_mrn,
+          m.name AS medicine_name,
+          a.dose_given,
+          a.route_given,
+          a.actual_time,
+          u.name AS nurse_name,
+          o.status AS outbox_status,
+          o.last_error
+        FROM ipd_medication_administrations a
+        INNER JOIN admissions adm ON adm.id = a.admission_id AND adm.hospital_id = a.hospital_id
+        INNER JOIN patients p ON p.id = adm.patient_id AND p.hospital_id = a.hospital_id
+        INNER JOIN ipd_medication_orders ord ON ord.id = a.order_id AND ord.hospital_id = a.hospital_id
+        INNER JOIN medicines m ON m.id = ord.medicine_id AND m.hospital_id = a.hospital_id
+        LEFT JOIN users u ON u.id = a.nurse_user_id
+        LEFT JOIN ipd_emar_integration_outbox o ON o.administration_id = a.id AND o.integration_type = 'billing' AND o.event_type = 'administer'
+        WHERE a.hospital_id = ${args.hospitalId}::uuid
+          AND a.outcome = 'administered'
+          AND a.voided_at IS NULL
+          ${args.admissionId ? sql`AND a.admission_id = ${args.admissionId}::uuid` : sql``}
+          AND NOT EXISTS (
+            SELECT 1 FROM bill_items bi
+            WHERE bi.hospital_id = a.hospital_id
+              AND (
+                (a.care_entry_id IS NOT NULL AND bi.care_entry_id = a.care_entry_id)
+                OR (bi.admission_id = a.admission_id AND bi.medicine_id = ord.medicine_id AND bi.voided_at IS NULL)
+              )
+              AND bi.voided_at IS NULL
+          )
+        ORDER BY a.actual_time DESC;
+      `);
+
+      return rows.map((r) => ({
+        administrationId: r.administration_id,
+        admissionId: r.admission_id,
+        patientName: r.patient_name,
+        patientMrn: r.patient_mrn,
+        medicineName: r.medicine_name,
+        doseGiven: r.dose_given,
+        routeGiven: r.route_given,
+        actualTime: new Date(r.actual_time),
+        nurseName: r.nurse_name,
+        outboxStatus: r.outbox_status ?? null,
+        lastError: r.last_error ?? null,
+      }));
+    },
+    { clinical: true },
+  );
+}
+

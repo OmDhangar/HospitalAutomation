@@ -10,7 +10,8 @@ import { PAYER_KIND_LABELS } from '@/lib/domain/payer';
 import { can } from '@/lib/domain/permissions';
 import { isMockPhone } from '@/lib/domain/phone';
 import { formatTimeIn, serviceDateIn } from '@/lib/domain/time';
-import { getDischargeBillView, type BillLine } from '@/lib/services/discharge-billing';
+import { getDischargeBillView, getGivenWithoutBillReport, type BillLine } from '@/lib/services/discharge-billing';
+import { GivenWithoutBillModal } from '@/components/ipd/billing/given-without-bill-modal';
 import {
   discountLineAction,
   finalizeAction,
@@ -47,7 +48,10 @@ export default async function DischargeBillPage({ params, searchParams }: PagePr
       </Card>
     );
   }
-  const view = await getDischargeBillView({ hospitalId: session.hospitalId, admissionId: id });
+  const [view, unbilledDoses] = await Promise.all([
+    getDischargeBillView({ hospitalId: session.hospitalId, admissionId: id }),
+    getGivenWithoutBillReport({ hospitalId: session.hospitalId, admissionId: id }),
+  ]);
   if (!view) notFound();
 
   const final = view.bill?.status === 'final';
@@ -82,6 +86,25 @@ export default async function DischargeBillPage({ params, searchParams }: PagePr
         now={new Date()}
         sticky={false}
       />
+
+      {unbilledDoses.length > 0 ? (
+        <Card className="border-amber-300 bg-amber-50/70 p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangleIcon className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <h4 className="text-sm font-semibold text-amber-900">
+                  {unbilledDoses.length} medication dose{unbilledDoses.length > 1 ? 's' : ''} given without bill line
+                </h4>
+                <p className="text-xs text-amber-700 mt-0.5">
+                  Doses were administered at the bedside by nursing staff but are not yet posted to this bill. Review before discharge finalization.
+                </p>
+              </div>
+            </div>
+            <GivenWithoutBillModal unbilledItems={unbilledDoses} admissionId={id} />
+          </div>
+        </Card>
+      ) : null}
 
       {typeof query.error === 'string' ? <Alert tone="error">{query.error}</Alert> : null}
       {typeof query.saved === 'string' ? (
