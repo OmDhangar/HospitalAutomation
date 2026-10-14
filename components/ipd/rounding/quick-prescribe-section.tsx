@@ -17,6 +17,7 @@ export interface QuickPrescribeSectionProps {
   onAddNewOrder: (order: DraftOrderInput) => void;
   onRemoveNewOrder: (index: number) => void;
   activeAllergies?: AllergenItem[];
+  existingActiveOrders?: Array<{ id: string; medicineName: string; medicineId: string }>;
   className?: string;
 }
 
@@ -111,6 +112,7 @@ export function QuickPrescribeSection({
   onAddNewOrder,
   onRemoveNewOrder,
   activeAllergies = [],
+  existingActiveOrders = [],
   className,
 }: QuickPrescribeSectionProps) {
   // Builder state
@@ -126,6 +128,7 @@ export function QuickPrescribeSection({
   const [prnIndication, setPrnIndication] = useState<string>('');
   const [prnMinIntervalHours, setPrnMinIntervalHours] = useState<number>(6);
   const [prnMaxDailyDoses, setPrnMaxDailyDoses] = useState<number>(4);
+  const [scheduleTimes, setScheduleTimes] = useState<string[]>(['08:00']);
   const [specialInstructions, setSpecialInstructions] = useState<string>('');
   const [validationError, setValidationError] = useState<string | null>(null);
 
@@ -137,8 +140,48 @@ export function QuickPrescribeSection({
     return medLower.includes(substanceLower) || substanceLower.includes(medLower);
   });
 
+  // Check for duplicate therapy match against active orders
+  const duplicateWarning = existingActiveOrders.find((order) => {
+    if (!medicineName.trim()) return false;
+    const medLower = medicineName.toLowerCase();
+    const existingLower = order.medicineName.toLowerCase();
+    return (
+      (medicineId && order.medicineId === medicineId) ||
+      medLower.includes(existingLower) ||
+      existingLower.includes(medLower)
+    );
+  });
+
+  const handleUpdateScheduleTime = (index: number, newTime: string) => {
+    setScheduleTimes((prev) => {
+      const copy = [...prev];
+      copy[index] = newTime;
+      return copy;
+    });
+  };
+
+  const handleAddScheduleTime = () => {
+    setScheduleTimes((prev) => {
+      const last = prev[prev.length - 1] || '08:00';
+      const [h, m] = last.split(':').map(Number);
+      const nextH = (h + 4) % 24;
+      const nextTime = `${String(nextH).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}`;
+      return [...prev, nextTime];
+    });
+  };
+
+  const handleRemoveScheduleTime = (index: number) => {
+    setScheduleTimes((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const applyPreset = (preset: typeof COMMON_PRESETS[0]) => {
-    setMedicineId(`preset-${preset.medicineName}`);
+    const matchingFrequent = frequentMedicines.find(
+      (fm) =>
+        fm.name.toLowerCase() === preset.medicineName.toLowerCase() ||
+        fm.name.toLowerCase().includes(preset.medicineName.toLowerCase()) ||
+        preset.medicineName.toLowerCase().includes(fm.name.toLowerCase()),
+    );
+    setMedicineId(matchingFrequent ? matchingFrequent.id : '');
     setMedicineName(preset.medicineName);
     setDoseAmount(preset.doseAmount);
     setDoseUnit(preset.doseUnit);
@@ -146,6 +189,11 @@ export function QuickPrescribeSection({
     setFrequencyCode(preset.frequencyCode);
     setScheduleType(preset.scheduleType);
     setDurationDays(preset.durationDays);
+    setScheduleTimes(
+      preset.scheduleTimes && preset.scheduleTimes.length > 0
+        ? [...preset.scheduleTimes]
+        : ['08:00'],
+    );
     setPrnIndication(preset.prnIndication || '');
     setPrnMinIntervalHours(preset.prnMinIntervalHours || 6);
     setPrnMaxDailyDoses(preset.prnMaxDailyDoses || 4);
@@ -158,14 +206,19 @@ export function QuickPrescribeSection({
     setFrequencyCode(code);
     if (code === 'PRN') {
       setScheduleType('prn');
+      setScheduleTimes([]);
       if (!prnIndication) setPrnIndication('As needed for symptoms');
     } else if (code === 'Stat') {
       setScheduleType('stat');
+      setScheduleTimes(['Immediate']);
       setDurationDays(1);
     } else {
       setScheduleType('scheduled');
       const opt = FREQ_OPTIONS[code];
-      if (opt) setDurationDays(opt.defaultDays);
+      if (opt) {
+        setDurationDays(opt.defaultDays);
+        setScheduleTimes(opt.times && opt.times.length > 0 ? [...opt.times] : ['08:00']);
+      }
     }
   };
 
@@ -191,26 +244,27 @@ export function QuickPrescribeSection({
       return;
     }
 
-    const freqDef = FREQ_OPTIONS[frequencyCode];
-    const scheduleTimes =
+    const finalScheduleTimes =
       frequencyCode === 'PRN'
         ? []
         : frequencyCode === 'Stat'
           ? ['Immediate']
-          : freqDef?.times || ['08:00'];
+          : scheduleTimes.length > 0
+            ? scheduleTimes
+            : ['08:00'];
 
     const startsAt = new Date();
     const endsAt = new Date(startsAt.getTime() + durationDays * 86400000);
 
     const orderPayload: DraftOrderInput = {
-      medicineId: medicineId || `custom-${Date.now()}`,
+      medicineId: medicineId || '',
       medicineName: trimmedName,
       doseAmount: trimmedDose,
       doseUnit: doseUnit.trim(),
       route,
       scheduleType,
       frequencyCode,
-      scheduleTimes,
+      scheduleTimes: finalScheduleTimes,
       isPrn: frequencyCode === 'PRN',
       prnIndication: frequencyCode === 'PRN' ? prnIndication.trim() : null,
       prnMinIntervalHours: frequencyCode === 'PRN' ? prnMinIntervalHours : null,
@@ -232,6 +286,7 @@ export function QuickPrescribeSection({
     setFrequencyCode('OD');
     setScheduleType('scheduled');
     setDurationDays(3);
+    setScheduleTimes(['08:00']);
     setPrnIndication('');
     setSpecialInstructions('');
     setIsBuilderOpen(false);
@@ -329,6 +384,16 @@ export function QuickPrescribeSection({
             </div>
           )}
 
+          {duplicateWarning && (
+            <div className="rounded-lg border-2 border-amber-500 bg-amber-50 p-2.5 text-xs text-amber-900 flex items-center gap-2">
+              <span className="text-sm font-bold">⚠️</span>
+              <div>
+                <strong className="font-semibold">Duplicate Active Therapy Alert:</strong> A concurrent order for{' '}
+                <span className="underline font-bold">{duplicateWarning.medicineName}</span> is already active for this patient.
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
             {/* Drug Name */}
             <div className="sm:col-span-2">
@@ -419,6 +484,102 @@ export function QuickPrescribeSection({
               />
             </div>
           </div>
+
+          {/* Doctor-Assigned Administration Timings */}
+          {scheduleType === 'scheduled' && (
+            <div className="rounded-xl border border-brand-200 bg-brand-50/40 p-3 space-y-2.5">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <label className="block text-xs font-bold text-brand-950">
+                    Administration Timings (Assigned Hours) <span className="text-rose-500">*</span>
+                  </label>
+                  <p className="text-[11px] text-brand-800">
+                    Doctor-approved medication times. Customize exact administration hours for this patient:
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleAddScheduleTime}
+                  className="self-start sm:self-auto inline-flex items-center gap-1 rounded-md border border-brand-300 bg-white px-2 py-1 text-[11px] font-semibold text-brand-800 hover:bg-brand-50 shadow-2xs"
+                >
+                  + Add Time Slot
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                {scheduleTimes.map((time, idx) => (
+                  <div key={idx} className="flex items-center gap-1.5 rounded-lg border border-brand-300 bg-white px-2 py-1 shadow-2xs">
+                    <span className="font-mono text-[11px] font-bold text-brand-900">
+                      Dose {idx + 1}:
+                    </span>
+                    <input
+                      type="time"
+                      value={time}
+                      onChange={(e) => handleUpdateScheduleTime(idx, e.target.value)}
+                      className="rounded border border-ink-200 bg-ink-50 px-1.5 py-0.5 font-mono text-xs font-bold text-ink-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500"
+                    />
+                    {scheduleTimes.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveScheduleTime(idx)}
+                        className="rounded p-0.5 text-ink-400 hover:text-rose-600"
+                        title="Remove this slot"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Quick Presets for Common Ward Shift Timings */}
+              <div className="flex flex-wrap items-center gap-1 pt-1 text-[11px] text-brand-900">
+                <span className="font-semibold text-brand-950">Quick Slots:</span>
+                <button
+                  type="button"
+                  onClick={() => setScheduleTimes(['08:00'])}
+                  className="rounded border border-brand-200 bg-white px-2 py-0.5 text-[10px] hover:bg-brand-100"
+                >
+                  Morning 8 AM
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScheduleTimes(['10:00'])}
+                  className="rounded border border-brand-200 bg-white px-2 py-0.5 text-[10px] hover:bg-brand-100"
+                >
+                  Morning 10 AM (Post-Breakfast)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScheduleTimes(['08:00', '20:00'])}
+                  className="rounded border border-brand-200 bg-white px-2 py-0.5 text-[10px] hover:bg-brand-100"
+                >
+                  BD: 8 AM & 8 PM
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScheduleTimes(['09:00', '21:00'])}
+                  className="rounded border border-brand-200 bg-white px-2 py-0.5 text-[10px] hover:bg-brand-100"
+                >
+                  BD: 9 AM & 9 PM
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScheduleTimes(['08:00', '14:00', '20:00'])}
+                  className="rounded border border-brand-200 bg-white px-2 py-0.5 text-[10px] hover:bg-brand-100"
+                >
+                  TDS: 8 AM, 2 PM, 8 PM
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScheduleTimes(['21:00'])}
+                  className="rounded border border-brand-200 bg-white px-2 py-0.5 text-[10px] hover:bg-brand-100"
+                >
+                  Bedtime 9 PM
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* PRN Details if selected */}
           {frequencyCode === 'PRN' && (
@@ -524,8 +685,13 @@ export function QuickPrescribeSection({
                       {ord.frequencyCode}
                     </span>
                   </div>
-                  <div className="text-[11px] text-emerald-800 flex gap-3">
+                  <div className="text-[11px] text-emerald-800 flex flex-wrap items-center gap-x-3 gap-y-1">
                     <span>Duration: {ord.durationDays} days</span>
+                    {ord.scheduleTimes && ord.scheduleTimes.length > 0 && !ord.isPrn && (
+                      <span className="font-semibold text-emerald-950">
+                        Assigned Times: {ord.scheduleTimes.join(', ')}
+                      </span>
+                    )}
                     {ord.isPrn && <span>Indication: {ord.prnIndication}</span>}
                     {ord.specialInstructions && <span>Note: {ord.specialInstructions}</span>}
                   </div>

@@ -2,6 +2,8 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { withTenant, type Tx } from '@/lib/db';
 import {
   admissions,
+  clinicalAuditLogs,
+  ipdAllergyAssessments,
   ipdClinicalRounds,
   ipdMedicationOrders,
   ipdMedicationOrderActions,
@@ -15,6 +17,7 @@ import { isId } from '@/lib/domain/undo';
 export interface DraftOrderInput {
   medicineId: string;
   medicineName: string;
+  genericName?: string | null;
   strength?: string | null;
   form?: string | null;
   doseAmount: string;
@@ -50,6 +53,84 @@ export class AuthorNotLinkedDoctorError extends Error {
     super(message);
     this.name = 'AuthorNotLinkedDoctorError';
   }
+}
+
+export class AllergyAssessmentRequiredError extends Error {
+  constructor(
+    message = 'Allergy assessment is unreviewed. Patient drug allergy review is required before signing medication orders.',
+  ) {
+    super(message);
+    this.name = 'AllergyAssessmentRequiredError';
+  }
+}
+
+export class AllergyConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AllergyConflictError';
+  }
+}
+
+export class DuplicateTherapyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DuplicateTherapyError';
+  }
+}
+
+/**
+ * Checks for allergen conflict using ingredient matching and class aliases.
+ */
+export function checkAllergyConflict(
+  allergens: Array<{ substance: string }>,
+  order: { medicineName: string; genericName?: string | null },
+): { hasConflict: boolean; allergenSubstance?: string } {
+  const medicineText = `${order.medicineName} ${order.genericName ?? ''}`.toLowerCase();
+
+  for (const allergen of allergens) {
+    const substance = allergen.substance?.trim()?.toLowerCase() ?? '';
+    if (!substance) continue;
+
+    if (medicineText.includes(substance) || substance.includes(order.medicineName.toLowerCase())) {
+      return { hasConflict: true, allergenSubstance: allergen.substance };
+    }
+
+    if (
+      substance.includes('penicillin') &&
+      (medicineText.includes('amox') ||
+        medicineText.includes('ampic') ||
+        medicineText.includes('augmentin') ||
+        medicineText.includes('penicillin') ||
+        medicineText.includes('piperacillin'))
+    ) {
+      return { hasConflict: true, allergenSubstance: allergen.substance };
+    }
+    if (
+      substance.includes('cephalosporin') &&
+      (medicineText.includes('cef') || medicineText.includes('ceph'))
+    ) {
+      return { hasConflict: true, allergenSubstance: allergen.substance };
+    }
+    if (
+      substance.includes('sulfa') &&
+      (medicineText.includes('sulfa') ||
+        medicineText.includes('bactrim') ||
+        medicineText.includes('cotrimoxazole'))
+    ) {
+      return { hasConflict: true, allergenSubstance: allergen.substance };
+    }
+    if (
+      substance.includes('nsaid') &&
+      (medicineText.includes('ibuprofen') ||
+        medicineText.includes('diclofenac') ||
+        medicineText.includes('naproxen') ||
+        medicineText.includes('aspirin') ||
+        medicineText.includes('ketorolac'))
+    ) {
+      return { hasConflict: true, allergenSubstance: allergen.substance };
+    }
+  }
+  return { hasConflict: false };
 }
 
 /**
@@ -272,10 +353,116 @@ export async function signRoundOrders(args: {
   authorUserId: string;
   notes: string;
   resolutions: OrderResolution[];
+  allergyOverrideReason?: string;
+  duplicateOverrideReason?: string;
 }): Promise<{ roundId: string; signedOrderIds: string[] }> {
   return withTenant(
     args.hospitalId,
     async (tx: Tx) => {
+      // 1. Verify Allergy Assessment Gate
+      const [currentAllergy] = await tx
+        .select({
+          status: ipdAllergyAssessments.status,
+          allergens: ipdAllergyAssessments.allergens,
+        })
+        .from(ipdAllergyAssessments)
+        .where(
+          and(
+            eq(ipdAllergyAssessments.hospitalId, args.hospitalId),
+            eq(ipdAllergyAssessments.admissionId, args.admissionId),
+            eq(ipdAllergyAssessments.isCurrent, true),
+          ),
+        );
+
+      const allergyStatus = currentAllergy?.status ?? 'unreviewed';
+      if (allergyStatus === 'unreviewed') {
+        throw new AllergyAssessmentRequiredError();
+      }
+
+      const documentedAllergens: Array<{ substance: string }> = (
+        (currentAllergy?.allergens as any[]) ?? []
+      ).map((item) => (typeof item === 'string' ? { substance: item } : { substance: item.substance ?? String(item) }));
+
+      // 2. Fetch Active Orders for Duplicate Therapy Gate
+      const activeExistingOrders = await tx
+        .select({
+          id: ipdMedicationOrders.id,
+          medicineId: ipdMedicationOrders.medicineId,
+          medicineName: ipdMedicationOrders.medicineName,
+        })
+        .from(ipdMedicationOrders)
+        .where(
+          and(
+            eq(ipdMedicationOrders.hospitalId, args.hospitalId),
+            eq(ipdMedicationOrders.admissionId, args.admissionId),
+            inArray(ipdMedicationOrders.status, ['active', 'on_hold']),
+          ),
+        );
+
+      for (const res of args.resolutions) {
+        if (res.type === 'new' || res.type === 'modify') {
+          const ord = res.type === 'new' ? res.order : res.modifiedOrder;
+          if (ord.medicineName) {
+            // Check allergy conflict
+            if (allergyStatus === 'allergies_documented' && documentedAllergens.length > 0) {
+              const conflict = checkAllergyConflict(documentedAllergens, {
+                medicineName: ord.medicineName,
+                genericName: (ord as any).genericName,
+              });
+              if (conflict.hasConflict) {
+                if (!args.allergyOverrideReason || args.allergyOverrideReason.trim().length < 5) {
+                  throw new AllergyConflictError(
+                    `Documented allergy to ${conflict.allergenSubstance} matches prescribed medicine ${ord.medicineName}. A logged clinical override reason (>= 5 chars) is required to proceed.`,
+                  );
+                }
+                await tx.insert(clinicalAuditLogs).values({
+                  hospitalId: args.hospitalId,
+                  tableName: 'ipd_medication_orders',
+                  recordId: args.admissionId,
+                  action: 'ALLERGY_OVERRIDE',
+                  newValue: {
+                    medicineName: ord.medicineName,
+                    allergen: conflict.allergenSubstance,
+                    reason: args.allergyOverrideReason,
+                  },
+                  reason: args.allergyOverrideReason,
+                  userId: args.authorUserId,
+                });
+              }
+            }
+
+            // Check duplicate active therapy
+            if (res.type === 'new') {
+              const duplicate = activeExistingOrders.find(
+                (o) =>
+                  (ord.medicineId && o.medicineId === ord.medicineId) ||
+                  (o.medicineName && ord.medicineName && o.medicineName.toLowerCase() === ord.medicineName.toLowerCase()),
+              );
+              if (duplicate) {
+                if (!args.duplicateOverrideReason || args.duplicateOverrideReason.trim().length < 5) {
+                  throw new DuplicateTherapyError(
+                    `Active therapy for ${ord.medicineName} already exists. A logged duplicate override reason (>= 5 chars) is required to prescribe concurrent therapy.`,
+                  );
+                }
+                await tx.insert(clinicalAuditLogs).values({
+                  hospitalId: args.hospitalId,
+                  tableName: 'ipd_medication_orders',
+                  recordId: args.admissionId,
+                  action: 'DUPLICATE_THERAPY_OVERRIDE',
+                  newValue: {
+                    medicineName: ord.medicineName,
+                    existingOrderId: duplicate.id,
+                    reason: args.duplicateOverrideReason,
+                  },
+                  reason: args.duplicateOverrideReason,
+                  userId: args.authorUserId,
+                });
+              }
+            }
+          }
+        }
+      }
+
       const [admission] = await tx
         .select({
           encounterId: admissions.encounterId,
@@ -859,4 +1046,152 @@ export async function adjustMedicationScheduleTimes(args: {
     { clinical: true },
   );
 }
+
+/**
+ * Lists pending verbal medication orders awaiting doctor co-signature.
+ */
+export async function listPendingVerbalOrders(args: {
+  hospitalId: string;
+  admissionId?: string;
+}): Promise<SelectIpdMedicationOrder[]> {
+  return withTenant(
+    args.hospitalId,
+    async (tx: Tx) => {
+      const orders = await tx
+        .select()
+        .from(ipdMedicationOrders)
+        .where(
+          and(
+            eq(ipdMedicationOrders.hospitalId, args.hospitalId),
+            args.admissionId ? eq(ipdMedicationOrders.admissionId, args.admissionId) : undefined,
+            eq(ipdMedicationOrders.isVerbal, true),
+            eq(ipdMedicationOrders.verbalOrderStatus, 'pending_cosign'),
+          ),
+        )
+        .orderBy(desc(ipdMedicationOrders.createdAt));
+      return orders;
+    },
+    { clinical: true },
+  );
+}
+
+/**
+ * Co-signs a verbal order by the attending physician.
+ */
+export async function cosignVerbalOrder(args: {
+  hospitalId: string;
+  orderId: string;
+  doctorId: string;
+  actorUserId: string;
+  notes?: string;
+}): Promise<{ ok: boolean }> {
+  return withTenant(
+    args.hospitalId,
+    async (tx: Tx) => {
+      const [order] = await tx
+        .select()
+        .from(ipdMedicationOrders)
+        .where(
+          and(
+            eq(ipdMedicationOrders.hospitalId, args.hospitalId),
+            eq(ipdMedicationOrders.id, args.orderId),
+          ),
+        );
+      if (!order) throw new Error('Order not found');
+      if (order.verbalOrderStatus !== 'pending_cosign') {
+        throw new Error('Order is not in pending_cosign state');
+      }
+
+      const now = new Date();
+      await tx
+        .update(ipdMedicationOrders)
+        .set({
+          verbalOrderStatus: 'cosigned',
+          cosignedByDoctorId: args.doctorId,
+          cosignedAt: now,
+          cosignNotes: args.notes?.trim() || null,
+          updatedAt: now,
+        })
+        .where(eq(ipdMedicationOrders.id, order.id));
+
+      await tx.insert(clinicalAuditLogs).values({
+        hospitalId: args.hospitalId,
+        tableName: 'ipd_medication_orders',
+        recordId: order.id,
+        action: 'VERBAL_ORDER_COSIGNED',
+        newValue: {
+          doctorId: args.doctorId,
+          notes: args.notes,
+          cosignedAt: now.toISOString(),
+        },
+        reason: args.notes || 'Verbal order co-signed by physician',
+        userId: args.actorUserId,
+      });
+
+      return { ok: true };
+    },
+    { clinical: true },
+  );
+}
+
+/**
+ * Rejects a verbal order with a mandatory clinical rationale.
+ */
+export async function rejectVerbalOrder(args: {
+  hospitalId: string;
+  orderId: string;
+  doctorId: string;
+  actorUserId: string;
+  rejectionReason: string;
+}): Promise<{ ok: boolean }> {
+  if (!args.rejectionReason || args.rejectionReason.trim().length < 5) {
+    throw new Error('A clinical rationale (at least 5 characters) is required to reject a verbal order');
+  }
+
+  return withTenant(
+    args.hospitalId,
+    async (tx: Tx) => {
+      const [order] = await tx
+        .select()
+        .from(ipdMedicationOrders)
+        .where(
+          and(
+            eq(ipdMedicationOrders.hospitalId, args.hospitalId),
+            eq(ipdMedicationOrders.id, args.orderId),
+          ),
+        );
+      if (!order) throw new Error('Order not found');
+      if (order.verbalOrderStatus !== 'pending_cosign') {
+        throw new Error('Order is not in pending_cosign state');
+      }
+
+      const now = new Date();
+      await tx
+        .update(ipdMedicationOrders)
+        .set({
+          verbalOrderStatus: 'rejected',
+          status: 'discontinued',
+          updatedAt: now,
+        })
+        .where(eq(ipdMedicationOrders.id, order.id));
+
+      await tx.insert(clinicalAuditLogs).values({
+        hospitalId: args.hospitalId,
+        tableName: 'ipd_medication_orders',
+        recordId: order.id,
+        action: 'VERBAL_ORDER_REJECTED',
+        newValue: {
+          doctorId: args.doctorId,
+          rejectionReason: args.rejectionReason,
+        },
+        reason: args.rejectionReason,
+        userId: args.actorUserId,
+      });
+
+      return { ok: true };
+    },
+    { clinical: true },
+  );
+}
+
 

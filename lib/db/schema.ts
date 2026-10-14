@@ -2765,6 +2765,17 @@ export const ipdMedicationOrders = pgTable(
     signedAt: timestamp('signed_at', { withTimezone: true }),
     roundNoteId: uuid('round_note_id'),
 
+    isVerbal: boolean('is_verbal').notNull().default(false),
+    verbalOrderStatus: text('verbal_order_status')
+      .$type<'none' | 'pending_cosign' | 'cosigned' | 'rejected' | 'modified'>()
+      .notNull()
+      .default('none'),
+    verbalDoctorName: text('verbal_doctor_name'),
+    verbalClinicalRationale: text('verbal_clinical_rationale'),
+    cosignedByDoctorId: uuid('cosigned_by_doctor_id').references(() => doctors.id, { onDelete: 'set null' }),
+    cosignedAt: timestamp('cosigned_at', { withTimezone: true }),
+    cosignNotes: text('cosign_notes'),
+
     createdAt: createdAt(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

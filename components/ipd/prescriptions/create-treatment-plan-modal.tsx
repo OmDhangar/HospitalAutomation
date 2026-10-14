@@ -199,6 +199,8 @@ export function CreateTreatmentPlanModal({
   const [planNotes, setPlanNotes] = useState('');
   const [stagedOrders, setStagedOrders] = useState<DraftOrderInput[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [allergyOverrideReason, setAllergyOverrideReason] = useState('');
+  const [duplicateOverrideReason, setDuplicateOverrideReason] = useState('');
 
   // Custom order form fields
   const [customMedName, setCustomMedName] = useState('');
@@ -290,6 +292,8 @@ export function CreateTreatmentPlanModal({
           notes: planNotes.trim() || undefined,
           newOrders: stagedOrders,
           doctorId,
+          allergyOverrideReason: allergyOverrideReason.trim() || undefined,
+          duplicateOverrideReason: duplicateOverrideReason.trim() || undefined,
         });
         onClose();
         router?.refresh();
@@ -330,15 +334,45 @@ export function CreateTreatmentPlanModal({
         {/* Modal Body */}
         <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1 text-xs">
           {errorMsg && (
-            <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-800 rounded text-xs flex items-center justify-between">
-              <span>{errorMsg}</span>
-              <button
-                type="button"
-                onClick={() => setErrorMsg(null)}
-                className="text-rose-600 hover:text-rose-900 font-bold ml-2"
-              >
-                ✕
-              </button>
+            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-900 rounded-lg text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold">⚠️ {errorMsg}</span>
+                <button
+                  type="button"
+                  onClick={() => setErrorMsg(null)}
+                  className="text-rose-600 hover:text-rose-900 font-bold ml-2"
+                >
+                  ✕
+                </button>
+              </div>
+              {errorMsg.toLowerCase().includes('allergy') && (
+                <div className="pt-2 border-t border-rose-200">
+                  <label className="block text-2xs font-bold text-rose-950 uppercase mb-1">
+                    Document Clinical Allergy Override Reason (mandatory, min 5 chars):
+                  </label>
+                  <input
+                    type="text"
+                    value={allergyOverrideReason}
+                    onChange={(e) => setAllergyOverrideReason(e.target.value)}
+                    placeholder="e.g. Desensitization protocol active, monitored under ICU observation"
+                    className="w-full rounded border border-rose-300 bg-white p-2 text-xs text-ink-900 focus:outline-rose-500"
+                  />
+                </div>
+              )}
+              {errorMsg.toLowerCase().includes('duplicate') && (
+                <div className="pt-2 border-t border-rose-200">
+                  <label className="block text-2xs font-bold text-rose-950 uppercase mb-1">
+                    Document Duplicate Therapy Override Reason (mandatory, min 5 chars):
+                  </label>
+                  <input
+                    type="text"
+                    value={duplicateOverrideReason}
+                    onChange={(e) => setDuplicateOverrideReason(e.target.value)}
+                    placeholder="e.g. Step-down crossover / intentional dual antibiotic coverage"
+                    className="w-full rounded border border-rose-300 bg-white p-2 text-xs text-ink-900 focus:outline-rose-500"
+                  />
+                </div>
+              )}
             </div>
           )}
 

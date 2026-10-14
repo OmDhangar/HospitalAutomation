@@ -39,6 +39,8 @@ import {
   signRoundOrders,
   adjustMedicationScheduleTimes,
   executeOrderAction,
+  cosignVerbalOrder,
+  rejectVerbalOrder,
   AuthorNotLinkedDoctorError,
   type OrderResolution,
   type DraftOrderInput,
@@ -417,6 +419,8 @@ export async function signRoundOrdersAction(args: {
   notes: string;
   resolutions: OrderResolution[];
   doctorId?: string;
+  allergyOverrideReason?: string;
+  duplicateOverrideReason?: string;
 }): Promise<{ ok: boolean; roundId: string; signedOrderIds: string[] }> {
   const session = await authorize('ipd.prescribe');
   const docId = await resolveDoctorId(session.hospitalId, session.userId, args.admissionId, args.doctorId);
@@ -428,6 +432,8 @@ export async function signRoundOrdersAction(args: {
     authorUserId: session.userId,
     notes: args.notes,
     resolutions: args.resolutions,
+    allergyOverrideReason: args.allergyOverrideReason,
+    duplicateOverrideReason: args.duplicateOverrideReason,
   });
 
   revalidatePath(`/ipd/admissions/${args.admissionId}`);
@@ -442,6 +448,8 @@ export async function createTreatmentPlanAction(args: {
   notes?: string;
   newOrders: DraftOrderInput[];
   doctorId?: string;
+  allergyOverrideReason?: string;
+  duplicateOverrideReason?: string;
 }): Promise<{ ok: boolean; roundId: string; signedOrderIds: string[] }> {
   const session = await authorize('ipd.prescribe');
   const docId = await resolveDoctorId(session.hospitalId, session.userId, args.admissionId, args.doctorId);
@@ -468,6 +476,8 @@ export async function createTreatmentPlanAction(args: {
     authorUserId: session.userId,
     notes: args.notes?.trim() || (args.diagnosis ? `Initial IPD Treatment Plan: ${args.diagnosis.trim()}` : 'Initial IPD Treatment Plan Prescriptions'),
     resolutions,
+    allergyOverrideReason: args.allergyOverrideReason,
+    duplicateOverrideReason: args.duplicateOverrideReason,
   });
 
   revalidatePath(`/ipd/patients/${args.admissionId}/summary`);
@@ -761,5 +771,46 @@ export async function retryDeadLetterAction(args: {
   revalidatePath('/settings/ipd');
   return { ok: true };
 }
+
+export async function cosignVerbalOrderAction(args: {
+  orderId: string;
+  notes?: string;
+  doctorId?: string;
+}): Promise<{ ok: boolean }> {
+  const session = await authorize('ipd.prescribe');
+  const docId = await resolveDoctorId(session.hospitalId, session.userId, undefined, args.doctorId);
+
+  await cosignVerbalOrder({
+    hospitalId: session.hospitalId,
+    orderId: args.orderId,
+    doctorId: docId,
+    actorUserId: session.userId,
+    notes: args.notes,
+  });
+
+  revalidatePath('/ipd');
+  return { ok: true };
+}
+
+export async function rejectVerbalOrderAction(args: {
+  orderId: string;
+  rejectionReason: string;
+  doctorId?: string;
+}): Promise<{ ok: boolean }> {
+  const session = await authorize('ipd.prescribe');
+  const docId = await resolveDoctorId(session.hospitalId, session.userId, undefined, args.doctorId);
+
+  await rejectVerbalOrder({
+    hospitalId: session.hospitalId,
+    orderId: args.orderId,
+    doctorId: docId,
+    actorUserId: session.userId,
+    rejectionReason: args.rejectionReason,
+  });
+
+  revalidatePath('/ipd');
+  return { ok: true };
+}
+
 
 

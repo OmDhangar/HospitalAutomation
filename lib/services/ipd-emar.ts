@@ -1,6 +1,7 @@
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import { withTenant, type Tx } from '@/lib/db';
 import {
+  admissions,
   ipdMedicationOrders,
   ipdMedicationAdministrations,
   ipdEmarIntegrationOutbox,
@@ -13,6 +14,8 @@ import {
   categorizeDueWindow,
 } from '@/lib/domain/ipd-schedule';
 import { checkPrnEligibility } from '@/lib/domain/ipd-prn';
+import { resolveMedicineIdInTx } from './ipd-medication-orders';
+
 
 export interface RecordAdministrationInput {
   clientId: string;
@@ -650,3 +653,161 @@ export async function correctAdministration(args: {
     { clinical: true },
   );
 }
+
+export interface RecordNurseUrgentAdminInput {
+  medicineName: string;
+  doseAmount: string;
+  doseUnit: string;
+  route: string;
+  actualTime?: Date | null;
+  authority: string;
+  doctorNameOrNote?: string | null;
+  clinicalRationale: string;
+}
+
+export interface NurseUrgentAdminResult {
+  ok: true;
+  orderId: string;
+  administrationId: string;
+}
+
+/**
+ * Records an urgent or emergency medication administered by nursing staff.
+ * Provisions or looks up the formulary item, creates an audit-attributed STAT order,
+ * records the administration event, and enqueues billing integration outbox entries.
+ */
+export async function recordNurseUrgentAdministration(args: {
+  hospitalId: string;
+  admissionId: string;
+  input: RecordNurseUrgentAdminInput;
+  actorUserId: string;
+}): Promise<NurseUrgentAdminResult> {
+  return withTenant(
+    args.hospitalId,
+    async (tx: Tx) => {
+      // 1. Fetch admission details to verify active admission and get clinical IDs
+      const [admission] = await tx
+        .select()
+        .from(admissions)
+        .where(
+          and(
+            eq(admissions.hospitalId, args.hospitalId),
+            eq(admissions.id, args.admissionId),
+          ),
+        );
+
+      if (!admission) throw new Error('Admission record not found');
+
+      if (!args.input.medicineName || args.input.medicineName.trim().length === 0) {
+        throw new Error('Medicine name is required for urgent administration');
+      }
+
+      if (!args.input.clinicalRationale || args.input.clinicalRationale.trim().length < 3) {
+        throw new Error('A clinical rationale (at least 3 characters) is required for nurse urgent administration');
+      }
+
+      const now = new Date();
+      const actualTime = args.input.actualTime ?? now;
+
+      // 2. Resolve formulary UUID for the medicine
+      const resolvedMedicineId = await resolveMedicineIdInTx(tx, {
+        hospitalId: args.hospitalId,
+        medicineName: args.input.medicineName.trim(),
+        unit: args.input.doseUnit,
+        actorUserId: args.actorUserId,
+      });
+
+      // 3. Normalize route
+      const cleanRoute = (args.input.route.toLowerCase().trim().replace(/[\s-]+/g, '_')) as any;
+
+      // 4. Create STAT order attributed to nurse creator and admitting doctor
+      const newOrderId = crypto.randomUUID();
+      const orderChainId = crypto.randomUUID();
+      const newAdminId = crypto.randomUUID();
+
+      const authorityStr = args.input.authority || 'Emergency Protocol';
+      const doctorNote = args.input.doctorNameOrNote ? ` (${args.input.doctorNameOrNote.trim()})` : '';
+      const orderInstructions = `[NURSE URGENT ADMIN: ${authorityStr}${doctorNote}] ${args.input.clinicalRationale.trim()}`;
+
+      await tx.insert(ipdMedicationOrders).values({
+        id: newOrderId,
+        hospitalId: args.hospitalId,
+        admissionId: args.admissionId,
+        encounterId: admission.encounterId,
+        patientId: admission.patientId,
+        orderChainId,
+        medicineId: resolvedMedicineId,
+        medicineName: args.input.medicineName.trim(),
+        doseAmount: args.input.doseAmount,
+        doseUnit: args.input.doseUnit,
+        route: cleanRoute,
+        scheduleType: 'stat',
+        frequencyCode: 'Stat',
+        scheduleTimes: [],
+        status: 'completed',
+        origin: 'inpatient_order',
+        patientSupplied: false,
+        startsAt: actualTime,
+        endsAt: actualTime,
+        durationDays: 1,
+        specialInstructions: orderInstructions,
+        prescriberDoctorId: admission.admittingDoctorId,
+        createdByUserId: args.actorUserId,
+        signedAt: now,
+        isVerbal: true,
+        verbalOrderStatus: 'pending_cosign',
+        verbalDoctorName: args.input.doctorNameOrNote?.trim() || null,
+        verbalClinicalRationale: args.input.clinicalRationale.trim(),
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      // 5. Create administration record
+      const clinicalNote = `[URGENT NURSE ADMIN: ${authorityStr}${doctorNote}] ${args.input.clinicalRationale.trim()}`;
+      await tx.insert(ipdMedicationAdministrations).values({
+        id: newAdminId,
+        hospitalId: args.hospitalId,
+        admissionId: args.admissionId,
+        orderId: newOrderId,
+        orderChainId,
+        clientId: crypto.randomUUID(),
+        scheduledTime: null,
+        actualTime,
+        outcome: 'administered',
+        doseAmountNumeric: args.input.doseAmount,
+        doseGiven: `${args.input.doseAmount} ${args.input.doseUnit}`,
+        routeGiven: cleanRoute,
+        clinicalNote,
+        nurseUserId: args.actorUserId,
+        recordedChannel: 'ward_device',
+      });
+
+      // 6. Enqueue outbox billing entry
+      await tx.insert(ipdEmarIntegrationOutbox).values({
+        hospitalId: args.hospitalId,
+        administrationId: newAdminId,
+        integrationType: 'billing',
+        eventType: 'administer',
+        payload: {
+          administrationId: newAdminId,
+          medicineId: resolvedMedicineId,
+          admissionId: args.admissionId,
+          encounterId: admission.encounterId,
+          patientId: admission.patientId,
+          quantity: 1,
+          doseAmount: args.input.doseAmount,
+          doseUnit: args.input.doseUnit,
+        },
+        status: 'pending',
+      });
+
+      return {
+        ok: true,
+        orderId: newOrderId,
+        administrationId: newAdminId,
+      };
+    },
+    { clinical: true },
+  );
+}
+

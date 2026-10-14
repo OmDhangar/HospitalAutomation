@@ -7,6 +7,20 @@ import { StopReasons, type StopReason } from '@/constants/clinical';
 import { CreateTreatmentPlanModal } from '@/components/ipd/prescriptions/create-treatment-plan-modal';
 import { PlusIcon } from '@/components/icons';
 
+import { cosignVerbalOrderAction, rejectVerbalOrderAction } from '@/app/(app)/ipd/actions';
+import { AlertTriangleIcon, CheckIcon, XIcon, ClockIcon } from '@/components/icons';
+
+export interface PendingVerbalOrderItem {
+  id: string;
+  medicineName: string;
+  doseAmount: string;
+  doseUnit: string;
+  route: string;
+  verbalDoctorName?: string | null;
+  verbalClinicalRationale?: string | null;
+  createdAt: string | Date;
+}
+
 export interface MedicationOrderViewItem {
   id: string;
   medicineName: string;
@@ -24,6 +38,7 @@ export interface MedicationOrderViewItem {
 export interface MinimalOrdersTabProps {
   admissionId: string;
   orders: MedicationOrderViewItem[];
+  pendingVerbalOrders?: PendingVerbalOrderItem[];
   patientName?: string;
   uhid?: string;
   bedLabel?: string;
@@ -37,6 +52,7 @@ export interface MinimalOrdersTabProps {
 export function MinimalOrdersTab({
   admissionId,
   orders = [],
+  pendingVerbalOrders = [],
   patientName = 'Patient',
   uhid = 'UHID',
   bedLabel,
@@ -52,6 +68,15 @@ export function MinimalOrdersTab({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [modifyNotice, setModifyNotice] = useState<string | null>(null);
   const [isPrescribeModalOpen, setIsPrescribeModalOpen] = useState(false);
+
+  // Verbal order co-sign / reject modal state
+  const [activeVerbalAction, setActiveVerbalAction] = useState<{
+    order: PendingVerbalOrderItem;
+    type: 'cosign' | 'reject';
+  } | null>(null);
+  const [verbalActionNotes, setVerbalActionNotes] = useState('');
+  const [verbalActionError, setVerbalActionError] = useState<string | null>(null);
+  const [verbalSuccessMsg, setVerbalSuccessMsg] = useState<string | null>(null);
 
   const handleConfirmStop = async () => {
     if (!selectedOrderToStop) return;
@@ -93,6 +118,76 @@ export function MinimalOrdersTab({
           )}
         </div>
       </div>
+
+      {verbalSuccessMsg && (
+        <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-md">
+          {verbalSuccessMsg}
+        </div>
+      )}
+
+      {/* Pending Verbal Orders Co-Sign Alert Strip */}
+      {pendingVerbalOrders.length > 0 && (
+        <div className="rounded-lg border-2 border-amber-400 bg-amber-50/70 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-amber-500 text-white text-xs font-bold">
+                !
+              </span>
+              <h3 className="text-sm font-bold text-amber-950">
+                Pending Verbal Orders Awaiting Doctor Co-Signature ({pendingVerbalOrders.length})
+              </h3>
+            </div>
+            <span className="text-2xs font-semibold text-amber-800 bg-amber-100 px-2 py-0.5 rounded">
+              NABH Protocol §6.2
+            </span>
+          </div>
+
+          <div className="divide-y divide-amber-200/80 rounded border border-amber-200 bg-white overflow-hidden text-xs">
+            {pendingVerbalOrders.map((vo) => (
+              <div key={vo.id} className="p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="font-bold text-ink-900 text-sm">
+                    {vo.medicineName} · <span className="font-semibold text-ink-700">{vo.doseAmount} {vo.doseUnit}</span> ({vo.route})
+                  </div>
+                  <div className="text-xs text-ink-600">
+                    Authority: <strong className="text-ink-800">{vo.verbalDoctorName ? `Dr. ${vo.verbalDoctorName}` : 'Emergency Verbal Protocol'}</strong>
+                    {vo.verbalClinicalRationale && (
+                      <span className="ml-2 italic text-ink-500">“{vo.verbalClinicalRationale}”</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveVerbalAction({ order: vo, type: 'cosign' });
+                      setVerbalActionNotes('');
+                      setVerbalActionError(null);
+                    }}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded bg-emerald-600 text-white hover:bg-emerald-700 min-h-8"
+                  >
+                    <CheckIcon className="size-3.5" />
+                    <span>Co-Sign Order</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveVerbalAction({ order: vo, type: 'reject' });
+                      setVerbalActionNotes('');
+                      setVerbalActionError(null);
+                    }}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded border border-rose-300 text-rose-700 hover:bg-rose-50 min-h-8"
+                  >
+                    <XIcon className="size-3.5" />
+                    <span>Reject</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {modifyNotice && (
         <div className="p-3 bg-sky-50 border border-sky-200 text-sky-800 text-xs rounded-md flex items-center justify-between">
@@ -278,6 +373,125 @@ export function MinimalOrdersTab({
           </div>
         </div>
       </Drawer>
+
+      {/* Verbal Order Co-Sign / Reject Drawer */}
+      {activeVerbalAction && (
+        <Drawer
+          isOpen={true}
+          onClose={() => setActiveVerbalAction(null)}
+          title={
+            activeVerbalAction.type === 'cosign'
+              ? 'Co-Sign Verbal Order'
+              : 'Reject Verbal Order'
+          }
+          size="sm"
+          footer={
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveVerbalAction(null)}
+                className="px-3 py-1.5 text-xs font-semibold rounded border border-ink-200 text-ink-700 hover:bg-ink-50 min-h-[44px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={async () => {
+                  try {
+                    setIsSubmitting(true);
+                    setVerbalActionError(null);
+                    if (activeVerbalAction.type === 'cosign') {
+                      await cosignVerbalOrderAction({
+                        orderId: activeVerbalAction.order.id,
+                        notes: verbalActionNotes.trim() || undefined,
+                      });
+                      setVerbalSuccessMsg(
+                        `Verbal order for ${activeVerbalAction.order.medicineName} co-signed successfully.`,
+                      );
+                    } else {
+                      if (!verbalActionNotes || verbalActionNotes.trim().length < 5) {
+                        setVerbalActionError(
+                          'A clinical rationale (at least 5 characters) is required to reject a verbal order.',
+                        );
+                        return;
+                      }
+                      await rejectVerbalOrderAction({
+                        orderId: activeVerbalAction.order.id,
+                        rejectionReason: verbalActionNotes.trim(),
+                      });
+                      setVerbalSuccessMsg(
+                        `Verbal order for ${activeVerbalAction.order.medicineName} has been rejected.`,
+                      );
+                    }
+                    setActiveVerbalAction(null);
+                    setTimeout(() => setVerbalSuccessMsg(null), 4000);
+                  } catch (err: any) {
+                    setVerbalActionError(err?.message || 'Action failed.');
+                  } finally {
+                    setIsSubmitting(false);
+                  }
+                }}
+                className={`px-4 py-1.5 text-xs font-semibold rounded text-white min-h-[44px] ${
+                  activeVerbalAction.type === 'cosign'
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : 'bg-rose-600 hover:bg-rose-700'
+                }`}
+              >
+                {isSubmitting
+                  ? 'Processing...'
+                  : activeVerbalAction.type === 'cosign'
+                  ? 'Confirm Co-Sign'
+                  : 'Confirm Rejection'}
+              </button>
+            </div>
+          }
+        >
+          <div className="space-y-4">
+            <div className="rounded bg-ink-50 p-3 text-xs space-y-1">
+              <div className="font-bold text-ink-900 text-sm">
+                {activeVerbalAction.order.medicineName}
+              </div>
+              <div className="text-ink-600">
+                Dose: <strong>{activeVerbalAction.order.doseAmount} {activeVerbalAction.order.doseUnit}</strong> ({activeVerbalAction.order.route})
+              </div>
+              <div className="text-ink-500">
+                Attributed Authority: <strong>{activeVerbalAction.order.verbalDoctorName ? `Dr. ${activeVerbalAction.order.verbalDoctorName}` : 'Urgent Verbal Protocol'}</strong>
+              </div>
+              {activeVerbalAction.order.verbalClinicalRationale && (
+                <div className="text-ink-500 italic">
+                  Rationale: “{activeVerbalAction.order.verbalClinicalRationale}”
+                </div>
+              )}
+            </div>
+
+            {verbalActionError && (
+              <div className="rounded bg-rose-50 border border-rose-200 p-2.5 text-xs text-rose-800">
+                {verbalActionError}
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-semibold text-ink-800 mb-1">
+                {activeVerbalAction.type === 'cosign'
+                  ? 'Physician Co-Sign Notes (Optional)'
+                  : 'Rejection Clinical Rationale (Required - min 5 chars)'}
+              </label>
+              <textarea
+                value={verbalActionNotes}
+                onChange={(e) => setVerbalActionNotes(e.target.value)}
+                placeholder={
+                  activeVerbalAction.type === 'cosign'
+                    ? 'Confirming telephonic authorization given to on-duty nurse...'
+                    : 'State why verbal order was rejected...'
+                }
+                rows={3}
+                className="w-full text-xs p-2 rounded border border-ink-200 bg-surface text-ink-900 focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+            </div>
+          </div>
+        </Drawer>
+      )}
 
       {/* Prescribe & Treatment Plan Modal */}
       <CreateTreatmentPlanModal

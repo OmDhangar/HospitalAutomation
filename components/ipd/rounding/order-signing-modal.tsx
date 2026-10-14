@@ -36,6 +36,8 @@ export function OrderSigningModal({
   const [isPending, startTransition] = useTransition();
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [allergyAcknowledged, setAllergyAcknowledged] = useState<boolean>(false);
+  const [allergyOverrideReason, setAllergyOverrideReason] = useState<string>('');
+  const [duplicateOverrideReason, setDuplicateOverrideReason] = useState<string>('');
 
   if (!isOpen) return null;
 
@@ -128,6 +130,8 @@ export function OrderSigningModal({
           admissionId,
           notes: roundNotes.trim(),
           resolutions: allResolutions,
+          allergyOverrideReason: allergyOverrideReason.trim() || undefined,
+          duplicateOverrideReason: duplicateOverrideReason.trim() || undefined,
         });
 
         onSignedSuccess(result);
@@ -169,8 +173,36 @@ export function OrderSigningModal({
         {/* Scrollable Content Body */}
         <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4 text-xs">
           {errorMsg && (
-            <div className="rounded-lg border border-rose-300 bg-rose-50 p-3 font-medium text-rose-900">
-              ⚠️ {errorMsg}
+            <div className="rounded-lg border border-rose-300 bg-rose-50 p-3 font-medium text-rose-900 space-y-2">
+              <div>⚠️ {errorMsg}</div>
+              {errorMsg.toLowerCase().includes('allergy') && (
+                <div className="pt-2 border-t border-rose-200">
+                  <label className="block text-xs font-bold text-rose-950 mb-1">
+                    Document Clinical Allergy Override Reason (mandatory, min 5 chars):
+                  </label>
+                  <input
+                    type="text"
+                    value={allergyOverrideReason}
+                    onChange={(e) => setAllergyOverrideReason(e.target.value)}
+                    placeholder="e.g. Desensitization protocol active, monitored under ICU observation"
+                    className="w-full rounded border border-rose-300 bg-white p-2 text-xs text-ink-900 focus:outline-rose-500"
+                  />
+                </div>
+              )}
+              {errorMsg.toLowerCase().includes('duplicate') && (
+                <div className="pt-2 border-t border-rose-200">
+                  <label className="block text-xs font-bold text-rose-950 mb-1">
+                    Document Duplicate Therapy Override Reason (mandatory, min 5 chars):
+                  </label>
+                  <input
+                    type="text"
+                    value={duplicateOverrideReason}
+                    onChange={(e) => setDuplicateOverrideReason(e.target.value)}
+                    placeholder="e.g. Planned crossover / intentional dual antibiotic coverage"
+                    className="w-full rounded border border-rose-300 bg-white p-2 text-xs text-ink-900 focus:outline-rose-500"
+                  />
+                </div>
+              )}
             </div>
           )}
 

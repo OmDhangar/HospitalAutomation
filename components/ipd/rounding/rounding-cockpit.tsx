@@ -132,6 +132,61 @@ export function RoundingCockpit({
         onUpdated={() => router.refresh()}
       />
 
+      {/* 2b. Urgent Nurse Administrations Banner (Awaiting Doctor Review) */}
+      {data.urgentNurseAdministrations && data.urgentNurseAdministrations.length > 0 && (
+        <div className="rounded-2xl border-2 border-rose-300 bg-rose-50/70 p-4 shadow-sm space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-xl">🚨</span>
+              <h3 className="text-sm font-black text-rose-950 uppercase tracking-wide">
+                Urgent Nurse Administrations (Awaiting Doctor Review & Co-Signature)
+              </h3>
+            </div>
+            <span className="rounded-full bg-rose-200 px-2.5 py-0.5 text-xs font-bold text-rose-900">
+              {data.urgentNurseAdministrations.length} dose(s) given
+            </span>
+          </div>
+
+          <div className="space-y-2">
+            {data.urgentNurseAdministrations.map((admin) => (
+              <div
+                key={admin.id}
+                className="flex flex-col gap-1.5 rounded-xl border border-rose-200 bg-white p-3 text-xs sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <strong className="text-sm font-bold text-ink-950">
+                      {admin.medicineName}
+                    </strong>
+                    <span className="rounded bg-rose-100 px-2 py-0.5 font-mono text-xs font-semibold text-rose-900">
+                      {admin.doseGiven}
+                    </span>
+                    <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[11px] font-medium uppercase text-ink-700">
+                      {admin.routeGiven?.replace('_', ' ')}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-ink-600 font-medium">
+                    Given {admin.actualTime ? new Date(admin.actualTime).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : 'recently'}
+                    {admin.nurseName ? ` by ${admin.nurseName}` : ''}
+                  </p>
+                  {admin.clinicalNote && (
+                    <p className="mt-0.5 italic text-rose-900 font-medium">
+                      {admin.clinicalNote}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex shrink-0 items-center gap-2 pt-1 sm:pt-0">
+                  <span className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-900">
+                    Awaiting Round Review
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* 3. Active Inpatient Medication Orders Review */}
       <ActiveOrdersReview
         activeOrders={data.activeOrders}
@@ -148,6 +203,7 @@ export function RoundingCockpit({
           onAddNewOrder={handleAddNewOrder}
           onRemoveNewOrder={handleRemoveNewOrder}
           activeAllergies={data.allergyAssessment.allergens}
+          existingActiveOrders={data.activeOrders}
         />
       )}
 
