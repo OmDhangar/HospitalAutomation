@@ -13,3 +13,4 @@ Task 1: complete (commits b146b56..5801600, tests: npx vitest run lib/services/_
 Task 2: complete (tests: npx vitest run "app/(app)/ipd/__tests__/allergy-gate-bypass.test.ts" "app/(app)/ipd/__tests__/duplicate-therapy-gate.test.ts" "app/(app)/ipd/__tests__/verbal-orders-cosign.test.ts" → 8/8 pass; full IPD suite 61/61 pass)
 Task 3: complete (tests: npx vitest run "app/(app)/ipd/__tests__/measurements.test.ts" "components/ipd/shell/__tests__/" → 13/13 pass; full IPD suite 20/20 pass)
 Task 4: complete (tests: npx vitest run "app/(app)/ipd/__tests__/discharge-summary-gate.test.ts" → 5/5 pass; full IPD suite 72/72 pass)
+Task 5: complete (tests: npx vitest run "lib/domain/__tests__/bed-cleaning.test.ts" "app/(app)/ipd/__tests__/news2-escalation.test.ts" "components/ipd/shell/__tests__/" "app/(app)/ipd/patients/__tests__/vitals-tab.test.tsx" → 15/15 pass)

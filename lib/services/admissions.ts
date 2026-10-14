@@ -248,12 +248,16 @@ async function freeBedInTx(tx: Tx, args: { bedId: string; branchId: string }) {
       active: beds.active,
       wardActive: wards.active,
       wardBranchId: wards.branchId,
+      status: beds.status,
     })
     .from(beds)
     .innerJoin(wards, eq(wards.id, beds.wardId))
     .where(eq(beds.id, args.bedId));
   if (!bed) throw new AdmissionError('Bed not found');
   if (!bed.active || !bed.wardActive) throw new AdmissionError(`Bed ${bed.label} is out of use`);
+  if (bed.status === 'cleaning') {
+    throw new AdmissionError(`Bed ${bed.label} is currently undergoing housekeeping sanitization. Mark as cleaned before assigning.`);
+  }
   if (bed.wardBranchId !== args.branchId) {
     throw new AdmissionError(`Bed ${bed.label} is in another branch`);
   }
@@ -336,6 +340,7 @@ export async function assignBed(args: {
           fromAt: now,
           assignedByUserId: args.actorUserId,
         });
+        await tx.update(beds).set({ status: 'occupied' }).where(eq(beds.id, bed.id));
         await tx
           .update(admissions)
           .set({
@@ -389,6 +394,7 @@ export async function transferBed(args: {
         const now = new Date();
         if (current) {
           await tx.update(bedAssignments).set({ toAt: now }).where(eq(bedAssignments.id, current.id));
+          await tx.update(beds).set({ status: 'cleaning', cleanedAt: null }).where(eq(beds.id, current.bedId));
         }
         await tx.insert(bedAssignments).values({
           hospitalId: admission.hospitalId,
@@ -397,6 +403,7 @@ export async function transferBed(args: {
           fromAt: now,
           assignedByUserId: args.actorUserId,
         });
+        await tx.update(beds).set({ status: 'occupied' }).where(eq(beds.id, bed.id));
         await audit(tx, admission, args.actorUserId, 'ipd.bed_transferred', {
           fromBedId: current?.bedId ?? null,
           toBedId: bed.id,

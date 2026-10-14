@@ -57,6 +57,7 @@ export default async function PatientVitalsPage({
       admissionId={id}
       vitals={vitals}
       fluids={fluids}
+      vitalsFrequency={admission.vitalsFrequency ?? 'q4h'}
       canRecord={!session.readOnly}
     />
   );

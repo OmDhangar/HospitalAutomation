@@ -61,6 +61,7 @@ import {
   finalizeDischargeSummary,
   reconcileHomeMedication,
 } from '@/lib/services/ipd-discharge-summary';
+import { markBedCleaned } from '@/lib/services/ipd-census';
 
 /**
  * The desk's IPD actions (IPD plan §5.3–5.5, task T1.6). Form posts that
@@ -687,12 +688,26 @@ export async function recordVitalReadingAction(args: {
           recordedByUserId: session.userId,
         })
         .returning({ id: vitalsReadings.id });
+
+      if (args.news2Score != null && args.news2Score >= 5) {
+        await tx.insert(clinicalAuditLogs).values({
+          hospitalId: session.hospitalId,
+          tableName: 'vitals_readings',
+          recordId: inserted.id,
+          action: 'NEWS2_ESCALATION',
+          newValue: { news2Score: args.news2Score, admissionId: args.admissionId },
+          reason: `High Risk Clinical Escalation NEWS2 score ${args.news2Score}`,
+          userId: session.userId,
+        });
+      }
+
       return inserted;
     },
     { clinical: true },
   );
   revalidatePath(`/ipd/patients/${args.admissionId}/vitals`);
   revalidatePath(`/ipd/patients/${args.admissionId}/summary`);
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
   return { ok: true, id: res.id };
 }
 
@@ -954,6 +969,47 @@ export async function reconcileHomeMedicationAction(args: {
   revalidatePath(`/ipd/patients/${args.admissionId}`);
   return { ok: true, id: res.id };
 }
+
+export async function markBedCleanedAction(args: { bedId: string }): Promise<{ ok: boolean }> {
+  const session = await authorize('ipd.view');
+  await markBedCleaned(session.hospitalId, args.bedId, session.userId);
+  revalidatePath('/ipd');
+  revalidatePath('/ipd/ward');
+  return { ok: true };
+}
+
+export async function orderVitalsFrequencyAction(args: {
+  admissionId: string;
+  frequency: 'q1h' | 'q2h' | 'q4h' | 'q6h' | 'q8h' | 'q12h' | 'daily' | 'prn';
+  notes?: string;
+}): Promise<{ ok: boolean }> {
+  const session = await authorize('ipd.prescribe');
+
+  await withTenant(session.hospitalId, async (tx) => {
+    await tx
+      .update(admissions)
+      .set({
+        vitalsFrequency: args.frequency,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(admissions.id, args.admissionId), eq(admissions.hospitalId, session.hospitalId)));
+
+    await tx.insert(clinicalAuditLogs).values({
+      hospitalId: session.hospitalId,
+      tableName: 'admissions',
+      recordId: args.admissionId,
+      action: 'ORDER_VITALS_FREQUENCY',
+      newValue: { frequency: args.frequency, notes: args.notes ?? null },
+      reason: `Doctor ordered vitals frequency: ${args.frequency}`,
+      userId: session.userId,
+    });
+  });
+
+  revalidatePath(`/ipd/patients/${args.admissionId}/vitals`);
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  return { ok: true };
+}
+
 
 
 

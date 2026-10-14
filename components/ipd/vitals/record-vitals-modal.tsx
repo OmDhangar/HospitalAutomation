@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { recordVitalReadingAction } from '@/app/(app)/ipd/actions';
+import { calculateNews2 } from '@/lib/domain/vitals-news2';
 
 export interface RecordVitalsModalProps {
   admissionId: string;
@@ -29,44 +30,15 @@ export function RecordVitalsModal({
 
   if (!isOpen) return null;
 
-  // Simple NEWS2 calculation
-  const calculateNews2 = (): number => {
-    let score = 0;
-    const temp = parseFloat(temperatureF);
-    if (!isNaN(temp)) {
-      if (temp <= 95.0) score += 3;
-      else if (temp <= 96.8) score += 1;
-      else if (temp >= 102.4) score += 2;
-      else if (temp >= 100.6) score += 1;
-    }
-    const pulse = parseInt(pulseBpm, 10);
-    if (!isNaN(pulse)) {
-      if (pulse <= 40 || pulse >= 131) score += 3;
-      else if (pulse >= 111) score += 2;
-      else if (pulse <= 50 || pulse >= 91) score += 1;
-    }
-    const sys = parseInt(bpSystolic, 10);
-    if (!isNaN(sys)) {
-      if (sys <= 90 || sys >= 220) score += 3;
-      else if (sys <= 100) score += 2;
-      else if (sys <= 110) score += 1;
-    }
-    const rr = parseInt(respiratoryRate, 10);
-    if (!isNaN(rr)) {
-      if (rr <= 8 || rr >= 25) score += 3;
-      else if (rr >= 21) score += 2;
-      else if (rr <= 11) score += 1;
-    }
-    const o2 = parseInt(spo2Percent, 10);
-    if (!isNaN(o2)) {
-      if (o2 <= 91) score += 3;
-      else if (o2 <= 93) score += 2;
-      else if (o2 <= 95) score += 1;
-    }
-    return score;
-  };
+  const newsResult = calculateNews2({
+    temperatureF: temperatureF ? parseFloat(temperatureF) : null,
+    pulseBpm: pulseBpm ? parseInt(pulseBpm, 10) : null,
+    bpSystolic: bpSystolic ? parseInt(bpSystolic, 10) : null,
+    respiratoryRate: respiratoryRate ? parseInt(respiratoryRate, 10) : null,
+    spo2Percent: spo2Percent ? parseInt(spo2Percent, 10) : null,
+  });
 
-  const calculatedNews = calculateNews2();
+  const calculatedNews = newsResult.totalScore;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

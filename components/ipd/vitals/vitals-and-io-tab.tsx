@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { VitalsReadingRow, IntakeOutputRow } from '@/lib/db/schema';
+import { orderVitalsFrequencyAction } from '@/app/(app)/ipd/actions';
 import { RecordVitalsModal } from './record-vitals-modal';
 import { RecordFluidBalanceModal } from './record-fluid-balance-modal';
 
@@ -10,6 +11,7 @@ export interface VitalsAndIoTabProps {
   admissionId: string;
   vitals: VitalsReadingRow[];
   fluids: IntakeOutputRow[];
+  vitalsFrequency?: string | null;
   canRecord?: boolean;
 }
 
@@ -17,11 +19,34 @@ export function VitalsAndIoTab({
   admissionId,
   vitals,
   fluids,
+  vitalsFrequency = 'q4h',
   canRecord = true,
 }: VitalsAndIoTabProps) {
   const router = useRouter();
   const [isVitalsModalOpen, setIsVitalsModalOpen] = useState(false);
   const [isFluidModalOpen, setIsFluidModalOpen] = useState(false);
+  const [currentFrequency, setCurrentFrequency] = useState(vitalsFrequency || 'q4h');
+  const [isUpdatingFrequency, setIsUpdatingFrequency] = useState(false);
+
+  // Check latest vital for NEWS2 escalation
+  const latestVital = vitals.length > 0 ? vitals[0] : null;
+  const isNews2Escalated = latestVital?.news2Score != null && latestVital.news2Score >= 5;
+
+  const handleFrequencyChange = async (newFreq: any) => {
+    setCurrentFrequency(newFreq);
+    setIsUpdatingFrequency(true);
+    try {
+      await orderVitalsFrequencyAction({
+        admissionId,
+        frequency: newFreq,
+      });
+      router.refresh();
+    } catch (err) {
+      console.error('Failed to update vitals frequency', err);
+    } finally {
+      setIsUpdatingFrequency(false);
+    }
+  };
 
   // Calculate 24-hour fluid balance (past 24h)
   const past24hTime = Date.now() - 24 * 60 * 60 * 1000;
@@ -51,6 +76,33 @@ export function VitalsAndIoTab({
 
   return (
     <div className="space-y-4">
+      {/* High-Risk NEWS2 In-App Clinical Escalation Banner */}
+      {isNews2Escalated && (
+        <div
+          role="alert"
+          className="rounded-xl border border-rose-300 bg-rose-50 p-4 shadow-sm"
+        >
+          <div className="flex items-start gap-3">
+            <div className="rounded-lg bg-rose-600 p-2 text-white text-lg">
+              🚨
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-2">
+                <h4 className="text-sm font-bold text-rose-950">
+                  {`CRITICAL CLINICAL ESCALATION: NEWS2 Score ${latestVital?.news2Score}`}
+                </h4>
+                <span className="rounded bg-rose-600 px-2 py-0.5 text-[10px] font-bold uppercase text-white tracking-wider">
+                  High Risk
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-rose-800">
+                Patient meets inpatient clinical escalation threshold (NEWS2 ≥ 5). Immediate doctor bedside evaluation, continuous physiological monitoring, and SBAR clinical handoff required.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Action Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-ink-200 pb-3">
         <div>
@@ -76,6 +128,52 @@ export function VitalsAndIoTab({
             >
               + Record Vitals
             </button>
+          </div>
+        )}
+      </div>
+
+      {/* Doctor Vitals Frequency Order Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-ink-200 bg-white px-4 py-2.5 shadow-2xs">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-ink-700">Doctor Vitals Order:</span>
+          <span className="rounded-md bg-brand-50 px-2 py-0.5 font-mono text-xs font-bold text-brand-800 border border-brand-200 uppercase">
+            {currentFrequency}
+          </span>
+          <span className="text-xs text-ink-500">
+            {currentFrequency === 'q1h' ? 'Every 1 hour (Critical)' :
+             currentFrequency === 'q2h' ? 'Every 2 hours (High Dependency)' :
+             currentFrequency === 'q4h' ? 'Every 4 hours (Standard Routine)' :
+             currentFrequency === 'q6h' ? 'Every 6 hours' :
+             currentFrequency === 'q8h' ? 'Every 8 hours (Stable)' :
+             currentFrequency === 'q12h' ? 'Every 12 hours (Stepdown)' :
+             currentFrequency === 'bid' ? 'Twice Daily' :
+             currentFrequency === 'tid' ? 'Three Times Daily' :
+             currentFrequency === 'qid' ? 'Four Times Daily' : 'As Needed (PRN)'}
+          </span>
+        </div>
+        {canRecord && (
+          <div className="flex items-center gap-2">
+            <label htmlFor="vitals-frequency-select" className="text-xs text-ink-600 font-medium">
+              Update Frequency:
+            </label>
+            <select
+              id="vitals-frequency-select"
+              value={currentFrequency}
+              disabled={isUpdatingFrequency}
+              onChange={(e) => handleFrequencyChange(e.target.value)}
+              className="rounded-md border border-ink-300 bg-white px-2 py-1 text-xs font-medium text-ink-800 focus:border-brand-500 focus:outline-hidden disabled:opacity-50"
+            >
+              <option value="q1h">Q1H (Every 1 hour - Critical)</option>
+              <option value="q2h">Q2H (Every 2 hours - High Dependency)</option>
+              <option value="q4h">Q4H (Every 4 hours - Standard Routine)</option>
+              <option value="q6h">Q6H (Every 6 hours)</option>
+              <option value="q8h">Q8H (Every 8 hours - Stable)</option>
+              <option value="q12h">Q12H (Every 12 hours - Stepdown)</option>
+              <option value="bid">BID (Twice Daily)</option>
+              <option value="tid">TID (Three Times Daily)</option>
+              <option value="qid">QID (Four Times Daily)</option>
+              <option value="prn">PRN (As Needed)</option>
+            </select>
           </div>
         )}
       </div>

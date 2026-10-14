@@ -100,4 +100,36 @@ describe('PatientBanner Component', () => {
     expect(html).toContain('165 cm');
     expect(html).toContain('BMI: 23.9');
   });
+
+  it('renders critical NEWS2 escalation banner and chip when news2Score >= 5', () => {
+    const html = renderToString(
+      <PatientBanner
+        admissionId="adm-104"
+        patient={{
+          name: 'Vikas Deshmukh',
+          age: 62,
+          gender: 'Male',
+          uhid: 'UHID-2024-0120',
+          ipdNumber: 1120,
+          wardName: 'ICU',
+          bedLabel: 'ICU-02',
+          dayOfStay: 3,
+          doctorName: 'Dr. Ramesh Kulkarni',
+          diagnosis: 'Severe Pneumonia',
+          allergyStatus: 'nkda',
+          allergies: [],
+          weightKg: 72,
+          heightCm: 170,
+          bmi: 24.9,
+          news2Score: 6,
+          isNews2Escalated: true,
+          status: 'Admitted',
+        }}
+      />,
+    );
+
+    expect(html).toContain('CRITICAL NEWS2: Score 6 (High Risk Clinical Escalation)');
+    expect(html).toContain('Doctor bedside review required');
+    expect(html).toContain('NEWS2: 6 (Escalated)');
+  });
 });

@@ -1,12 +1,12 @@
 import React from 'react';
 import { notFound } from 'next/navigation';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import { requireSession } from '@/lib/auth/session';
 import { requireModule } from '@/lib/auth/modules';
 import { logRecordAccess } from '@/lib/services/record-access';
 import { getAdmissionSummary } from '@/lib/services/ipd-census';
 import { withTenant } from '@/lib/db';
-import { ipdAllergyAssessments } from '@/lib/db/schema';
+import { ipdAllergyAssessments, vitalsReadings } from '@/lib/db/schema';
 import { getLatestMeasurementForAdmission } from '@/lib/services/patient-measurements';
 import { PatientBanner, type PatientBannerData } from '@/components/ipd/shell/patient-banner';
 import { TabNavigation } from '@/components/ipd/shell/tab-navigation';
@@ -86,6 +86,31 @@ export default async function PatientChartLayout({
     // Graceful fallback if measurements query fails
   }
 
+  let latestVital: { news2Score: number | null } | null = null;
+  try {
+    const [vital] = await withTenant(
+      session.hospitalId,
+      (tx) =>
+        tx
+          .select({ news2Score: vitalsReadings.news2Score })
+          .from(vitalsReadings)
+          .where(
+            and(
+              eq(vitalsReadings.hospitalId, session.hospitalId),
+              eq(vitalsReadings.admissionId, id),
+            ),
+          )
+          .orderBy(desc(vitalsReadings.recordedAt))
+          .limit(1),
+      { clinical: true },
+    );
+    if (vital) {
+      latestVital = vital;
+    }
+  } catch {
+    // Graceful fallback if vitals query fails
+  }
+
   // Calculate day of stay
   const now = new Date();
   const dayOfStay = admission.admittedAt
@@ -123,6 +148,8 @@ export default async function PatientChartLayout({
     weightKg: latestMeasurement?.weightKg ?? null,
     heightCm: latestMeasurement?.heightCm ?? null,
     bmi: latestMeasurement?.bmi ?? null,
+    news2Score: latestVital?.news2Score ?? null,
+    isNews2Escalated: (latestVital?.news2Score ?? 0) >= 5,
     status: displayStatus,
   };
 

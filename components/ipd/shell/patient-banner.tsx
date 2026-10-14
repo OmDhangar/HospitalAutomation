@@ -25,6 +25,8 @@ export interface PatientBannerData {
   weightKg?: number | null;
   heightCm?: number | null;
   bmi?: number | null;
+  news2Score?: number | null;
+  isNews2Escalated?: boolean;
   status: string;
 }
 
@@ -100,6 +102,22 @@ export function PatientBanner({
         aria-label="Patient Banner"
         className={`sticky top-0 z-30 bg-surface border-b border-ink-100 shadow-xs px-3.5 py-1.5 sm:px-5 ${className}`}
       >
+        {((patient.news2Score != null && patient.news2Score >= 5) || patient.isNews2Escalated) && (
+          <div
+            role="alert"
+            className="w-full bg-rose-600 text-white px-3 py-1 text-xs font-semibold flex items-center justify-between rounded mb-1.5 shadow-xs"
+          >
+            <div className="flex items-center gap-1.5">
+              <span className="text-sm">🚨</span>
+              <span>
+                {`CRITICAL NEWS2: Score ${patient.news2Score ?? 5} (High Risk Clinical Escalation) — Doctor bedside review required`}
+              </span>
+            </div>
+            <span className="text-[10px] uppercase tracking-wider bg-rose-800 px-1.5 py-0.5 rounded font-mono font-bold">
+              High Risk
+            </span>
+          </div>
+        )}
         <div className="flex flex-col gap-1.5 lg:flex-row lg:items-center lg:justify-between">
           {/* Main demographics block */}
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs">
@@ -259,6 +277,17 @@ export function PatientBanner({
               >
                 Weight: Not recorded
               </button>
+            )}
+
+            {/* NEWS2 Escalation Chip */}
+            {((patient.news2Score != null && patient.news2Score >= 5) || patient.isNews2Escalated) && (
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 ring-1 ring-inset ring-rose-400 min-h-[26px]"
+                title={`NEWS2 score is ${patient.news2Score ?? 5}. Clinical escalation triggered.`}
+              >
+                <span className="size-1.5 rounded-full bg-rose-600 animate-pulse" />
+                <span>{`NEWS2: ${patient.news2Score ?? 5} (Escalated)`}</span>
+              </span>
             )}
 
             {/* Status Badge */}

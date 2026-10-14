@@ -99,5 +99,46 @@ describe('VitalsAndIoTab Component', () => {
     // Expect action triggers
     expect(html).toContain('+ Record Vitals');
     expect(html).toContain('+ Record Fluid Balance');
+
+    // Expect doctor vitals order bar
+    expect(html).toContain('Doctor Vitals Order:');
+    expect(html).toContain('q4h');
+  });
+
+  it('renders critical clinical escalation banner when latest vital has news2Score >= 5', () => {
+    const highRiskVitals: Partial<VitalsReadingRow>[] = [
+      {
+        id: 'vit-crit',
+        admissionId: 'adm-101',
+        recordedAt: new Date(),
+        temperatureF: '103.5',
+        pulseBpm: 135,
+        bpSystolic: 85,
+        bpDiastolic: 55,
+        respiratoryRate: 28,
+        spo2Percent: 88,
+        painScore: 7,
+        avpu: 'V',
+        news2Score: 8,
+        scheduledSlot: 'Stat',
+      },
+      ...dummyVitals,
+    ];
+
+    const html = renderToString(
+      <VitalsAndIoTab
+        admissionId="adm-101"
+        vitals={highRiskVitals as any}
+        fluids={dummyFluids as any}
+        vitalsFrequency="q1h"
+        canRecord={true}
+      />,
+    );
+
+    expect(html).toContain('CRITICAL CLINICAL ESCALATION: NEWS2 Score 8');
+    expect(html).toContain('Patient meets inpatient clinical escalation threshold (NEWS2 ≥ 5)');
+    expect(html).toContain('Immediate doctor bedside evaluation');
+    expect(html).toContain('q1h');
+    expect(html).toContain('Every 1 hour (Critical)');
   });
 });

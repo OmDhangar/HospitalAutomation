@@ -657,6 +657,18 @@ export async function finalizeDischarge(args: {
           updatedAt: now,
         })
         .where(eq(admissions.id, admission.id));
+      const [currentAssignment] = await tx
+        .select({ bedId: bedAssignments.bedId })
+        .from(bedAssignments)
+        .where(and(eq(bedAssignments.admissionId, admission.id), isNull(bedAssignments.toAt)));
+
+      if (currentAssignment?.bedId) {
+        await tx
+          .update(beds)
+          .set({ status: 'cleaning', cleanedAt: null })
+          .where(and(eq(beds.id, currentAssignment.bedId), eq(beds.hospitalId, args.hospitalId)));
+      }
+
       await tx
         .update(bedAssignments)
         .set({ toAt: now })

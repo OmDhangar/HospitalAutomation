@@ -1943,6 +1943,12 @@ export const beds = pgTable(
     wardId: uuid('ward_id').notNull(),
     label: text('label').notNull(),
     sortOrder: smallint('sort_order').notNull().default(0),
+    status: text('status')
+      .$type<'vacant' | 'occupied' | 'cleaning' | 'maintenance'>()
+      .notNull()
+      .default('vacant'),
+    cleanedAt: timestamp('cleaned_at', { withTimezone: true }),
+    cleanedByUserId: uuid('cleaned_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     active: boolean('active').notNull().default(true),
     createdAt: createdAt(),
   },
@@ -1994,6 +2000,8 @@ export const admissions = pgTable(
       onDelete: 'set null',
     }),
     cancelReason: text('cancel_reason'),
+    /** Doctor ordered frequency for vitals (q1h, q2h, q4h, q6h, q8h, q12h, daily, prn). */
+    vitalsFrequency: text('vitals_frequency').default('q4h'),
     /** The family's running-bill link (0033): hashed token, expiry 7 days after discharge. */
     billLinkTokenHash: text('bill_link_token_hash'),
     billLinkCreatedAt: timestamp('bill_link_created_at', { withTimezone: true }),

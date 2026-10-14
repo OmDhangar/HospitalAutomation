@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { cn } from '@/components/ui';
 import { dayOfStay, shortPatientName } from '@/lib/domain/admission';
 import type { CensusBed } from '@/lib/services/ipd-census';
+import { BedCleaningAction } from './bed-cleaning-action';
 
 /**
  * The ward as staff see it: one square tile per bed (IPD plan §5.2, §5.6).
@@ -51,7 +52,8 @@ export function BedGrid({
     >
       {beds.map((bed) => {
         const occupant = bed.occupant;
-        const href = occupant ? (hrefFor?.(bed) ?? null) : (emptyHrefFor?.(bed) ?? null);
+        const isCleaning = !occupant && bed.status === 'cleaning';
+        const href = occupant ? (hrefFor?.(bed) ?? null) : !isCleaning ? (emptyHrefFor?.(bed) ?? null) : null;
         const going = occupant?.status === 'discharge_ready';
         const body = (
           <>
@@ -59,7 +61,7 @@ export function BedGrid({
               className={cn(
                 'numeric font-bold leading-none',
                 size === 'lg' ? 'text-2xl' : 'text-xl',
-                occupant ? 'text-ink-900' : 'text-ink-400',
+                occupant ? 'text-ink-900' : isCleaning ? 'text-purple-900' : 'text-ink-400',
               )}
             >
               {bed.label}
@@ -82,6 +84,8 @@ export function BedGrid({
                       : ''}
                 </span>
               </>
+            ) : isCleaning ? (
+              <BedCleaningAction bedId={bed.id} />
             ) : (
               <span className={cn('mt-1 text-ink-400', size === 'lg' ? 'text-sm' : 'text-[11px]')}>Free</span>
             )}
@@ -94,13 +98,17 @@ export function BedGrid({
             ? going
               ? 'bg-amber-50 ring-amber-300'
               : 'bg-brand-50 ring-brand-300'
-            : 'bg-white ring-ink-200',
+            : isCleaning
+              ? 'bg-purple-50 ring-purple-300'
+              : 'bg-white ring-ink-200',
           selectedBedId === bed.id && 'ring-2 ring-brand-700 bg-brand-100',
           href && 'hover:ring-brand-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-700',
         );
         const description = occupant
           ? `Bed ${bed.label}, ${occupant.patientName}${going ? ', going home' : ''}`
-          : `Bed ${bed.label}, free`;
+          : isCleaning
+            ? `Bed ${bed.label}, cleaning`
+            : `Bed ${bed.label}, free`;
         return (
           <li key={bed.id}>
             {href ? (
