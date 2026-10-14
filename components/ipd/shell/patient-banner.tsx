@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { formatDoctor, toTitleCase } from '@/lib/domain/doctor';
 import { StatusBadge } from '@/components/ipd/status-badge';
 import { Drawer } from '@/components/ipd/drawer';
+import { RecordMeasurementModal } from '@/components/ipd/measurements/record-measurement-modal';
 import { PrinterIcon, FileTextIcon, ArrowLeftIcon } from '@/components/icons';
 import type { BadgeColorKey } from '@/constants/clinical';
 
@@ -21,6 +22,9 @@ export interface PatientBannerData {
   diagnosis?: string | null;
   allergyStatus?: 'unreviewed' | 'allergies_documented' | 'nkda' | null;
   allergies?: string[] | null;
+  weightKg?: number | null;
+  heightCm?: number | null;
+  bmi?: number | null;
   status: string;
 }
 
@@ -47,6 +51,7 @@ export function PatientBanner({
   const [isAllergyDrawerOpen, setIsAllergyDrawerOpen] = useState(false);
   const [isDiagnosisDrawerOpen, setIsDiagnosisDrawerOpen] = useState(false);
   const [isHistoryDrawerOpen, setIsHistoryDrawerOpen] = useState(false);
+  const [isMeasurementModalOpen, setIsMeasurementModalOpen] = useState(false);
 
   const formattedName = toTitleCase(patient.name);
   const formattedDoctor = formatDoctor(patient.doctorName);
@@ -221,6 +226,41 @@ export function PatientBanner({
               </button>
             )}
 
+            {/* Measurement Chip (Weight, Height, BMI) */}
+            {patient.weightKg != null ? (
+              <button
+                type="button"
+                onClick={() => setIsMeasurementModalOpen(true)}
+                className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-normal bg-sky-50 text-sky-900 ring-1 ring-inset ring-sky-300 hover:bg-sky-100 min-h-[26px]"
+                title="Click to view/update patient weight and height"
+              >
+                <span className="font-semibold text-sky-700 mr-1">Wt:</span>
+                <span>{`${patient.weightKg} kg`}</span>
+                {patient.heightCm != null && (
+                  <>
+                    <span className="mx-1 text-sky-300">·</span>
+                    <span className="font-semibold text-sky-700 mr-1">Ht:</span>
+                    <span>{`${patient.heightCm} cm`}</span>
+                  </>
+                )}
+                {patient.bmi != null && (
+                  <>
+                    <span className="mx-1 text-sky-300">·</span>
+                    <span className="font-semibold text-sky-700">{`BMI: ${patient.bmi}`}</span>
+                  </>
+                )}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setIsMeasurementModalOpen(true)}
+                className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-900 ring-1 ring-inset ring-amber-300 hover:bg-amber-100 min-h-[26px]"
+                title="Patient weight and height not recorded. Click to enter."
+              >
+                Weight: Not recorded
+              </button>
+            )}
+
             {/* Status Badge */}
             <StatusBadge status={patient.status} variant={statusVariant} />
 
@@ -346,6 +386,16 @@ export function PatientBanner({
           </div>
         </div>
       </Drawer>
+
+      {/* Record Measurement Modal */}
+      <RecordMeasurementModal
+        admissionId={admissionId}
+        isOpen={isMeasurementModalOpen}
+        onClose={() => setIsMeasurementModalOpen(false)}
+        currentWeightKg={patient.weightKg}
+        currentHeightCm={patient.heightCm}
+        patientName={formattedName}
+      />
     </>
   );
 }

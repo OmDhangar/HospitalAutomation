@@ -3269,3 +3269,35 @@ export type NewVitalsReading = typeof vitalsReadings.$inferInsert;
 export type IntakeOutputRow = typeof intakeOutput.$inferSelect;
 export type NewIntakeOutput = typeof intakeOutput.$inferInsert;
 
+export const patientMeasurements = pgTable(
+  'patient_measurements',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id')
+      .notNull()
+      .references(() => admissions.id, { onDelete: 'cascade' }),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    weightKg: numeric('weight_kg', { precision: 5, scale: 2 }),
+    heightCm: numeric('height_cm', { precision: 5, scale: 2 }),
+    bmi: numeric('bmi', { precision: 4, scale: 1 }),
+    measuredByUserId: uuid('measured_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    notes: text('notes'),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('patient_measurements_adm_idx').on(t.hospitalId, t.admissionId, t.recordedAt),
+    index('patient_measurements_patient_idx').on(t.hospitalId, t.patientId, t.recordedAt),
+  ],
+);
+
+export type PatientMeasurementRow = typeof patientMeasurements.$inferSelect;
+export type NewPatientMeasurement = typeof patientMeasurements.$inferInsert;
+
+

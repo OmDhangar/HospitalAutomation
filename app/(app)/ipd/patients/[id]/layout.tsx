@@ -7,6 +7,7 @@ import { logRecordAccess } from '@/lib/services/record-access';
 import { getAdmissionSummary } from '@/lib/services/ipd-census';
 import { withTenant } from '@/lib/db';
 import { ipdAllergyAssessments } from '@/lib/db/schema';
+import { getLatestMeasurementForAdmission } from '@/lib/services/patient-measurements';
 import { PatientBanner, type PatientBannerData } from '@/components/ipd/shell/patient-banner';
 import { TabNavigation } from '@/components/ipd/shell/tab-navigation';
 
@@ -71,6 +72,20 @@ export default async function PatientChartLayout({
     // Graceful fallback to unreviewed if allergy table fails
   }
 
+  let latestMeasurement: { weightKg: number | null; heightCm: number | null; bmi: number | null } | null = null;
+  try {
+    const meas = await getLatestMeasurementForAdmission(session.hospitalId, id);
+    if (meas) {
+      latestMeasurement = {
+        weightKg: meas.weightKg,
+        heightCm: meas.heightCm,
+        bmi: meas.bmi,
+      };
+    }
+  } catch {
+    // Graceful fallback if measurements query fails
+  }
+
   // Calculate day of stay
   const now = new Date();
   const dayOfStay = admission.admittedAt
@@ -105,6 +120,9 @@ export default async function PatientChartLayout({
     diagnosis: admission.reason,
     allergyStatus,
     allergies: allergiesList,
+    weightKg: latestMeasurement?.weightKg ?? null,
+    heightCm: latestMeasurement?.heightCm ?? null,
+    bmi: latestMeasurement?.bmi ?? null,
     status: displayStatus,
   };
 

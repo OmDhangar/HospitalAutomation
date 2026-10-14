@@ -65,6 +65,39 @@ describe('PatientBanner Component', () => {
 
     expect(html).toContain('Diagnosis not recorded');
     expect(html).toContain('Allergies not recorded');
+    expect(html).toContain('Weight: Not recorded');
     expect(html).toContain('Dr. Ramesh Kulkarni');
+  });
+
+  it('renders structured Wt, Ht and BMI when patient measurements are present', () => {
+    const html = renderToString(
+      <PatientBanner
+        admissionId="adm-103"
+        patient={{
+          name: 'Pooja Patil',
+          age: 28,
+          gender: 'Female',
+          uhid: 'UHID-2024-0099',
+          ipdNumber: 1099,
+          wardName: 'Maternity Ward',
+          bedLabel: '4',
+          dayOfStay: 2,
+          doctorName: 'Dr. Anita Joshi',
+          diagnosis: 'Elective LSCS',
+          allergyStatus: 'nkda',
+          allergies: [],
+          weightKg: 65,
+          heightCm: 165,
+          bmi: 23.9,
+          status: 'Admitted',
+        }}
+      />,
+    );
+
+    expect(html).toContain('Wt:');
+    expect(html).toContain('65 kg');
+    expect(html).toContain('Ht:');
+    expect(html).toContain('165 cm');
+    expect(html).toContain('BMI: 23.9');
   });
 });

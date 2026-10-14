@@ -55,6 +55,7 @@ import {
   type RecordNurseUrgentAdminInput,
 } from '@/lib/services/ipd-emar';
 import { retryDeadLetterItem } from '@/lib/services/ipd-emar-outbox';
+import { recordPatientMeasurement } from '@/lib/services/patient-measurements';
 
 /**
  * The desk's IPD actions (IPD plan §5.3–5.5, task T1.6). Form posts that
@@ -811,6 +812,44 @@ export async function rejectVerbalOrderAction(args: {
   revalidatePath('/ipd');
   return { ok: true };
 }
+
+export async function recordPatientMeasurementAction(args: {
+  admissionId: string;
+  weightKg?: number;
+  heightCm?: number;
+  notes?: string | null;
+  recordedAt?: string;
+}): Promise<{ ok: boolean; id: string; bmi: number | null }> {
+  const session = await authorize('ipd.view');
+
+  const adm = await withTenant(session.hospitalId, async (tx) => {
+    return tx.query.admissions.findFirst({
+      where: and(eq(admissions.id, args.admissionId), eq(admissions.hospitalId, session.hospitalId)),
+      columns: { patientId: true },
+    });
+  });
+
+  if (!adm) throw new Error('Admission not found');
+
+  const res = await recordPatientMeasurement({
+    hospitalId: session.hospitalId,
+    patientId: adm.patientId,
+    admissionId: args.admissionId,
+    weightKg: args.weightKg,
+    heightCm: args.heightCm,
+    notes: args.notes ?? undefined,
+    measuredByUserId: session.userId,
+    recordedAt: args.recordedAt ? new Date(args.recordedAt) : undefined,
+  });
+
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/summary`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/vitals`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+
+  return { ok: true, id: res.id, bmi: res.bmi };
+}
+
 
 
 
