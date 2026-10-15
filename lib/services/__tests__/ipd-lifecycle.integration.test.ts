@@ -79,11 +79,18 @@ describe.skipIf(!enabled)('IPD eMAR End-to-End Clinical Lifecycle', () => {
         (${ids.medicineTramadol}, ${ids.hospitalA}, 'Tramadol 50mg Inj', 'Tramadol', 'ampoule', 6000),
         (${ids.medicineOndansetron}, ${ids.hospitalA}, 'Ondansetron 4mg Inj', 'Ondansetron', 'ampoule', 3500)
     `;
+    await admin`
+      insert into ipd_allergy_assessments
+        (hospital_id, admission_id, encounter_id, patient_id, status, is_current, reviewed_by_user_id, reviewed_at)
+      values
+        (${ids.hospitalA}, ${ids.admissionA}, ${ids.encounterA}, ${ids.patientA}, 'nkda', true, ${ids.nurseUserA}, now())
+    `;
   });
 
   afterAll(async () => {
     try {
       await admin`set session_replication_role = 'replica'`;
+      await admin`delete from ipd_allergy_assessments where hospital_id = ${ids.hospitalA}`;
       await admin`delete from bill_items where hospital_id = ${ids.hospitalA}`;
       await admin`delete from bills where hospital_id = ${ids.hospitalA}`;
       await admin`delete from care_entries where hospital_id = ${ids.hospitalA}`;

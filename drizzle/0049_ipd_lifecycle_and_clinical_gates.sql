@@ -1,26 +1,6 @@
 -- 0049_ipd_lifecycle_and_clinical_gates.sql — IPD Lifecycle, Clinical Gates, Verbal Orders, Measurements, Discharge Summaries & Bed Cleaning
 
--- 1. eMAR Outbox for reliable background billing & stock sync
-CREATE TABLE IF NOT EXISTS ipd_emar_integration_outbox (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  hospital_id UUID NOT NULL REFERENCES hospitals(id) ON DELETE CASCADE,
-  event_type TEXT NOT NULL,
-  integration_type TEXT NOT NULL,
-  administration_id UUID NOT NULL,
-  payload JSONB NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed', 'pending_pricing')),
-  attempts INTEGER NOT NULL DEFAULT 0,
-  next_retry_at TIMESTAMPTZ,
-  last_error TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
---> statement-breakpoint
-CREATE INDEX IF NOT EXISTS ipd_emar_outbox_queue_idx ON ipd_emar_integration_outbox (hospital_id, status, next_retry_at);
---> statement-breakpoint
-CREATE INDEX IF NOT EXISTS ipd_emar_outbox_admin_idx ON ipd_emar_integration_outbox (hospital_id, administration_id);
-
--- 2. Explicit verbal orders state machine on ipd_medication_orders
+-- 1. Explicit verbal orders state machine on ipd_medication_orders
 ALTER TABLE ipd_medication_orders
   ADD COLUMN IF NOT EXISTS is_verbal BOOLEAN NOT NULL DEFAULT false,
   ADD COLUMN IF NOT EXISTS verbal_order_status TEXT DEFAULT 'none' CHECK (verbal_order_status IN ('none', 'pending_cosign', 'cosigned', 'rejected', 'modified')),
@@ -32,7 +12,8 @@ ALTER TABLE ipd_medication_orders
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS ipd_med_orders_verbal_status_idx ON ipd_medication_orders (hospital_id, verbal_order_status);
 
--- 3. Dedicated Patient Measurements table (timeline for weight, height, BMI)
+-- 2. Dedicated Patient Measurements table (timeline for weight, height, BMI)
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS patient_measurements (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   hospital_id UUID NOT NULL REFERENCES hospitals(id) ON DELETE CASCADE,
@@ -50,7 +31,8 @@ CREATE TABLE IF NOT EXISTS patient_measurements (
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS patient_measurements_adm_idx ON patient_measurements (hospital_id, admission_id, recorded_at);
 
--- 4. Home Medication Reconciliation & Versioned Discharge Summaries
+-- 3. Home Medication Reconciliation & Versioned Discharge Summaries
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS ipd_admission_home_medications (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   hospital_id UUID NOT NULL REFERENCES hospitals(id) ON DELETE CASCADE,
@@ -111,7 +93,8 @@ CREATE TABLE IF NOT EXISTS ipd_take_home_prescriptions (
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS ipd_take_home_rx_summary_idx ON ipd_take_home_prescriptions (hospital_id, discharge_summary_id);
 
--- 5. Bed Cleaning Lifecycle and Doctor Vitals Frequency Order
+-- 4. Bed Cleaning Lifecycle and Doctor Vitals Frequency Order
+--> statement-breakpoint
 ALTER TABLE beds
   ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'vacant' CHECK (status IN ('vacant', 'occupied', 'cleaning', 'maintenance')),
   ADD COLUMN IF NOT EXISTS cleaned_at TIMESTAMPTZ,
@@ -119,5 +102,35 @@ ALTER TABLE beds
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS beds_status_idx ON beds (hospital_id, status);
 
+--> statement-breakpoint
 ALTER TABLE admissions
   ADD COLUMN IF NOT EXISTS vitals_frequency TEXT DEFAULT 'q4h';
+
+-- 5. Row-Level Security
+--> statement-breakpoint
+DO $$
+DECLARE
+  t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY[
+    'patient_measurements',
+    'ipd_admission_home_medications',
+    'ipd_discharge_summaries',
+    'ipd_take_home_prescriptions'
+  ] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', t);
+    EXECUTE format('DROP POLICY IF EXISTS %I_tenant ON %I', t, t);
+    EXECUTE format(
+      'CREATE POLICY tenant_isolation ON %I
+         USING (hospital_id = nullif(current_setting(''app.hospital_id'', true), '''')::uuid)
+         WITH CHECK (hospital_id = nullif(current_setting(''app.hospital_id'', true), '''')::uuid)',
+      t
+    );
+    EXECUTE format('DROP POLICY IF EXISTS read_only_write ON %I', t);
+    EXECUTE format('CREATE POLICY read_only_write ON %I AS RESTRICTIVE FOR ALL USING (true) WITH CHECK (NOT public.app_read_only())', t);
+    EXECUTE format('DROP POLICY IF EXISTS read_only_delete ON %I', t);
+    EXECUTE format('CREATE POLICY read_only_delete ON %I AS RESTRICTIVE FOR DELETE USING (NOT public.app_read_only())', t);
+  END LOOP;
+END $$;

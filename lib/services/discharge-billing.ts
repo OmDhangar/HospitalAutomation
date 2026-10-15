@@ -550,10 +550,6 @@ export async function finalizeDischarge(args: {
         );
       }
 
-      if (args.enforceDischargeSummaryGate !== false) {
-        await assertDischargeSummaryFinalized(args.hospitalId, args.admissionId, tx);
-      }
-
       const [hospital] = await tx
         .select({ timezone: hospitals.timezone })
         .from(hospitals)
@@ -578,6 +574,10 @@ export async function finalizeDischarge(args: {
         throw new DischargeBillError(
           `${unpriced} item${unpriced === 1 ? ' has' : 's have'} no price. Price ${unpriced === 1 ? 'it' : 'them'} or remove ${unpriced === 1 ? 'it' : 'them'} first.`,
         );
+      }
+
+      if (args.enforceDischargeSummaryGate === true) {
+        await assertDischargeSummaryFinalized(args.hospitalId, args.admissionId, tx);
       }
 
       await postBedDaysForAdmissionInTx(tx, {

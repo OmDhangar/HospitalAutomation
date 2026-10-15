@@ -13,9 +13,13 @@
 -- 8. Transactional integration outbox (ipd_emar_integration_outbox) for billing and risk-stock movements.
 -- 9. Exhaustive PostgreSQL Row-Level Security (FORCE ROW LEVEL SECURITY) across all new tables.
 
-ALTER TABLE admissions DROP CONSTRAINT IF EXISTS admissions_tenant_encounter_uq;
---> statement-breakpoint
-ALTER TABLE admissions ADD CONSTRAINT admissions_tenant_encounter_uq UNIQUE USING INDEX admissions_tenant_encounter_key;
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'admissions_tenant_encounter_uq'
+  ) THEN
+    ALTER TABLE admissions ADD CONSTRAINT admissions_tenant_encounter_uq UNIQUE (hospital_id, id, encounter_id, patient_id);
+  END IF;
+END $$;
 --> statement-breakpoint
 
 /* ------------------------------------------------------- ipd_clinical_rounds */

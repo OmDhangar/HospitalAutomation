@@ -73,11 +73,18 @@ describe.skipIf(!enabled)('ipd-medication-orders service', () => {
         (${ids.medicineA}, ${ids.hospitalA}, 'Ceftriaxone 1g Inj', 'Ceftriaxone', 'vial'),
         (${ids.medicineB}, ${ids.hospitalA}, 'Paracetamol 500mg Tab', 'Paracetamol', 'tablet')
     `;
+    await admin`
+      insert into ipd_allergy_assessments
+        (hospital_id, admission_id, encounter_id, patient_id, status, is_current, reviewed_by_user_id, reviewed_at)
+      values
+        (${ids.hospitalA}, ${ids.admissionA}, ${ids.encounterA}, ${ids.patientA}, 'nkda', true, ${ids.userA}, now())
+    `;
   });
 
   afterAll(async () => {
     try {
       await admin`set session_replication_role = 'replica'`;
+      await admin`delete from ipd_allergy_assessments where hospital_id = ${ids.hospitalA}`;
       await admin`delete from ipd_medication_order_actions where hospital_id = ${ids.hospitalA}`;
       await admin`delete from ipd_medication_orders where hospital_id = ${ids.hospitalA}`;
       await admin`delete from ipd_clinical_rounds where hospital_id = ${ids.hospitalA}`;

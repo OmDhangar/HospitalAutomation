@@ -112,6 +112,7 @@ describe.skipIf(!enabled)('discharge billing', () => {
       where a.id = ${admissionId}`;
     expect(row).toMatchObject({ status: 'discharged', encounter_status: 'closed', total_paise: 830_00, open_beds: 0 });
 
+    await admin`update beds set status = 'vacant' where id = ${bedIds[0]}`;
     const second = await admit(bedIds[0]);
     const { billNumber } = await finalizeDischarge({ hospitalId, admissionId: second.admissionId, actorUserId: deskId });
     expect(billNumber).toMatch(/\/0002$/);

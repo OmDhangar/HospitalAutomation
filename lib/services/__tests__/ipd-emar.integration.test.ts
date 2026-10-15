@@ -79,11 +79,18 @@ describe.skipIf(!enabled)('ipd-emar service', () => {
         (${ids.medicineCeftriaxone}, ${ids.hospitalA}, 'Ceftriaxone 1g Inj', 'Ceftriaxone', 'vial', 45000),
         (${ids.medicineTramadol}, ${ids.hospitalA}, 'Tramadol 50mg Inj', 'Tramadol', 'ampoule', 6000)
     `;
+    await admin`
+      insert into ipd_allergy_assessments
+        (hospital_id, admission_id, encounter_id, patient_id, status, is_current, reviewed_by_user_id, reviewed_at)
+      values
+        (${ids.hospitalA}, ${ids.admissionA}, ${ids.encounterA}, ${ids.patientA}, 'nkda', true, ${ids.nurseUserA}, now())
+    `;
   });
 
   afterAll(async () => {
     try {
       await admin`set session_replication_role = 'replica'`;
+      await admin`delete from ipd_allergy_assessments where hospital_id = ${ids.hospitalA}`;
       await admin`delete from ipd_emar_integration_outbox where hospital_id = ${ids.hospitalA}`;
       await admin`delete from ipd_medication_administrations where hospital_id = ${ids.hospitalA}`;
       await admin`delete from ipd_medication_order_actions where hospital_id = ${ids.hospitalA}`;

@@ -130,7 +130,12 @@ export async function finalizeAction(form: FormData) {
   const admissionId = text(form, 'admissionId');
   let billNumber = '';
   await attempt(admissionId, async () => {
-    ({ billNumber } = await finalizeDischarge({ hospitalId: session.hospitalId, admissionId, actorUserId: session.userId }));
+    ({ billNumber } = await finalizeDischarge({
+      hospitalId: session.hospitalId,
+      admissionId,
+      actorUserId: session.userId,
+      enforceDischargeSummaryGate: true,
+    }));
   });
   go(admissionId, { saved: `Discharged. Bill ${billNumber} is final.`, undo: formatUndoToken('finalize', admissionId) });
 }
