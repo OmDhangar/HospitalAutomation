@@ -2,14 +2,8 @@ import { and, desc, eq } from 'drizzle-orm';
 import { patientMeasurements } from '@/lib/db/schema';
 import { withTenant } from '@/lib/db';
 
-export function calculateBmi(weightKg?: number | null, heightCm?: number | null): number | null {
-  if (weightKg == null || heightCm == null) return null;
-  if (weightKg <= 0 || heightCm <= 0) return null;
-  const heightM = heightCm / 100;
-  const rawBmi = weightKg / (heightM * heightM);
-  if (!isFinite(rawBmi) || isNaN(rawBmi)) return null;
-  return Math.round(rawBmi * 10) / 10;
-}
+import { calculateBmi } from '@/lib/domain/patient-measurements';
+export { calculateBmi };
 
 export interface RecordPatientMeasurementInput {
   hospitalId: string;

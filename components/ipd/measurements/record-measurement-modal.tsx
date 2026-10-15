@@ -3,7 +3,7 @@
 import React, { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { recordPatientMeasurementAction } from '@/app/(app)/ipd/actions';
-import { calculateBmi } from '@/lib/services/patient-measurements';
+import { calculateBmi, getBmiCategory } from '@/lib/domain/patient-measurements';
 import { Button } from '@/components/ui';
 
 export interface RecordMeasurementModalProps {
@@ -46,13 +46,6 @@ export function RecordMeasurementModal({
     !isNaN(numWeight) && numWeight > 0 ? numWeight : null,
     !isNaN(numHeight) && numHeight > 0 ? numHeight : null,
   );
-
-  const getBmiCategory = (bmi: number) => {
-    if (bmi < 18.5) return { label: 'Underweight', color: 'text-amber-700 bg-amber-50 border-amber-200' };
-    if (bmi <= 24.9) return { label: 'Normal weight', color: 'text-emerald-700 bg-emerald-50 border-emerald-200' };
-    if (bmi <= 29.9) return { label: 'Overweight', color: 'text-orange-700 bg-orange-50 border-orange-200' };
-    return { label: 'Obese', color: 'text-rose-700 bg-rose-50 border-rose-200' };
-  };
 
   const bmiCategory = liveBmi ? getBmiCategory(liveBmi) : null;
 
