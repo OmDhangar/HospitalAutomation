@@ -10,7 +10,7 @@ describe('TabNavigation Component', () => {
 
     expect(html).toContain('Summary');
     expect(html).toContain('Prescriptions');
-    expect(html).toContain('eMAR');
+    expect(html).toContain('Medication Chart');
     expect(html).toContain('Vitals &amp; I/O');
     expect(html).toContain('Notes');
     expect(html).toContain('Investigations');

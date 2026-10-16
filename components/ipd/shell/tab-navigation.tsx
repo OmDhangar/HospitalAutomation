@@ -56,7 +56,7 @@ export function TabNavigation({
     },
     {
       id: 'emar',
-      label: 'eMAR',
+      label: 'Medication Chart',
       hrefSegment: 'emar',
       badge: counts?.overdueDoses && counts.overdueDoses > 0 ? counts.overdueDoses : null,
       badgeVariant: 'danger',

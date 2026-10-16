@@ -35,7 +35,7 @@ export function OutboxDeadLetterView({ items }: OutboxDeadLetterViewProps) {
       <div className="rounded-xl border border-ink-200 bg-white p-6 text-center shadow-2xs">
         <EmptyState
           title="Outbox is healthy"
-          hint="There are no dead-lettered or failed eMAR integration events. All administered medications have posted to billing and stock."
+          hint="There are no dead-lettered or failed medication administration sync events. All administered medications have posted to billing and stock."
         />
       </div>
     );
@@ -58,7 +58,7 @@ export function OutboxDeadLetterView({ items }: OutboxDeadLetterViewProps) {
             </h3>
           </div>
           <span className="text-xs text-ink-500">
-            eMAR Bedside Billing &amp; Stock Sync
+            Medication Billing &amp; Stock Sync
           </span>
         </div>
 

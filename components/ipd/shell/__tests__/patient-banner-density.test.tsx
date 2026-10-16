@@ -46,7 +46,7 @@ describe('PatientBanner & TabNavigation Density', () => {
     expect(html).toContain('py-1.5');
     expect(html).toContain('Summary');
     expect(html).toContain('Prescriptions');
-    expect(html).toContain('eMAR');
+    expect(html).toContain('Medication Chart');
     expect(html).toContain('Vitals &amp; I/O');
   });
 });

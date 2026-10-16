@@ -157,7 +157,7 @@ export function OrderSigningModal({
               Confirm & Sign Clinical Round Orders
             </h3>
             <p className="text-xs text-ink-500">
-              Signed orders become immediately actionable in the bedside nursing eMAR.
+              Signed orders become immediately actionable in the bedside medication chart.
             </p>
           </div>
           <button

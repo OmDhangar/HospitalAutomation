@@ -854,7 +854,7 @@ export function CreateTreatmentPlanModal({
         {/* Footer */}
         <div className="px-5 py-3 bg-ink-50/80 border-t border-ink-200 flex items-center justify-between">
           <span className="text-2xs text-ink-500">
-            Once saved, nurses immediately receive these on bedside eMAR with today&apos;s dose checkboxes.
+            Once saved, nurses immediately receive these on the bedside medication chart with today&apos;s dose checkboxes.
           </span>
           <div className="flex items-center gap-2">
             <button

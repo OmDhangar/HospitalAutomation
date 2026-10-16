@@ -85,7 +85,7 @@ export function RoundingCockpit({
 
   const handleSignedSuccess = (result: { roundId: string; signedOrderIds: string[] }) => {
     setSignedNotification(
-      `Round successfully finalized and signed! ${result.signedOrderIds.length} orders are now live on the bedside eMAR.`,
+      `Round successfully finalized and signed! ${result.signedOrderIds.length} orders are now live on the bedside medication chart.`,
     );
     setNewOrders([]);
     router.refresh();

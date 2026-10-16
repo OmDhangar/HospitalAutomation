@@ -238,7 +238,7 @@ export function RecordScreen({
                 href={emarHref}
                 className="inline-flex min-h-11 shrink-0 items-center rounded-lg bg-emerald-50 px-3 text-sm font-semibold text-emerald-800 ring-1 ring-emerald-300 hover:bg-emerald-100"
               >
-                eMAR Chart
+                Medication Chart
               </Link>
             ) : null}
             {chartHref ? (

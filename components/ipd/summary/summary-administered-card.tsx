@@ -42,7 +42,7 @@ export function SummaryAdministeredCard({
           href={`/ipd/patients/${admissionId}/emar`}
           className="text-[11px] font-semibold text-brand-700 hover:underline"
         >
-          eMAR &rarr;
+          Medication Chart &rarr;
         </Link>
       </div>
 

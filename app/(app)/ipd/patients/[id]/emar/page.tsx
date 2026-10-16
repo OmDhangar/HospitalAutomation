@@ -16,7 +16,7 @@ import {
 } from '@/components/ipd/bedside/bedside-treatment-workspace';
 import type { AllergenItem } from '@/lib/services/ipd-rounding-cockpit';
 
-export const metadata = { title: 'eMAR & Bedside Treatment · IPD' };
+export const metadata = { title: 'Medication Chart · IPD' };
 
 export default async function PatientEmarPage({
   params,

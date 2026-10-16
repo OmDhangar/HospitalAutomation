@@ -238,7 +238,7 @@ export default async function SummaryPage({ params }: { params: Promise<any> }) 
                 href={`/ipd/patients/${id}/emar`}
                 className="p-2 rounded border border-ink-200 bg-white hover:bg-slate-50 transition-colors"
               >
-                <div className="font-semibold text-ink-900">Nurse eMAR</div>
+                <div className="font-semibold text-ink-900">Medication Chart</div>
                 <div className="text-[10px] text-ink-500">Medication timings</div>
               </Link>
               <Link

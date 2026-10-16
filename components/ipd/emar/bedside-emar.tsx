@@ -206,7 +206,7 @@ export function BedsideEmar({
                 </span>
               )}
               <span>•</span>
-              <span>Bedside Nursing eMAR</span>
+              <span>Bedside Medication Chart</span>
             </div>
           </div>
 
@@ -270,7 +270,7 @@ export function BedsideEmar({
             onClick={handleRefresh}
             disabled={isPending}
             className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-ink-200 bg-white px-3 text-xs font-semibold text-ink-700 shadow-2xs hover:bg-ink-50 disabled:opacity-50"
-            title="Refresh eMAR data"
+            title="Refresh medication chart"
           >
             {isPending ? 'Syncing…' : '↻ Refresh'}
           </button>
