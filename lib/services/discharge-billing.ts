@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, ne, notExists, sql } from 'drizzle-orm';
 import { withTenant, type Tx } from '@/lib/db';
 import { isRequestReadOnly } from '@/lib/db/request-context';
 import {
@@ -16,6 +16,9 @@ import {
   encounterPayers,
   encounters,
   hospitals,
+  ipdEmarIntegrationOutbox,
+  ipdMedicationAdministrations,
+  ipdMedicationOrders,
   medicines,
   patientPayments,
   patients,
@@ -37,6 +40,7 @@ import {
 import { calculateBillItem, sumBillItems } from '@/lib/domain/patient-billing';
 import { generatePublicToken, hashToken } from '@/lib/security/tokens';
 import { postBedDaysForAdmissionInTx } from '@/lib/services/bed-days';
+import { postCareEntryLineInTx, voidCareEntryLineInTx } from '@/lib/services/ipd-billing';
 import { getActivePayerInTx, setPayerInTx } from '@/lib/services/encounter-payers';
 import { getEncounterInTx } from '@/lib/services/encounters';
 import { resolveRow } from '@/lib/services/patients';
@@ -170,6 +174,7 @@ async function admissionHeaderInTx(tx: Tx, admissionId: string) {
       id: admissions.id,
       status: admissions.status,
       encounterId: admissions.encounterId,
+      patientId: admissions.patientId,
       patientName: patients.name,
       age: patients.age,
       gender: patients.gender,
@@ -200,6 +205,201 @@ async function admissionHeaderInTx(tx: Tx, admissionId: string) {
   return { ...row, bed: bed ?? null };
 }
 
+/**
+ * Synchronizes bedside care, eMAR medication administrations, and unbilled care entries
+ * into the running draft bill for an admitted stay.
+ *
+ * Ensures:
+ * 1. Administered medication doses in `ipd_medication_administrations` are linked to care entries
+ *    and posted to the draft bill if priced.
+ * 2. Unbilled bedside care entries (consumables, syringes, fluids, medicines) are posted to the draft bill.
+ * 3. Voided administrations have their linked bill items marked voided.
+ * 4. Pending eMAR billing outbox rows for this admission are marked processed.
+ */
+export async function syncAdmissionBillingInTx(
+  tx: Tx,
+  args: {
+    hospitalId: string;
+    admissionId: string;
+    encounterId: string;
+    patientId: string;
+    actorUserId?: string | null;
+  },
+): Promise<{ medicinesBilled: number; consumablesBilled: number }> {
+  let medicinesBilled = 0;
+  let consumablesBilled = 0;
+  const now = new Date();
+
+  // 1. Process any medication administrations for this admission that have not been linked to a care entry
+  const unlinkedAdmins = await tx
+    .select({
+      admin: ipdMedicationAdministrations,
+      order: ipdMedicationOrders,
+      medicine: medicines,
+    })
+    .from(ipdMedicationAdministrations)
+    .innerJoin(
+      ipdMedicationOrders,
+      eq(ipdMedicationOrders.id, ipdMedicationAdministrations.orderId),
+    )
+    .leftJoin(
+      medicines,
+      and(
+        eq(medicines.hospitalId, args.hospitalId),
+        eq(medicines.id, ipdMedicationOrders.medicineId),
+      ),
+    )
+    .where(
+      and(
+        eq(ipdMedicationAdministrations.hospitalId, args.hospitalId),
+        eq(ipdMedicationAdministrations.admissionId, args.admissionId),
+        eq(ipdMedicationAdministrations.outcome, 'administered'),
+        isNull(ipdMedicationAdministrations.careEntryId),
+        isNull(ipdMedicationAdministrations.voidedAt),
+      ),
+    );
+
+  for (const { admin, order, medicine } of unlinkedAdmins) {
+    if (order.patientSupplied) continue;
+
+    const occurredAt = admin.actualTime ?? admin.recordedAt;
+    const [careEntry] = await tx
+      .insert(careEntries)
+      .values({
+        hospitalId: args.hospitalId,
+        admissionId: args.admissionId,
+        encounterId: args.encounterId,
+        patientId: args.patientId,
+        medicineId: order.medicineId,
+        description: medicine?.name ?? order.medicineName,
+        quantity: 1,
+        occurredAt,
+        recordedAt: now,
+        recordedByUserId: admin.nurseUserId ?? args.actorUserId,
+        clientId: crypto.randomUUID(),
+      })
+      .returning();
+
+    await tx
+      .update(ipdMedicationAdministrations)
+      .set({ careEntryId: careEntry.id })
+      .where(eq(ipdMedicationAdministrations.id, admin.id));
+
+    if (medicine && medicine.sellingPricePaise !== null) {
+      const posted = await postCareEntryLineInTx(tx, {
+        entry: careEntry,
+        actorUserId: admin.nurseUserId ?? args.actorUserId ?? null,
+      });
+      if (posted) medicinesBilled += 1;
+    }
+
+    await tx
+      .update(ipdEmarIntegrationOutbox)
+      .set({
+        status: medicine?.sellingPricePaise !== null ? 'processed' : 'pending_pricing',
+        processedAt: medicine?.sellingPricePaise !== null ? now : null,
+        claimedAt: null,
+      })
+      .where(
+        and(
+          eq(ipdEmarIntegrationOutbox.hospitalId, args.hospitalId),
+          eq(ipdEmarIntegrationOutbox.administrationId, admin.id),
+        ),
+      );
+  }
+
+  // 2. Post any unbilled care entries (medicines or bedside consumables)
+  const unbilledCareEntries = await tx
+    .select({ entry: careEntries })
+    .from(careEntries)
+    .where(
+      and(
+        eq(careEntries.hospitalId, args.hospitalId),
+        eq(careEntries.admissionId, args.admissionId),
+        isNull(careEntries.voidedAt),
+        notExists(
+          tx
+            .select({ one: sql`1` })
+            .from(billItems)
+            .where(and(eq(billItems.careEntryId, careEntries.id), isNull(billItems.voidedAt))),
+        ),
+      ),
+    )
+    .orderBy(asc(careEntries.occurredAt));
+
+  for (const { entry } of unbilledCareEntries) {
+    const posted = await postCareEntryLineInTx(tx, {
+      entry,
+      actorUserId: args.actorUserId ?? null,
+    });
+    if (posted) {
+      if (entry.medicineId) medicinesBilled += 1;
+      else consumablesBilled += 1;
+    }
+  }
+
+  // 3. Void synchronization: if an administration was voided, ensure its bill line is voided
+  const voidedAdmins = await tx
+    .select({ admin: ipdMedicationAdministrations })
+    .from(ipdMedicationAdministrations)
+    .where(
+      and(
+        eq(ipdMedicationAdministrations.hospitalId, args.hospitalId),
+        eq(ipdMedicationAdministrations.admissionId, args.admissionId),
+        sql`${ipdMedicationAdministrations.voidedAt} is not null`,
+        sql`${ipdMedicationAdministrations.careEntryId} is not null`,
+      ),
+    );
+
+  for (const { admin } of voidedAdmins) {
+    if (admin.careEntryId) {
+      await voidCareEntryLineInTx(tx, {
+        careEntryId: admin.careEntryId,
+        actorUserId: admin.voidedByUserId ?? admin.nurseUserId ?? 'system',
+        reason: admin.voidReason ?? 'Medication administration voided',
+      });
+      await tx
+        .update(ipdEmarIntegrationOutbox)
+        .set({ status: 'processed', processedAt: now, claimedAt: null })
+        .where(
+          and(
+            eq(ipdEmarIntegrationOutbox.hospitalId, args.hospitalId),
+            eq(ipdEmarIntegrationOutbox.administrationId, admin.id),
+          ),
+        );
+    }
+  }
+
+  // 4. Mark any remaining pending outbox items for this admission as processed if their admin has a careEntryId
+  const remainingPending = await tx
+    .select()
+    .from(ipdEmarIntegrationOutbox)
+    .where(
+      and(
+        eq(ipdEmarIntegrationOutbox.hospitalId, args.hospitalId),
+        eq(ipdEmarIntegrationOutbox.status, 'pending'),
+      ),
+    );
+
+  for (const item of remainingPending) {
+    const payload = (item.payload as Record<string, any>) ?? {};
+    if (payload.admissionId === args.admissionId) {
+      const [adm] = await tx
+        .select()
+        .from(ipdMedicationAdministrations)
+        .where(eq(ipdMedicationAdministrations.id, item.administrationId));
+      if (adm?.careEntryId) {
+        await tx
+          .update(ipdEmarIntegrationOutbox)
+          .set({ status: 'processed', processedAt: now, claimedAt: null })
+          .where(eq(ipdEmarIntegrationOutbox.id, item.id));
+      }
+    }
+  }
+
+  return { medicinesBilled, consumablesBilled };
+}
+
 /** Everything the discharge billing screen shows. Null if not found. */
 export async function getDischargeBillView(args: {
   hospitalId: string;
@@ -212,10 +412,17 @@ export async function getDischargeBillView(args: {
       const header = await admissionHeaderInTx(tx, args.admissionId);
       if (!header) return null;
 
-      // Bring the room charges up to today before showing a total — unless
+      // Bring the room charges and care/medication charges up to today before showing a total — unless
       // this is a read-only support session, which writes nothing.
       if ((header.status === 'admitted' || header.status === 'discharge_ready') && !(await isRequestReadOnly())) {
         await postBedDaysForAdmissionInTx(tx, { admissionId: header.id, timezone: header.timezone, now: new Date() });
+        await syncAdmissionBillingInTx(tx, {
+          hospitalId: args.hospitalId,
+          admissionId: header.id,
+          encounterId: header.encounterId,
+          patientId: header.patientId,
+          actorUserId: null,
+        });
       }
 
       const billRows = await tx

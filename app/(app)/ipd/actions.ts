@@ -54,7 +54,7 @@ import {
   type RecordExceptionInput,
   type RecordNurseUrgentAdminInput,
 } from '@/lib/services/ipd-emar';
-import { retryDeadLetterItem } from '@/lib/services/ipd-emar-outbox';
+import { processPendingOutboxBatch, retryDeadLetterItem } from '@/lib/services/ipd-emar-outbox';
 import { recordPatientMeasurement } from '@/lib/services/patient-measurements';
 import {
   saveDischargeSummary,
@@ -512,10 +512,20 @@ export async function recordAdministrationAction(args: {
     actorUserId: session.userId,
   });
 
+  try {
+    await processPendingOutboxBatch({ hospitalId: session.hospitalId, limit: 10 });
+  } catch (err) {
+    console.error('Failed processing outbox batch in recordAdministrationAction:', err);
+  }
+
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/billing`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/emar`);
   revalidatePath(`/ipd/admissions/${args.admissionId}`);
   revalidatePath(`/ipd/admissions/${args.admissionId}/treatment`);
   revalidatePath(`/ipd/admissions/${args.admissionId}/emar`);
   revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/bill`);
   revalidatePath('/ipd');
   return { ok: true, administrationId: res.administrationId };
 }
@@ -557,10 +567,20 @@ export async function voidAdministrationAction(args: {
     actorUserId: session.userId,
   });
 
+  try {
+    await processPendingOutboxBatch({ hospitalId: session.hospitalId, limit: 10 });
+  } catch (err) {
+    console.error('Failed processing outbox batch in voidAdministrationAction:', err);
+  }
+
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/billing`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/emar`);
   revalidatePath(`/ipd/admissions/${args.admissionId}`);
   revalidatePath(`/ipd/admissions/${args.admissionId}/treatment`);
   revalidatePath(`/ipd/admissions/${args.admissionId}/emar`);
   revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/bill`);
   revalidatePath('/ipd');
   return { ok: true };
 }
@@ -650,6 +670,7 @@ export async function toggleDischargeReadyClientAction(args: {
 
 export async function recordVitalReadingAction(args: {
   admissionId: string;
+  recordedAt?: string | Date | null;
   temperatureF?: number | string | null;
   pulseBpm?: number | null;
   bpSystolic?: number | null;
@@ -661,6 +682,7 @@ export async function recordVitalReadingAction(args: {
   o2Support?: string | null;
   news2Score?: number | null;
   bsl?: number | null;
+  abdGirthCm?: number | string | null;
   scheduledSlot?: string | null;
 }): Promise<{ ok: boolean; id: string }> {
   const session = await authorize('ipd.view');
@@ -673,6 +695,7 @@ export async function recordVitalReadingAction(args: {
         .values({
           hospitalId: session.hospitalId,
           admissionId: args.admissionId,
+          recordedAt: args.recordedAt ? new Date(args.recordedAt) : new Date(),
           temperatureF: tempStr,
           pulseBpm: args.pulseBpm ?? null,
           bpSystolic: args.bpSystolic ?? null,
@@ -684,6 +707,7 @@ export async function recordVitalReadingAction(args: {
           o2Support: args.o2Support ?? null,
           news2Score: args.news2Score ?? null,
           bsl: args.bsl ?? null,
+          abdGirthCm: args.abdGirthCm != null && String(args.abdGirthCm).trim() !== '' ? String(args.abdGirthCm) : null,
           scheduledSlot: args.scheduledSlot ?? null,
           recordedByUserId: session.userId,
         })
@@ -715,6 +739,7 @@ export async function recordIntakeOutputAction(args: {
   admissionId: string;
   kind: 'ORAL' | 'IV' | 'URINE' | 'DRAIN' | 'RT_ASPIRATE';
   ml: number;
+  recordedAt?: string | Date | null;
   notes?: string | null;
 }): Promise<{ ok: boolean; id: string }> {
   const session = await authorize('ipd.view');
@@ -726,6 +751,7 @@ export async function recordIntakeOutputAction(args: {
         .values({
           hospitalId: session.hospitalId,
           admissionId: args.admissionId,
+          recordedAt: args.recordedAt ? new Date(args.recordedAt) : new Date(),
           kind: args.kind,
           ml: args.ml,
           notes: args.notes ?? null,

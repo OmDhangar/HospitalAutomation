@@ -165,6 +165,21 @@ export async function processOutboxItem(args: {
 
             if (!admin) throw new Error('Administration record not found for outbox event');
 
+            // If already linked to a care entry (e.g. through synchronous billing or view sync),
+            // simply mark outbox item processed and return
+            if (admin.careEntryId) {
+              await tx
+                .update(ipdEmarIntegrationOutbox)
+                .set({
+                  status: 'processed',
+                  processedAt: now,
+                  claimedAt: null,
+                })
+                .where(eq(ipdEmarIntegrationOutbox.id, item.id));
+
+              return { outcome: 'processed' };
+            }
+
             const [admission] = await tx
               .select()
               .from(admissions)
