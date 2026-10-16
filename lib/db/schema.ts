@@ -3410,5 +3410,36 @@ export type NewIpdDischargeSummary = typeof ipdDischargeSummaries.$inferInsert;
 export type IpdTakeHomePrescriptionRow = typeof ipdTakeHomePrescriptions.$inferSelect;
 export type NewIpdTakeHomePrescription = typeof ipdTakeHomePrescriptions.$inferInsert;
 
+/**
+ * Universal global medicine catalogue. Not tenant-scoped; available across all hospitals.
+ */
+export const globalMedicines = pgTable(
+  'global_medicines',
+  {
+    id: id(),
+    name: text('name').notNull(),
+    genericName: text('generic_name'),
+    strength: text('strength'),
+    form: text('form'),
+    category: text('category').notNull().default('General'),
+    unit: text('unit').notNull().default('unit'),
+    defaultRoute: text('default_route').default('oral'),
+    defaultFrequency: text('default_frequency').default('OD'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('global_medicines_identity_key').on(
+      sql`lower(${t.name})`,
+      sql`coalesce(lower(${t.strength}), '')`,
+      sql`coalesce(lower(${t.form}), '')`,
+    ),
+    index('global_medicines_name_idx').on(sql`lower(${t.name}) text_pattern_ops`),
+    index('global_medicines_generic_idx').on(sql`lower(${t.genericName}) text_pattern_ops`),
+  ],
+);
+
+export type GlobalMedicineRow = typeof globalMedicines.$inferSelect;
+export type NewGlobalMedicine = typeof globalMedicines.$inferInsert;
+
 
 
