@@ -500,6 +500,14 @@ export function MinimalOrdersTab({
         onClose={() => setIsPrescribeModalOpen(false)}
         patientName={patientName}
         initialDiagnosis={initialDiagnosis}
+        activeOrders={orders
+          .filter((o) => o.status === 'active' || o.status === 'on_hold')
+          .map((o) => ({
+            id: o.id,
+            medicineName: o.medicineName,
+            route: o.route,
+            frequency: o.frequencyCode,
+          }))}
       />
     </div>
   );

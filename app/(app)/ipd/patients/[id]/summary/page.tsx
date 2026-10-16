@@ -3,10 +3,13 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requireSession } from '@/lib/auth/session';
 import { getDoctorSummaryCockpitData } from '@/lib/services/ipd-summary';
+import { getTestChips } from '@/lib/services/doctor-ipd';
 import { formatDoctor } from '@/lib/domain/doctor';
 import { can } from '@/lib/domain/permissions';
 import { DailyMedicationMatrix } from '@/components/ipd/summary/daily-medication-matrix';
 import { TprFlowsheet } from '@/components/ipd/summary/tpr-flowsheet';
+import { DoctorQuickActions } from '@/components/ipd/summary/doctor-quick-actions';
+import { SummaryAdministeredCard } from '@/components/ipd/summary/summary-administered-card';
 import { AlertTriangleIcon } from '@/components/icons';
 
 export default async function SummaryPage({ params }: { params: Promise<any> }) {
@@ -14,18 +17,25 @@ export default async function SummaryPage({ params }: { params: Promise<any> }) 
   const resolvedParams = await params;
   const id = resolvedParams?.id as string;
 
-  const cockpit = await getDoctorSummaryCockpitData({
-    hospitalId: session.hospitalId,
-    admissionId: id,
-  });
+  const [cockpit, testChips] = await Promise.all([
+    getDoctorSummaryCockpitData({
+      hospitalId: session.hospitalId,
+      admissionId: id,
+    }),
+    getTestChips(session.hospitalId),
+  ]);
 
-  const { admission, medications, vitals, fluidBalance, attentionItems } = cockpit;
+  const { admission, medications, vitals, fluidBalance, attentionItems, recentHistory = [] } = cockpit;
   if (!admission) notFound();
 
   const formattedDoctor = formatDoctor(admission.doctorName);
+  const canPrescribe = can(session.role, 'ipd.prescribe') && !session.readOnly;
+  const dayOfStay = admission.admittedAt
+    ? Math.max(1, Math.ceil((Date.now() - new Date(admission.admittedAt).getTime()) / (1000 * 60 * 60 * 24)))
+    : 1;
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3.5">
       {/* 1. Attention Strip (Compact alert badges) */}
       {attentionItems.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
@@ -55,20 +65,51 @@ export default async function SummaryPage({ params }: { params: Promise<any> }) 
         </div>
       )}
 
-      {/* 2. Main High-Density Cockpit Grid (60% / 40%) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-start">
-        {/* Left Column (60%): Clinical Flowsheet & Treatment Checkboxes */}
-        <div className="lg:col-span-7 space-y-3">
+      {/* 2. Doctor Action Strip & Inpatient Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-surface rounded-xl border border-ink-200 p-3.5 shadow-2xs">
+        <div>
+          <h2 className="text-sm font-bold text-ink-950 flex items-center gap-2">
+            <span>Inpatient Clinical Summary</span>
+            <span className="rounded-full bg-brand-100 text-brand-900 text-[10px] font-bold px-2 py-0.5">
+              Day {dayOfStay} of stay
+            </span>
+          </h2>
+          <p className="text-xs text-ink-500 mt-0.5">
+            Active treatment orders, TPR trends, 24h fluid balance, and administered medications.
+          </p>
+        </div>
+
+        <DoctorQuickActions
+          admissionId={id}
+          patientName={admission.patientName}
+          initialDiagnosis={admission.reason}
+          testChips={testChips}
+          canPrescribe={canPrescribe}
+          activeOrders={medications.map((m) => ({
+            id: m.orderId,
+            medicineName: m.medicineName,
+            strength: m.strength,
+            form: m.form,
+            route: m.route,
+            frequency: m.frequency,
+          }))}
+        />
+      </div>
+
+      {/* 3. Main Bento Grid (8 cols / 4 cols) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-start">
+        {/* Left Column (8 cols): Clinical Matrix, Vitals Snapshot, Fluid Balance */}
+        <div className="lg:col-span-8 space-y-3.5">
           {/* Daily Medication Fulfillment Matrix with Checkboxes */}
           <DailyMedicationMatrix
             medications={medications}
             admissionId={id}
             patientName={admission.patientName}
             initialDiagnosis={admission.reason}
-            canPrescribe={can(session.role, 'ipd.prescribe') && !session.readOnly}
+            canPrescribe={canPrescribe}
           />
 
-          {/* Embedded TPR & Vitals Flowsheet */}
+          {/* Embedded TPR & Vitals Flowsheet - Preserved 6-check snapshot with Full Flowsheet -> button */}
           <TprFlowsheet readings={vitals} admissionId={id} />
 
           {/* 24-Hour Fluid Balance Grid */}
@@ -124,10 +165,10 @@ export default async function SummaryPage({ params }: { params: Promise<any> }) 
           </div>
         </div>
 
-        {/* Right Column (40%): Stay History, Care Team, Chart Sheets */}
-        <div className="lg:col-span-5 space-y-3">
+        {/* Right Column (4 cols): Care Team, Given Medicines Today Bento Card, Chart Navigation */}
+        <div className="lg:col-span-4 space-y-3.5">
           {/* Patient Stay & Care Team Card */}
-          <div className="bg-surface rounded-lg border border-ink-200 shadow-2xs p-3 space-y-2 text-xs">
+          <div className="bg-surface rounded-lg border border-ink-200 shadow-2xs p-3.5 space-y-2 text-xs">
             <div className="flex items-center justify-between border-b border-ink-100 pb-2">
               <span className="font-bold text-ink-900 text-xs tracking-tight">
                 Admission Overview &amp; Care Team
@@ -174,8 +215,14 @@ export default async function SummaryPage({ params }: { params: Promise<any> }) 
             </div>
           </div>
 
+          {/* Bento Card: Independently Scrollable Given Medicines Today */}
+          <SummaryAdministeredCard
+            admissionId={id}
+            doses={recentHistory}
+          />
+
           {/* Quick Chart Sheets (Simple English) */}
-          <div className="bg-surface rounded-lg border border-ink-200 shadow-2xs p-3">
+          <div className="bg-surface rounded-lg border border-ink-200 shadow-2xs p-3.5">
             <span className="font-bold text-ink-900 text-xs tracking-tight block mb-2">
               Patient Chart Sheets
             </span>

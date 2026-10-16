@@ -43,6 +43,15 @@ export function DailyMedicationMatrix({
 }: DailyMedicationMatrixProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
 
+  const activeOrders = medications.map((m) => ({
+    id: m.orderId,
+    medicineName: m.medicineName,
+    strength: m.strength,
+    form: m.form,
+    route: m.route,
+    frequency: m.frequency,
+  }));
+
   if (medications.length === 0) {
     return (
       <div className={`p-5 bg-surface rounded-lg border border-ink-200 text-center space-y-3 shadow-2xs ${className}`}>
@@ -75,6 +84,7 @@ export function DailyMedicationMatrix({
             onClose={() => setIsModalOpen(false)}
             patientName={patientName}
             initialDiagnosis={initialDiagnosis}
+            activeOrders={activeOrders}
           />
         )}
       </div>
@@ -227,6 +237,7 @@ export function DailyMedicationMatrix({
           onClose={() => setIsModalOpen(false)}
           patientName={patientName}
           initialDiagnosis={initialDiagnosis}
+          activeOrders={activeOrders}
         />
       )}
     </div>
