@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { insertFixturePatient } from '@/lib/test/patient-fixture';
 import {
   signRoundOrders,
+  adjustMedicationScheduleTimes,
 } from '@/lib/services/ipd-medication-orders';
 import {
   getBedsideEmar,
@@ -439,4 +440,73 @@ describe.skipIf(!enabled)('ipd-emar service', () => {
     expect(corrected.corrects_administration_id).toBe(originalRes.administrationId);
     expect(Number(corrected.dose_amount_numeric)).toBe(650);
   });
+
+  it('allows administering dose after endsAt when clinical deviation note is provided and extends endsAt on schedule adjustment', async () => {
+    // 1. Create an order whose treatment duration endsAt is 1 hour in the past
+    const pastEndsAt = new Date(Date.now() - 60 * 60 * 1000);
+    const signRes = await signRoundOrders({
+      hospitalId: ids.hospitalA,
+      admissionId: ids.admissionA,
+      doctorId: ids.doctorA,
+      authorUserId: ids.nurseUserA,
+      notes: 'Short course test order',
+      duplicateOverrideReason: 'Intentional replacement course for late dose test',
+      resolutions: [
+        {
+          type: 'new',
+          order: {
+            medicineId: ids.medicineParacetamol,
+            medicineName: 'Paracetamol 650mg Late Test',
+            doseAmount: '650',
+            doseUnit: 'mg',
+            route: 'oral',
+            scheduleType: 'scheduled',
+            frequencyCode: 'OD',
+            scheduleTimes: ['08:00'],
+            startsAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+            endsAt: pastEndsAt,
+            durationDays: 1,
+          },
+        },
+      ],
+    });
+
+    const orderId = signRes.signedOrderIds[0];
+
+    // 2. Administering with clinical deviation note must succeed and not throw "Order has expired"
+    const adminRes = await recordAdministration({
+      hospitalId: ids.hospitalA,
+      admissionId: ids.admissionA,
+      orderId,
+      input: {
+        clientId: uuid(),
+        actualTime: new Date(),
+        doseAmount: '650',
+        doseGiven: '650 mg',
+        routeGiven: 'oral',
+        clinicalNote: '[Timing deviation: Scheduled 08:00 am, Given late — Reason: Patient away from ward (scan/X-ray/OT)]',
+      },
+      actorUserId: ids.nurseUserA,
+    });
+
+    expect(adminRes.ok).toBe(true);
+    expect(adminRes.administrationId).toBeDefined();
+
+    // 3. Adjusting schedule times on an order with a past endsAt should extend endsAt
+    const adjustRes = await adjustMedicationScheduleTimes({
+      hospitalId: ids.hospitalA,
+      orderId,
+      newScheduleTimes: ['21:44'],
+      reason: 'Patient returned from imaging, rescheduling evening dose',
+      actorUserId: ids.nurseUserA,
+    });
+
+    expect(adjustRes.success).toBe(true);
+
+    const [successorOrder] = await admin`
+      select id, ends_at from ipd_medication_orders where id = ${adjustRes.orderId}
+    `;
+    expect(new Date(successorOrder.ends_at).getTime()).toBeGreaterThan(Date.now());
+  });
 });
+

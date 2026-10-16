@@ -330,7 +330,15 @@ export async function recordAdministration(args: {
 
       const now = new Date();
       if (order.endsAt && now > order.endsAt) {
-        throw new Error('Order has expired past its treatment duration');
+        const hasDeviationRationale = Boolean(
+          args.input.clinicalNote?.trim() || args.input.notes?.trim(),
+        );
+        const hoursPastExpiry = (now.getTime() - order.endsAt.getTime()) / (1000 * 60 * 60);
+
+        // Allow administration if a clinical deviation note is provided, or if within active stay grace period (48h)
+        if (!hasDeviationRationale && hoursPastExpiry > 48) {
+          throw new Error('Order has expired past its treatment duration');
+        }
       }
 
       // 3. If PRN order, acquire transaction advisory lock and validate eligibility

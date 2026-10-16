@@ -1006,7 +1006,11 @@ export async function adjustMedicationScheduleTimes(args: {
         origin: order.origin,
         patientSupplied: order.patientSupplied,
         startsAt: order.startsAt,
-        endsAt: order.endsAt,
+        endsAt: order.durationDays
+          ? new Date(now.getTime() + order.durationDays * 24 * 60 * 60 * 1000)
+          : order.endsAt && order.endsAt > now
+          ? order.endsAt
+          : new Date(now.getTime() + 24 * 60 * 60 * 1000),
         durationDays: order.durationDays,
         status: 'active',
         supersedesOrderId: order.id,
