@@ -344,6 +344,13 @@
       "when": 1790650000000,
       "tag": "0049_ipd_lifecycle_and_clinical_gates",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1790700000000,
+      "tag": "0050_global_medicines",
+      "breakpoints": true
     }
   ]
 }

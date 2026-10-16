@@ -192,9 +192,25 @@ export async function resolveMedicineIdInTx(
     if (existing) return existing.id;
   }
 
-  // 2. Search for existing medicine by case-insensitive name in this hospital
+  // 2. Search for existing medicine by case-insensitive name, strength, and form in this hospital
   const trimmedName = medicineName.trim();
   const [match] = await tx
+    .select({ id: medicines.id })
+    .from(medicines)
+    .where(
+      and(
+        eq(medicines.hospitalId, hospitalId),
+        sql`lower(${medicines.name}) = lower(${trimmedName})`,
+        sql`coalesce(lower(${medicines.strength}), '') = coalesce(lower(${strength ?? ''}), '')`,
+        sql`coalesce(lower(${medicines.form}), '') = coalesce(lower(${form ?? ''}), '')`,
+      ),
+    )
+    .limit(1);
+
+  if (match) return match.id;
+
+  // 2b. Fallback match by name alone if exact strength/form not specified
+  const [nameMatch] = await tx
     .select({ id: medicines.id })
     .from(medicines)
     .where(
@@ -205,7 +221,7 @@ export async function resolveMedicineIdInTx(
     )
     .limit(1);
 
-  if (match) return match.id;
+  if (nameMatch) return nameMatch.id;
 
   // 3. Auto-provision unpriced medicine in hospital formulary so prescribing succeeds
   const [created] = await tx
@@ -220,9 +236,25 @@ export async function resolveMedicineIdInTx(
       active: true,
       createdByUserId: actorUserId,
     })
+    .onConflictDoNothing()
     .returning({ id: medicines.id });
 
-  return created.id;
+  if (created) return created.id;
+
+  const [existingAfterConflict] = await tx
+    .select({ id: medicines.id })
+    .from(medicines)
+    .where(
+      and(
+        eq(medicines.hospitalId, hospitalId),
+        sql`lower(${medicines.name}) = lower(${trimmedName})`,
+      ),
+    )
+    .limit(1);
+
+  if (existingAfterConflict) return existingAfterConflict.id;
+
+  throw new Error(`Failed to resolve or provision medicine ${trimmedName}`);
 }
 
 /**

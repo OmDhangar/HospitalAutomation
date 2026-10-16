@@ -1,12 +1,13 @@
 import { and, asc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import { withTenant, type Tx } from '@/lib/db';
-import { auditLogs, medicines } from '@/lib/db/schema';
+import { auditLogs, globalMedicines, medicines } from '@/lib/db/schema';
 import {
   escapeLikePattern,
   medicineLabel,
   parseMedicineInput,
   tidy,
 } from '@/lib/domain/medicine';
+import { searchGlobalMedicinesData } from '@/lib/domain/global-medicines-data';
 import { STARTER_MEDICINES } from '@/lib/domain/starter-medicines';
 import { billUnbilledEntriesForItemsInTx } from '@/lib/services/ipd-billing';
 
@@ -33,6 +34,12 @@ export type MedicineOption = {
   genericName: string | null;
   strength: string | null;
   form: string | null;
+  unit?: string | null;
+  isGlobal?: boolean;
+  isPriced?: boolean;
+  category?: string | null;
+  defaultRoute?: string | null;
+  defaultFrequency?: string | null;
 };
 
 /** A search result for the billing desk: the same, plus what it costs. */
@@ -55,13 +62,25 @@ const toOption = (row: {
   genericName: string | null;
   strength: string | null;
   form: string | null;
+  unit?: string | null;
+  isGlobal?: boolean;
+  isPriced?: boolean;
+  category?: string | null;
+  defaultRoute?: string | null;
+  defaultFrequency?: string | null;
 }): MedicineOption => ({
   id: row.id,
   label: medicineLabel(row),
   name: row.name,
-  genericName: row.genericName,
-  strength: row.strength,
-  form: row.form,
+  genericName: row.genericName ?? null,
+  strength: row.strength ?? null,
+  form: row.form ?? null,
+  unit: row.unit ?? null,
+  isGlobal: row.isGlobal ?? false,
+  isPriced: row.isPriced ?? false,
+  category: row.category ?? null,
+  defaultRoute: row.defaultRoute ?? null,
+  defaultFrequency: row.defaultFrequency ?? null,
 });
 
 /**
@@ -94,7 +113,7 @@ export async function searchMedicines(args: {
   const pattern = `${escapeLikePattern(term)}%`;
   const limit = Math.min(Math.max(args.limit ?? 10, 1), 25);
 
-  const rows = await withTenant(args.hospitalId, (tx) =>
+  const tenantRows = await withTenant(args.hospitalId, (tx) =>
     tx
       .select({
         id: medicines.id,
@@ -116,12 +135,90 @@ export async function searchMedicines(args: {
       .limit(limit),
   );
 
-  if (!args.withPrice) return rows.map(toOption);
-  return rows.map((row) => ({
-    ...toOption(row),
-    unit: row.unit,
-    sellingPricePaise: row.sellingPricePaise,
+  if (args.withPrice) {
+    return tenantRows.map((row) => ({
+      ...toOption({
+        ...row,
+        isGlobal: false,
+        isPriced: row.sellingPricePaise !== null,
+      }),
+      unit: row.unit,
+      sellingPricePaise: row.sellingPricePaise,
+    }));
+  }
+
+  // Doctor prescribing search: query global master catalogue and deduplicate
+  const globalRows = await withTenant(args.hospitalId, async (tx) => {
+    try {
+      return await tx
+        .select({
+          id: globalMedicines.id,
+          name: globalMedicines.name,
+          genericName: globalMedicines.genericName,
+          strength: globalMedicines.strength,
+          form: globalMedicines.form,
+          unit: globalMedicines.unit,
+          category: globalMedicines.category,
+          defaultRoute: globalMedicines.defaultRoute,
+          defaultFrequency: globalMedicines.defaultFrequency,
+        })
+        .from(globalMedicines)
+        .where(
+          sql`(lower(${globalMedicines.name}) like ${pattern} or lower(${globalMedicines.genericName}) like ${pattern})`,
+        )
+        .orderBy(asc(sql`lower(${globalMedicines.name})`), asc(globalMedicines.strength))
+        .limit(limit);
+    } catch {
+      return [];
+    }
+  });
+
+  let allGlobals = globalRows;
+  if (allGlobals.length === 0) {
+    const fallback = searchGlobalMedicinesData(term, limit);
+    allGlobals = fallback.map((m, idx) => ({
+      id: `gm-seed-${idx}-${m.name.toLowerCase().replace(/\s+/g, '-')}`,
+      name: m.name,
+      genericName: m.genericName ?? null,
+      strength: m.strength ?? null,
+      form: m.form ?? null,
+      unit: m.unit,
+      category: m.category,
+      defaultRoute: m.defaultRoute ?? null,
+      defaultFrequency: m.defaultFrequency ?? null,
+    }));
+  }
+
+  const identityKey = (m: { name: string; strength?: string | null; form?: string | null }) =>
+    `${m.name.trim().toLowerCase()}::${(m.strength ?? '').trim().toLowerCase()}::${(m.form ?? '').trim().toLowerCase()}`;
+
+  const seenKeys = new Set(tenantRows.map((r) => identityKey(r)));
+
+  const tenantOptions: MedicineOption[] = tenantRows.map((r) => ({
+    ...toOption(r),
+    unit: r.unit,
+    isGlobal: false,
+    isPriced: r.sellingPricePaise !== null,
   }));
+
+  const globalOptions: MedicineOption[] = [];
+  for (const gm of allGlobals) {
+    const key = identityKey(gm);
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      globalOptions.push({
+        ...toOption(gm),
+        unit: gm.unit,
+        isGlobal: true,
+        isPriced: false,
+        category: gm.category,
+        defaultRoute: gm.defaultRoute,
+        defaultFrequency: gm.defaultFrequency,
+      });
+    }
+  }
+
+  return [...tenantOptions, ...globalOptions].slice(0, limit);
 }
 
 export type CatalogueFilter = 'all' | 'unpriced' | 'inactive';
