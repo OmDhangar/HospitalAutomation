@@ -1,10 +1,11 @@
 import React from 'react';
 import { notFound } from 'next/navigation';
-import { desc, eq, and } from 'drizzle-orm';
+import { desc, eq, and, isNull } from 'drizzle-orm';
 import { requireSession } from '@/lib/auth/session';
 import { withTenant, type Tx } from '@/lib/db';
-import { vitalsReadings, intakeOutput } from '@/lib/db/schema';
+import { vitalsReadings, intakeOutput, ipdMedicationAdministrations, ipdMedicationOrders } from '@/lib/db/schema';
 import { getAdmissionSummary } from '@/lib/services/ipd-census';
+import { getLetterhead } from '@/lib/services/letterhead';
 import { VitalsAndIoTab } from '@/components/ipd/vitals/vitals-and-io-tab';
 
 export const metadata = { title: 'Vitals & I/O · IPD' };
@@ -20,7 +21,9 @@ export default async function PatientVitalsPage({
   const admission = await getAdmissionSummary(session.hospitalId, id);
   if (!admission) notFound();
 
-  const { vitals, fluids } = await withTenant(
+  const letterhead = await getLetterhead(session.hospitalId, admission.branchId);
+
+  const { vitals, fluids, treatments } = await withTenant(
     session.hospitalId,
     async (tx: Tx) => {
       const vList = await tx
@@ -33,7 +36,7 @@ export default async function PatientVitalsPage({
           ),
         )
         .orderBy(desc(vitalsReadings.recordedAt))
-        .limit(30);
+        .limit(300);
 
       const fList = await tx
         .select()
@@ -45,9 +48,47 @@ export default async function PatientVitalsPage({
           ),
         )
         .orderBy(desc(intakeOutput.recordedAt))
-        .limit(50);
+        .limit(300);
 
-      return { vitals: vList, fluids: fList };
+      let tList: { id: string; actualTime: Date; medicineName: string; doseGiven: string | null; routeGiven: string | null }[] = [];
+      try {
+        const rawList = await tx
+          .select({
+            id: ipdMedicationAdministrations.id,
+            actualTime: ipdMedicationAdministrations.actualTime,
+            recordedAt: ipdMedicationAdministrations.recordedAt,
+            doseGiven: ipdMedicationAdministrations.doseGiven,
+            routeGiven: ipdMedicationAdministrations.routeGiven,
+            medicineName: ipdMedicationOrders.medicineName,
+          })
+          .from(ipdMedicationAdministrations)
+          .innerJoin(
+            ipdMedicationOrders,
+            eq(ipdMedicationOrders.id, ipdMedicationAdministrations.orderId),
+          )
+          .where(
+            and(
+              eq(ipdMedicationAdministrations.hospitalId, session.hospitalId),
+              eq(ipdMedicationAdministrations.admissionId, id),
+              eq(ipdMedicationAdministrations.outcome, 'administered'),
+              isNull(ipdMedicationAdministrations.voidedAt),
+            ),
+          )
+          .orderBy(desc(ipdMedicationAdministrations.actualTime))
+          .limit(100);
+
+        tList = rawList.map((r) => ({
+          id: r.id,
+          actualTime: r.actualTime || r.recordedAt,
+          doseGiven: r.doseGiven,
+          routeGiven: r.routeGiven,
+          medicineName: r.medicineName,
+        }));
+      } catch {
+        // Graceful fallback if table is empty
+      }
+
+      return { vitals: vList, fluids: fList, treatments: tList };
     },
     { clinical: true },
   );
@@ -55,8 +96,21 @@ export default async function PatientVitalsPage({
   return (
     <VitalsAndIoTab
       admissionId={id}
+      patient={{
+        name: admission.patientName,
+        age: admission.age,
+        gender: admission.gender,
+        ipdNumber: admission.ipdNumber,
+        wardName: admission.bed?.wardName,
+        bedLabel: admission.bed?.label,
+        admittedAt: admission.admittedAt,
+        doctorName: admission.doctorName,
+      }}
+      hospitalName={letterhead.hospitalName}
+      letterhead={letterhead}
       vitals={vitals}
       fluids={fluids}
+      treatments={treatments}
       vitalsFrequency={admission.vitalsFrequency ?? 'q4h'}
       canRecord={!session.readOnly}
     />

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import React from 'react';
 import { VitalsAndIoTab } from '@/components/ipd/vitals/vitals-and-io-tab';
+import { TprCalendarGrid } from '@/components/ipd/vitals/tpr-calendar-grid';
 import type { VitalsReadingRow, IntakeOutputRow } from '@/lib/db/schema';
 
 vi.mock('next/navigation', () => ({
@@ -85,7 +86,7 @@ describe('VitalsAndIoTab Component', () => {
     );
 
     // Expect flowsheets
-    expect(html).toContain('Temperature, Pulse &amp; Respiration');
+    expect(html).toContain('Vitals &amp; Fluid Balance (TPR &amp; I/O)');
     expect(html).toContain('98.6');
     expect(html).toContain('101.2');
     expect(html).toContain('120/80');
@@ -96,13 +97,12 @@ describe('VitalsAndIoTab Component', () => {
     expect(html).toContain('400 ml'); // 400 out
     expect(html).toContain('+450 ml'); // Net: 850 - 400
 
-    // Expect action triggers
+    // Expect single primary action trigger
     expect(html).toContain('+ Record Vitals');
-    expect(html).toContain('+ Record Fluid Balance');
+    expect(html).not.toContain('+ Record Fluid Balance');
 
-    // Expect doctor vitals order bar
-    expect(html).toContain('Doctor Vitals Order:');
-    expect(html).toContain('q4h');
+    // Doctor vitals order bar removed to keep page uncluttered
+    expect(html).not.toContain('Doctor Vitals Order:');
   });
 
   it('renders critical clinical escalation banner when latest vital has news2Score >= 5', () => {
@@ -130,7 +130,6 @@ describe('VitalsAndIoTab Component', () => {
         admissionId="adm-101"
         vitals={highRiskVitals as any}
         fluids={dummyFluids as any}
-        vitalsFrequency="q1h"
         canRecord={true}
       />,
     );
@@ -138,7 +137,85 @@ describe('VitalsAndIoTab Component', () => {
     expect(html).toContain('CRITICAL CLINICAL ESCALATION: NEWS2 Score 8');
     expect(html).toContain('Patient meets inpatient clinical escalation threshold (NEWS2 ≥ 5)');
     expect(html).toContain('Immediate doctor bedside evaluation');
-    expect(html).toContain('q1h');
-    expect(html).toContain('Every 1 hour (Critical)');
+  });
+
+  it('renders authentic paper-chart nursing TPR sheet with 24 hourly rows and paper columns', () => {
+    const html = renderToString(
+      <TprCalendarGrid
+        admissionId="adm-101"
+        patient={{
+          name: 'Bhagwan Paude',
+          age: 48,
+          gender: 'Male',
+          ipdNumber: '6159',
+          wardName: 'Female Medical Ward',
+          bedLabel: '12',
+          admittedAt: new Date('2026-10-13T08:00:00Z'),
+        }}
+        vitals={dummyVitals as any}
+        fluids={dummyFluids as any}
+        treatments={[
+          {
+            id: 'trt-1',
+            actualTime: new Date('2026-10-13T08:30:00Z'),
+            medicineName: 'Inj. Monocef',
+            doseGiven: '2g',
+          },
+        ]}
+      />,
+    );
+
+    expect(html).toContain('NURSING T.P.R. CHART');
+    expect(html).toContain('Bhagwan Paude');
+    expect(html).toContain('48 Y');
+    expect(html).toContain('Male');
+    expect(html).toContain('6159');
+    expect(html).toContain('TIME');
+    expect(html).toContain('PULSE');
+    expect(html).toContain('B.P.');
+    expect(html).toContain('SPO2');
+    expect(html).toContain('TEMP');
+    expect(html).toContain('BSL');
+    expect(html).toContain('R.R.');
+    expect(html).toContain('ABD GIRTH');
+    expect(html).toContain('OUT PUT');
+    expect(html).toContain('DRAIN');
+    expect(html).toContain('URIN');
+    expect(html).toContain('RT.ASPI');
+    expect(html).toContain('INTEX');
+    expect(html).toContain('ORAL');
+    expect(html).toContain('I/V FLUID');
+    expect(html).toContain('TREATMENT');
+    expect(html).toContain('8 am');
+    expect(html).toContain('7 am');
+    expect(html).toContain('Inj. Monocef (2g)');
+  });
+
+  it('renders dynamic hospital name and letterhead configured from settings without hardcoded fallback', () => {
+    const customLetterhead = {
+      hospitalName: 'Apex Multispeciality Hospital & Trauma Center',
+      branchName: 'City Center Branch',
+      address: 'Plot 42, Ring Road, Pune',
+      phones: '+91 98765 43210',
+      registrationNo: 'REG/MH/2026/8941',
+      doctors: [],
+    };
+
+    const html = renderToString(
+      <TprCalendarGrid
+        admissionId="adm-101"
+        hospitalName={customLetterhead.hospitalName}
+        letterhead={customLetterhead}
+        vitals={dummyVitals as any}
+        fluids={dummyFluids as any}
+      />,
+    );
+
+    expect(html).toContain('Apex Multispeciality Hospital &amp; Trauma Center');
+    expect(html).toContain('City Center Branch');
+    expect(html).toContain('Plot 42, Ring Road, Pune');
+    expect(html).toContain('Tel: +91 98765 43210');
+    expect(html).toContain('Reg. No: REG/MH/2026/8941');
+    expect(html).not.toContain('GURUVED');
   });
 });

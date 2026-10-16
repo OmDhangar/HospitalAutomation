@@ -3,50 +3,39 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { VitalsReadingRow, IntakeOutputRow } from '@/lib/db/schema';
-import { orderVitalsFrequencyAction } from '@/app/(app)/ipd/actions';
+import type { Letterhead } from '@/lib/domain/letterhead';
 import { RecordVitalsModal } from './record-vitals-modal';
-import { RecordFluidBalanceModal } from './record-fluid-balance-modal';
+import { TprCalendarGrid, type TreatmentLogItem, type PatientDemographics } from './tpr-calendar-grid';
 
 export interface VitalsAndIoTabProps {
   admissionId: string;
+  patient?: PatientDemographics;
+  hospitalName?: string;
+  letterhead?: Letterhead;
   vitals: VitalsReadingRow[];
   fluids: IntakeOutputRow[];
+  treatments?: TreatmentLogItem[];
   vitalsFrequency?: string | null;
   canRecord?: boolean;
 }
 
 export function VitalsAndIoTab({
   admissionId,
+  patient,
+  hospitalName,
+  letterhead,
   vitals,
   fluids,
-  vitalsFrequency = 'q4h',
+  treatments = [],
   canRecord = true,
 }: VitalsAndIoTabProps) {
   const router = useRouter();
+  const [viewMode, setViewMode] = useState<'calendar' | 'table'>('calendar');
   const [isVitalsModalOpen, setIsVitalsModalOpen] = useState(false);
-  const [isFluidModalOpen, setIsFluidModalOpen] = useState(false);
-  const [currentFrequency, setCurrentFrequency] = useState(vitalsFrequency || 'q4h');
-  const [isUpdatingFrequency, setIsUpdatingFrequency] = useState(false);
 
   // Check latest vital for NEWS2 escalation
   const latestVital = vitals.length > 0 ? vitals[0] : null;
   const isNews2Escalated = latestVital?.news2Score != null && latestVital.news2Score >= 5;
-
-  const handleFrequencyChange = async (newFreq: any) => {
-    setCurrentFrequency(newFreq);
-    setIsUpdatingFrequency(true);
-    try {
-      await orderVitalsFrequencyAction({
-        admissionId,
-        frequency: newFreq,
-      });
-      router.refresh();
-    } catch (err) {
-      console.error('Failed to update vitals frequency', err);
-    } finally {
-      setIsUpdatingFrequency(false);
-    }
-  };
 
   // Calculate 24-hour fluid balance (past 24h)
   const past24hTime = Date.now() - 24 * 60 * 60 * 1000;
@@ -103,8 +92,8 @@ export function VitalsAndIoTab({
         </div>
       )}
 
-      {/* Action Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-ink-200 pb-3">
+      {/* Clean Unified Header: Title, View Switcher & Single Record Vitals Button */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-ink-200 pb-3">
         <div>
           <h2 className="text-sm font-bold text-ink-950">Vitals &amp; Fluid Balance (TPR &amp; I/O)</h2>
           <p className="text-xs text-ink-500">
@@ -112,188 +101,170 @@ export function VitalsAndIoTab({
           </p>
         </div>
 
-        {canRecord && (
-          <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
+          {/* View Toggle */}
+          <div className="inline-flex rounded-lg border border-ink-200 bg-ink-50 p-0.5 text-xs">
             <button
               type="button"
-              onClick={() => setIsFluidModalOpen(true)}
-              className="inline-flex items-center rounded-lg border border-ink-300 bg-white px-3 py-1.5 text-xs font-semibold text-ink-800 shadow-2xs hover:bg-ink-50 cursor-pointer"
+              onClick={() => setViewMode('calendar')}
+              className={`px-3 py-1 font-semibold rounded-md transition-colors cursor-pointer ${
+                viewMode === 'calendar'
+                  ? 'bg-white text-ink-900 shadow-2xs'
+                  : 'text-ink-600 hover:text-ink-900'
+              }`}
             >
-              + Record Fluid Balance
+              📅 Calendar Slots (Excel Grid)
             </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('table')}
+              className={`px-3 py-1 font-semibold rounded-md transition-colors cursor-pointer ${
+                viewMode === 'table'
+                  ? 'bg-white text-ink-900 shadow-2xs'
+                  : 'text-ink-600 hover:text-ink-900'
+              }`}
+            >
+              📋 Sequential Log
+            </button>
+          </div>
+
+          {/* Only One Primary Recording Button on the page */}
+          {canRecord && (
             <button
               type="button"
               onClick={() => setIsVitalsModalOpen(true)}
-              className="inline-flex items-center rounded-lg bg-brand-700 px-3.5 py-1.5 text-xs font-bold text-white shadow-2xs hover:bg-brand-800 cursor-pointer"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-700 px-3.5 py-1.5 text-xs font-bold text-white shadow-2xs hover:bg-brand-800 cursor-pointer"
             >
-              + Record Vitals
+              <span>+ Record Vitals</span>
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
-      {/* Doctor Vitals Frequency Order Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-ink-200 bg-white px-4 py-2.5 shadow-2xs">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-ink-700">Doctor Vitals Order:</span>
-          <span className="rounded-md bg-brand-50 px-2 py-0.5 font-mono text-xs font-bold text-brand-800 border border-brand-200 uppercase">
-            {currentFrequency}
-          </span>
-          <span className="text-xs text-ink-500">
-            {currentFrequency === 'q1h' ? 'Every 1 hour (Critical)' :
-             currentFrequency === 'q2h' ? 'Every 2 hours (High Dependency)' :
-             currentFrequency === 'q4h' ? 'Every 4 hours (Standard Routine)' :
-             currentFrequency === 'q6h' ? 'Every 6 hours' :
-             currentFrequency === 'q8h' ? 'Every 8 hours (Stable)' :
-             currentFrequency === 'q12h' ? 'Every 12 hours (Stepdown)' :
-             currentFrequency === 'bid' ? 'Twice Daily' :
-             currentFrequency === 'tid' ? 'Three Times Daily' :
-             currentFrequency === 'qid' ? 'Four Times Daily' : 'As Needed (PRN)'}
-          </span>
-        </div>
-        {canRecord && (
-          <div className="flex items-center gap-2">
-            <label htmlFor="vitals-frequency-select" className="text-xs text-ink-600 font-medium">
-              Update Frequency:
-            </label>
-            <select
-              id="vitals-frequency-select"
-              value={currentFrequency}
-              disabled={isUpdatingFrequency}
-              onChange={(e) => handleFrequencyChange(e.target.value)}
-              className="rounded-md border border-ink-300 bg-white px-2 py-1 text-xs font-medium text-ink-800 focus:border-brand-500 focus:outline-hidden disabled:opacity-50"
-            >
-              <option value="q1h">Q1H (Every 1 hour - Critical)</option>
-              <option value="q2h">Q2H (Every 2 hours - High Dependency)</option>
-              <option value="q4h">Q4H (Every 4 hours - Standard Routine)</option>
-              <option value="q6h">Q6H (Every 6 hours)</option>
-              <option value="q8h">Q8H (Every 8 hours - Stable)</option>
-              <option value="q12h">Q12H (Every 12 hours - Stepdown)</option>
-              <option value="bid">BID (Twice Daily)</option>
-              <option value="tid">TID (Three Times Daily)</option>
-              <option value="qid">QID (Four Times Daily)</option>
-              <option value="prn">PRN (As Needed)</option>
-            </select>
-          </div>
-        )}
-      </div>
-
-      {/* SECTION 1: TPR & NEWS2 FLOWSHEET */}
-      <div className="rounded-xl border border-ink-200/80 bg-white shadow-2xs overflow-hidden">
-        <div className="flex items-center justify-between border-b border-ink-200 bg-ink-50/60 px-4 py-2.5">
-          <div className="flex items-center gap-2">
-            <span className="size-2 rounded-full bg-brand-600" />
-            <h3 className="text-xs font-bold uppercase tracking-wider text-ink-800">
-              Temperature, Pulse &amp; Respiration (TPR Flowsheet)
-            </h3>
-          </div>
-          <span className="text-[11px] font-mono text-ink-500">
-            {vitals.length} {vitals.length === 1 ? 'Reading' : 'Readings'} Recorded
-          </span>
-        </div>
-
-        {vitals.length === 0 ? (
-          <div className="p-8 text-center text-xs text-ink-500">
-            <p className="font-semibold text-ink-700">No vitals readings recorded yet for this stay.</p>
-            <p className="mt-1">Click &ldquo;+ Record Vitals&rdquo; above to record temperature, pulse, and blood pressure.</p>
-          </div>
+      {/* Main Flowsheet View */}
+      {viewMode === 'calendar' ? (
+        <TprCalendarGrid
+          admissionId={admissionId}
+          patient={patient}
+          hospitalName={hospitalName || letterhead?.hospitalName}
+          letterhead={letterhead}
+          vitals={vitals}
+          fluids={fluids}
+          treatments={treatments}
+          canRecord={canRecord}
+        />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-left text-xs">
-              <thead>
-                <tr className="border-b border-ink-200 bg-ink-50/40 text-[10px] font-bold uppercase tracking-wider text-ink-600">
-                  <th className="px-3 py-2">Recorded At</th>
-                  <th className="px-3 py-2">Slot</th>
-                  <th className="px-3 py-2 text-right">Temp (°F)</th>
-                  <th className="px-3 py-2 text-right">Pulse (bpm)</th>
-                  <th className="px-3 py-2 text-center">BP (mmHg)</th>
-                  <th className="px-3 py-2 text-right">Resp (/min)</th>
-                  <th className="px-3 py-2 text-right">SpO2 (%)</th>
-                  <th className="px-3 py-2 text-center">Pain</th>
-                  <th className="px-3 py-2 text-center">AVPU</th>
-                  <th className="px-3 py-2 text-center">NEWS2</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-ink-100 font-mono text-[11px]">
-                {vitals.map((v) => {
-                  const d = new Date(v.recordedAt);
-                  const timeStr = d.toLocaleDateString('en-IN', {
-                    day: 'numeric',
-                    month: 'short',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  });
+          <div className="rounded-xl border border-ink-200/80 bg-white shadow-2xs overflow-hidden">
+            <div className="flex items-center justify-between border-b border-ink-200 bg-ink-50/60 px-4 py-2.5">
+              <span className="text-xs font-bold text-ink-700">Sequential Timestamp Log</span>
+              <span className="text-[11px] font-mono text-ink-500">
+                {vitals.length} {vitals.length === 1 ? 'Reading' : 'Readings'} Recorded
+              </span>
+            </div>
 
-                  const tempNum = v.temperatureF ? parseFloat(v.temperatureF) : null;
-                  const isFever = tempNum != null && tempNum >= 100.4;
-                  const isHighPulse = v.pulseBpm != null && (v.pulseBpm > 100 || v.pulseBpm < 50);
-                  const isLowO2 = v.spo2Percent != null && v.spo2Percent < 95;
-                  const news = v.news2Score ?? 0;
-
-                  return (
-                    <tr key={v.id} className="hover:bg-brand-50/20 even:bg-ink-50/20">
-                      <td className="px-3 py-2 text-ink-900 font-medium whitespace-nowrap">
-                        {timeStr}
-                      </td>
-                      <td className="px-3 py-2 text-ink-500 whitespace-nowrap">
-                        {v.scheduledSlot || 'Routine'}
-                      </td>
-                      <td
-                        className={`px-3 py-2 text-right font-bold whitespace-nowrap ${
-                          isFever ? 'text-rose-600' : 'text-ink-900'
-                        }`}
-                      >
-                        {v.temperatureF ? `${v.temperatureF}°` : '—'}
-                      </td>
-                      <td
-                        className={`px-3 py-2 text-right font-bold whitespace-nowrap ${
-                          isHighPulse ? 'text-rose-600' : 'text-ink-900'
-                        }`}
-                      >
-                        {v.pulseBpm != null ? v.pulseBpm : '—'}
-                      </td>
-                      <td className="px-3 py-2 text-center font-bold text-ink-900 whitespace-nowrap">
-                        {v.bpSystolic != null && v.bpDiastolic != null
-                          ? `${v.bpSystolic}/${v.bpDiastolic}`
-                          : '—'}
-                      </td>
-                      <td className="px-3 py-2 text-right text-ink-800 whitespace-nowrap">
-                        {v.respiratoryRate != null ? v.respiratoryRate : '—'}
-                      </td>
-                      <td
-                        className={`px-3 py-2 text-right font-bold whitespace-nowrap ${
-                          isLowO2 ? 'text-rose-600' : 'text-ink-900'
-                        }`}
-                      >
-                        {v.spo2Percent != null ? `${v.spo2Percent}%` : '—'}
-                      </td>
-                      <td className="px-3 py-2 text-center text-ink-700 whitespace-nowrap">
-                        {v.painScore != null ? v.painScore : '—'}
-                      </td>
-                      <td className="px-3 py-2 text-center text-ink-700 whitespace-nowrap">
-                        {v.avpu || 'A'}
-                      </td>
-                      <td className="px-3 py-2 text-center whitespace-nowrap">
-                        <span
-                          className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
-                            news >= 5
-                              ? 'bg-rose-100 text-rose-800'
-                              : news >= 3
-                                ? 'bg-amber-100 text-amber-800'
-                                : 'bg-emerald-100 text-emerald-800'
-                          }`}
-                        >
-                          {news}
-                        </span>
-                      </td>
+            {vitals.length === 0 ? (
+              <div className="p-8 text-center text-xs text-ink-500">
+                <p className="font-semibold text-ink-700">No vitals readings recorded yet for this stay.</p>
+                <p className="mt-1">Click &ldquo;+ Record Vitals&rdquo; above to record temperature, pulse, and blood pressure.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-ink-200 bg-ink-50/40 text-[10px] font-bold uppercase tracking-wider text-ink-600">
+                      <th className="px-3 py-2">Recorded At</th>
+                      <th className="px-3 py-2">Slot</th>
+                      <th className="px-3 py-2 text-right">Temp (°F)</th>
+                      <th className="px-3 py-2 text-right">Pulse (bpm)</th>
+                      <th className="px-3 py-2 text-center">BP (mmHg)</th>
+                      <th className="px-3 py-2 text-right">Resp (/min)</th>
+                      <th className="px-3 py-2 text-right">SpO2 (%)</th>
+                      <th className="px-3 py-2 text-center">Pain</th>
+                      <th className="px-3 py-2 text-center">AVPU</th>
+                      <th className="px-3 py-2 text-center">NEWS2</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody className="divide-y divide-ink-100 font-mono text-[11px]">
+                    {vitals.map((v) => {
+                      const d = new Date(v.recordedAt);
+                      const timeStr = d.toLocaleDateString('en-IN', {
+                        day: 'numeric',
+                        month: 'short',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      });
+
+                      const tempNum = v.temperatureF ? parseFloat(v.temperatureF) : null;
+                      const isFever = tempNum != null && tempNum >= 100.4;
+                      const isHighPulse = v.pulseBpm != null && (v.pulseBpm > 100 || v.pulseBpm < 50);
+                      const isLowO2 = v.spo2Percent != null && v.spo2Percent < 95;
+                      const news = v.news2Score ?? 0;
+
+                      return (
+                        <tr key={v.id} className="hover:bg-brand-50/20 even:bg-ink-50/20">
+                          <td className="px-3 py-2 text-ink-900 font-medium whitespace-nowrap">
+                            {timeStr}
+                          </td>
+                          <td className="px-3 py-2 text-ink-500 whitespace-nowrap">
+                            {v.scheduledSlot || 'Routine'}
+                          </td>
+                          <td
+                            className={`px-3 py-2 text-right font-bold whitespace-nowrap ${
+                              isFever ? 'text-rose-600' : 'text-ink-900'
+                            }`}
+                          >
+                            {v.temperatureF ? `${v.temperatureF}°` : '—'}
+                          </td>
+                          <td
+                            className={`px-3 py-2 text-right font-bold whitespace-nowrap ${
+                              isHighPulse ? 'text-rose-600' : 'text-ink-900'
+                            }`}
+                          >
+                            {v.pulseBpm != null ? v.pulseBpm : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-center font-bold text-ink-900 whitespace-nowrap">
+                            {v.bpSystolic != null && v.bpDiastolic != null
+                              ? `${v.bpSystolic}/${v.bpDiastolic}`
+                              : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-right text-ink-800 whitespace-nowrap">
+                            {v.respiratoryRate != null ? v.respiratoryRate : '—'}
+                          </td>
+                          <td
+                            className={`px-3 py-2 text-right font-bold whitespace-nowrap ${
+                              isLowO2 ? 'text-rose-600' : 'text-ink-900'
+                            }`}
+                          >
+                            {v.spo2Percent != null ? `${v.spo2Percent}%` : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-center text-ink-700 whitespace-nowrap">
+                            {v.painScore != null ? v.painScore : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-center text-ink-700 whitespace-nowrap">
+                            {v.avpu || 'A'}
+                          </td>
+                          <td className="px-3 py-2 text-center whitespace-nowrap">
+                            <span
+                              className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                                news >= 5
+                                  ? 'bg-rose-100 text-rose-800'
+                                  : news >= 3
+                                    ? 'bg-amber-100 text-amber-800'
+                                    : 'bg-emerald-100 text-emerald-800'
+                              }`}
+                            >
+                              {news}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
-      </div>
 
       {/* SECTION 2: 24-HOUR FLUID BALANCE (INTAKE VS OUTPUT) */}
       <div className="rounded-xl border border-ink-200/80 bg-white shadow-2xs overflow-hidden">
@@ -433,18 +404,11 @@ export function VitalsAndIoTab({
         )}
       </div>
 
-      {/* Entry Modals */}
+      {/* Entry Modal */}
       <RecordVitalsModal
         admissionId={admissionId}
         isOpen={isVitalsModalOpen}
         onClose={() => setIsVitalsModalOpen(false)}
-        onSuccess={handleRefresh}
-      />
-
-      <RecordFluidBalanceModal
-        admissionId={admissionId}
-        isOpen={isFluidModalOpen}
-        onClose={() => setIsFluidModalOpen(false)}
         onSuccess={handleRefresh}
       />
     </div>
