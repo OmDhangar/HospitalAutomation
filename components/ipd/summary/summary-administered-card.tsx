@@ -1,6 +1,6 @@
 import React from 'react';
 import Link from 'next/link';
-import { formatRoutePlain } from '@/components/ipd/bedside/bedside-treatment-chart';
+import { formatRoutePlain } from '@/lib/domain/medicine';
 
 export interface AdministeredDoseEntry {
   id: string;

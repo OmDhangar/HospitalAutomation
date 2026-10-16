@@ -10,6 +10,7 @@ import { ExceptionModal } from '@/components/ipd/emar/exception-modal';
 import { PrnAdminModal } from '@/components/ipd/emar/prn-admin-modal';
 import { AdjustScheduleTimingModal } from '@/components/ipd/emar/adjust-schedule-timing-modal';
 import { NurseUrgentAdminModal } from '@/components/ipd/emar/nurse-urgent-admin-modal';
+import { RecordVitalsModal } from '@/components/ipd/vitals/record-vitals-modal';
 import { voidAdministrationAction } from '@/app/(app)/ipd/actions';
 import { queueEntries, sendEntries, type OutboxEntry } from '@/components/ipd/outbox';
 import { useOnline } from '@/components/ipd/use-online';
@@ -21,6 +22,7 @@ import type {
 } from '@/lib/services/ipd-emar';
 import type { AllergenItem } from '@/lib/services/ipd-rounding-cockpit';
 import { formatDoctor } from '@/lib/domain/doctor';
+import { formatRoutePlain } from '@/lib/domain/medicine';
 
 export type Pick = { ref: { type: 'medicine' | 'charge'; id: string }; label: string; unit: string };
 type NewItem = { type: 'new'; kind: 'medicine' | 'consumable' | 'procedure'; name: string };
@@ -48,32 +50,7 @@ export interface BedsideTreatmentChartProps {
   canAdminister?: boolean;
 }
 
-export function formatRoutePlain(route: string): string {
-  const r = route.toLowerCase().trim();
-  switch (r) {
-    case 'oral':
-      return 'By Mouth (Oral)';
-    case 'iv_push':
-      return 'IV Injection (Direct)';
-    case 'iv_piggyback':
-      return 'IV Drip (Infusion)';
-    case 'im':
-      return 'IM Injection (Muscle)';
-    case 'sc':
-    case 'subcutaneous':
-      return 'SC Injection (Under skin)';
-    case 'nebulization':
-      return 'Nebulization (Inhalation)';
-    case 'topical':
-      return 'Apply to Skin (Topical)';
-    case 'sublingual':
-      return 'Under Tongue (Sublingual)';
-    case 'rectal':
-      return 'Rectal';
-    default:
-      return route.replace(/_/g, ' ');
-  }
-}
+export { formatRoutePlain } from '@/lib/domain/medicine';
 
 export function formatSlotTime(date: Date | string): string {
   const d = new Date(date);
@@ -120,6 +97,7 @@ export function BedsideTreatmentChart({
     scheduleTimes: string[];
   } | null>(null);
   const [isUrgentModalOpen, setIsUrgentModalOpen] = useState(false);
+  const [isTprModalOpen, setIsTprModalOpen] = useState(false);
   const [actionNotice, setActionNotice] = useState<{
     tone: 'success' | 'error';
     text: string;
@@ -229,6 +207,14 @@ export function BedsideTreatmentChart({
               + Give Extra Medicine
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => setIsTprModalOpen(true)}
+            className="inline-flex min-h-10 items-center gap-1 rounded-lg bg-emerald-600 px-3 text-xs font-bold text-white shadow-2xs hover:bg-emerald-700 cursor-pointer"
+            title="Record temperature, pulse, and blood pressure (TPR)"
+          >
+            🌡️ + Record TPR
+          </button>
           {chartHref && (
             <Link
               href={chartHref}
@@ -415,55 +401,132 @@ export function BedsideTreatmentChart({
       {/* WINDOW 1: DAILY SCHEDULED MEDICATIONS */}
       {/* ========================================================================= */}
       {activeTab === 'daily' && (
-        <div className="space-y-4">
-          {/* Urgent: Doses to Give Right Now or Overdue */}
-          {activeDosesToGive.length > 0 && (
-            <div className="space-y-2.5">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-rose-800 flex items-center gap-1.5">
-                <span className="size-2 rounded-full bg-rose-600 animate-pulse" />
-                Medications to Give Now ({activeDosesToGive.length})
-              </h2>
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+          {/* Primary Column (8 cols): Doses to Give Now & Scheduled Later */}
+          <div className="lg:col-span-8 space-y-4">
+            {/* Urgent: Doses to Give Right Now or Overdue */}
+            {activeDosesToGive.length > 0 && (
+              <div className="space-y-2.5">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-rose-800 flex items-center gap-1.5">
+                  <span className="size-2 rounded-full bg-rose-600 animate-pulse" />
+                  Medications to Give Now ({activeDosesToGive.length})
+                </h2>
 
-              <div className="space-y-3">
-                {activeDosesToGive.map((item) => {
-                  const isOverdue = item.status === 'overdue';
-                  return (
+                <div className="space-y-3">
+                  {activeDosesToGive.map((item) => {
+                    const isOverdue = item.status === 'overdue';
+                    return (
+                      <div
+                        key={`${item.orderId}-${new Date(item.scheduledTime).getTime()}`}
+                        className={cn(
+                          'flex flex-col gap-3 rounded-2xl border-2 p-4 shadow-xs transition sm:flex-row sm:items-center sm:justify-between',
+                          isOverdue
+                            ? 'border-rose-400 bg-rose-50/50'
+                            : 'border-emerald-400 bg-emerald-50/50',
+                        )}
+                      >
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-base font-black text-ink-950">
+                              {item.medicineName}
+                            </span>
+                            <span className="rounded-md bg-white px-2 py-0.5 font-mono text-xs font-bold text-ink-900 border border-ink-200">
+                              {item.doseAmount} {item.doseUnit}
+                            </span>
+                            <span className="rounded-md bg-ink-900 px-2 py-0.5 text-xs font-bold uppercase text-white">
+                              {formatRoutePlain(item.route)}
+                            </span>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-ink-700">
+                            <span className="font-semibold">
+                              Scheduled: {formatSlotTime(item.scheduledTime)}
+                            </span>
+                            {isOverdue ? (
+                              <span className="rounded bg-rose-200 px-1.5 py-0.5 font-bold text-rose-900">
+                                Overdue
+                              </span>
+                            ) : (
+                              <span className="rounded bg-emerald-200 px-1.5 py-0.5 font-bold text-emerald-900">
+                                Due Now
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {canAdminister && (
+                          <div className="flex shrink-0 items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setAdjustTimingItem({
+                                  orderId: item.orderId,
+                                  medicineName: item.medicineName,
+                                  scheduleTimes: [
+                                    new Date(item.scheduledTime).toLocaleTimeString(undefined, {
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                      hour12: false,
+                                    }),
+                                  ],
+                                })
+                              }
+                              className="rounded-xl border border-ink-300 bg-white px-2.5 py-2 text-xs font-semibold text-ink-700 shadow-2xs hover:bg-ink-100"
+                              title="Adjust scheduled timing with reason"
+                            >
+                              Change Time
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setExceptionItem(item)}
+                              className="rounded-xl border border-ink-300 bg-white px-3 py-2 text-xs font-bold text-ink-700 shadow-2xs hover:bg-ink-100 cursor-pointer"
+                            >
+                              Skip Dose
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setAdministerItem(item)}
+                              className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-black text-white shadow-sm hover:bg-emerald-700 transition cursor-pointer"
+                            >
+                              ✓ Give Medicine
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Upcoming Doses Scheduled Later Today */}
+            {upcomingDoses.length > 0 && (
+              <div className="space-y-2.5">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-ink-600">
+                  Scheduled Later Today ({upcomingDoses.length})
+                </h2>
+
+                <div className="space-y-2.5">
+                  {upcomingDoses.map((item) => (
                     <div
                       key={`${item.orderId}-${new Date(item.scheduledTime).getTime()}`}
-                      className={cn(
-                        'flex flex-col gap-3 rounded-2xl border-2 p-4 shadow-xs transition sm:flex-row sm:items-center sm:justify-between',
-                        isOverdue
-                          ? 'border-rose-400 bg-rose-50/50'
-                          : 'border-emerald-400 bg-emerald-50/50',
-                      )}
+                      className="flex flex-col gap-3 rounded-xl border border-ink-200 bg-white p-3.5 shadow-2xs transition sm:flex-row sm:items-center sm:justify-between"
                     >
                       <div className="space-y-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-base font-black text-ink-950">
+                          <span className="text-sm font-bold text-ink-900">
                             {item.medicineName}
                           </span>
-                          <span className="rounded-md bg-white px-2 py-0.5 font-mono text-xs font-bold text-ink-900 border border-ink-200">
+                          <span className="rounded bg-ink-100 px-2 py-0.5 font-mono text-xs font-semibold text-ink-800">
                             {item.doseAmount} {item.doseUnit}
                           </span>
-                          <span className="rounded-md bg-ink-900 px-2 py-0.5 text-xs font-bold uppercase text-white">
+                          <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[11px] font-semibold text-ink-700">
                             {formatRoutePlain(item.route)}
                           </span>
                         </div>
-
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-ink-700">
-                          <span className="font-semibold">
-                            Scheduled: {formatSlotTime(item.scheduledTime)}
-                          </span>
-                          {isOverdue ? (
-                            <span className="rounded bg-rose-200 px-1.5 py-0.5 font-bold text-rose-900">
-                              Overdue
-                            </span>
-                          ) : (
-                            <span className="rounded bg-emerald-200 px-1.5 py-0.5 font-bold text-emerald-900">
-                              Due Now
-                            </span>
-                          )}
-                        </div>
+                        <p className="text-xs text-ink-500">
+                          Scheduled for: <strong className="text-ink-800">{formatSlotTime(item.scheduledTime)}</strong>
+                        </p>
                       </div>
 
                       {canAdminister && (
@@ -483,216 +546,207 @@ export function BedsideTreatmentChart({
                                 ],
                               })
                             }
-                            className="rounded-xl border border-ink-300 bg-white px-2.5 py-2 text-xs font-semibold text-ink-700 shadow-2xs hover:bg-ink-100"
-                            title="Adjust scheduled timing with reason"
+                            className="rounded-lg border border-ink-200 bg-white px-2.5 py-1.5 text-xs font-medium text-ink-700 hover:bg-ink-50 cursor-pointer"
+                            title="Change scheduled timing with reason"
                           >
                             Change Time
                           </button>
                           <button
                             type="button"
                             onClick={() => setExceptionItem(item)}
-                            className="rounded-xl border border-ink-300 bg-white px-3 py-2 text-xs font-bold text-ink-700 shadow-2xs hover:bg-ink-100 cursor-pointer"
+                            className="rounded-lg border border-ink-200 bg-white px-2.5 py-1.5 text-xs font-medium text-ink-600 hover:bg-ink-50 cursor-pointer"
                           >
                             Skip Dose
                           </button>
                           <button
                             type="button"
                             onClick={() => setAdministerItem(item)}
-                            className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-black text-white shadow-sm hover:bg-emerald-700 transition cursor-pointer"
+                            className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-800 hover:bg-emerald-100 cursor-pointer"
                           >
-                            ✓ Give Medicine
+                            ✓ Give Early
                           </button>
                         </div>
                       )}
                     </div>
-                  );
-                })}
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Upcoming Doses Scheduled Later Today */}
-          {upcomingDoses.length > 0 && (
-            <div className="space-y-2.5">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-ink-600">
-                Scheduled Later Today ({upcomingDoses.length})
-              </h2>
-
+            {/* On Hold Medications (if any) */}
+            {onHoldOrders.length > 0 && (
               <div className="space-y-2.5">
-                {upcomingDoses.map((item) => (
-                  <div
-                    key={`${item.orderId}-${new Date(item.scheduledTime).getTime()}`}
-                    className="flex flex-col gap-3 rounded-xl border border-ink-200 bg-white p-3.5 shadow-2xs transition sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div className="space-y-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-bold text-ink-900">
-                          {item.medicineName}
-                        </span>
-                        <span className="rounded bg-ink-100 px-2 py-0.5 font-mono text-xs font-semibold text-ink-800">
-                          {item.doseAmount} {item.doseUnit}
-                        </span>
-                        <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[11px] font-semibold text-ink-700">
-                          {formatRoutePlain(item.route)}
+                <h2 className="text-xs font-bold uppercase tracking-wider text-amber-900">
+                  On Hold by Doctor ({onHoldOrders.length})
+                </h2>
+                <div className="space-y-2">
+                  {onHoldOrders.map((ord) => (
+                    <div
+                      key={ord.id}
+                      className="rounded-xl border border-amber-300 bg-amber-50/60 p-3 text-xs text-amber-950"
+                    >
+                      <div className="flex items-center justify-between">
+                        <strong className="text-sm">{ord.medicineName}</strong>
+                        <span className="rounded bg-amber-200 px-2 py-0.5 font-bold uppercase text-amber-900">
+                          ⏸ On Hold
                         </span>
                       </div>
-                      <p className="text-xs text-ink-500">
-                        Scheduled for: <strong className="text-ink-800">{formatSlotTime(item.scheduledTime)}</strong>
-                      </p>
+                      {ord.specialInstructions && (
+                        <p className="mt-1 text-amber-800 font-medium">
+                          Doctor’s Note / Hold Reason: {ord.specialInstructions}
+                        </p>
+                      )}
                     </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
-                    {canAdminister && (
-                      <div className="flex shrink-0 items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setAdjustTimingItem({
-                              orderId: item.orderId,
-                              medicineName: item.medicineName,
-                              scheduleTimes: [
-                                new Date(item.scheduledTime).toLocaleTimeString(undefined, {
+            {/* Empty State for Daily Medicines */}
+            {totalDailyDosesCount === 0 && onHoldOrders.length === 0 && (
+              <div className="rounded-2xl border border-dashed border-ink-200 bg-white p-8 text-center">
+                <p className="text-base font-bold text-ink-800">
+                  No daily scheduled medicines due right now.
+                </p>
+                <p className="mt-1 text-xs text-ink-500">
+                  All daily medications have been administered or none are scheduled for this shift.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Side Bento Column (4 cols): Scrollable Given Today & Active Orders */}
+          <div className="lg:col-span-4 space-y-3.5">
+            {/* Doses Given Today (Independently Scrollable Card) */}
+            <div className="rounded-2xl border border-ink-200 bg-white p-3.5 shadow-2xs">
+              <div className="flex items-center justify-between border-b border-ink-100 pb-2 mb-2.5">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-ink-700 flex items-center gap-1.5">
+                  <span>✓ Given Today</span>
+                  <span className="rounded-full bg-emerald-100 text-emerald-800 text-[10px] px-1.5 py-0.2 font-extrabold">
+                    {recentHistory.length}
+                  </span>
+                </h3>
+                <span className="text-[10px] text-ink-500 font-medium">Dose Log</span>
+              </div>
+
+              {recentHistory.length === 0 ? (
+                <div className="py-6 text-center text-xs text-ink-400 italic">
+                  No doses recorded yet for today.
+                </div>
+              ) : (
+                <div className="max-h-[380px] overflow-y-auto space-y-2 pr-1">
+                  {recentHistory.map((entry) => {
+                    const isVoided = Boolean(entry.voidedAt);
+                    const isGiven = entry.outcome === 'administered';
+                    return (
+                      <div
+                        key={entry.id}
+                        className={cn(
+                          'flex items-center justify-between rounded-lg border px-3 py-2 text-xs',
+                          isVoided
+                            ? 'border-ink-200 bg-ink-50 text-ink-400 line-through'
+                            : isGiven
+                            ? 'border-emerald-200 bg-emerald-50/40 text-emerald-950'
+                            : 'border-amber-200 bg-amber-50/40 text-amber-950',
+                        )}
+                      >
+                        <div>
+                          <div className="font-bold">
+                            {entry.doseGiven || 'Dose'} ({formatRoutePlain(entry.routeGiven || 'oral')})
+                          </div>
+                          <div className="text-[11px] text-ink-600">
+                            {entry.actualTime
+                              ? new Date(entry.actualTime).toLocaleTimeString(undefined, {
                                   hour: '2-digit',
                                   minute: '2-digit',
-                                  hour12: false,
-                                }),
-                              ],
-                            })
-                          }
-                          className="rounded-lg border border-ink-200 bg-white px-2.5 py-1.5 text-xs font-medium text-ink-700 hover:bg-ink-50 cursor-pointer"
-                          title="Change scheduled timing with reason"
-                        >
-                          Change Time
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setExceptionItem(item)}
-                          className="rounded-lg border border-ink-200 bg-white px-2.5 py-1.5 text-xs font-medium text-ink-600 hover:bg-ink-50 cursor-pointer"
-                        >
-                          Skip Dose
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setAdministerItem(item)}
-                          className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-800 hover:bg-emerald-100 cursor-pointer"
-                        >
-                          ✓ Give Early
-                        </button>
+                                })
+                              : 'Logged'}
+                            {entry.clinicalNote && (
+                              <span className="ml-1 italic text-ink-500">· {entry.clinicalNote}</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[11px] font-semibold capitalize">
+                            {isVoided ? 'Voided' : entry.outcome}
+                          </span>
+                          {!isVoided && canAdminister && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const reason = window.prompt(
+                                  'Enter reason to mark this entry as void / entered in error:',
+                                );
+                                if (reason && reason.trim()) {
+                                  void handleVoid(entry.id, reason.trim());
+                                }
+                              }}
+                              className="rounded px-1.5 py-0.5 text-[10px] font-bold text-rose-600 hover:bg-rose-50"
+                            >
+                              Void
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    )}
-                  </div>
-                ))}
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* SOS / As-Needed Available Orders Card */}
+            <div className="rounded-2xl border border-ink-200 bg-white p-3.5 shadow-2xs">
+              <div className="flex items-center justify-between border-b border-ink-100 pb-2 mb-2">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-ink-700">
+                  SOS / As-Needed ({sosMedicines.length})
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('sos')}
+                  className="text-[11px] font-semibold text-brand-700 hover:underline cursor-pointer"
+                >
+                  View SOS &rarr;
+                </button>
               </div>
-            </div>
-          )}
-
-          {/* On Hold Medications (if any) */}
-          {onHoldOrders.length > 0 && (
-            <div className="space-y-2.5">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-amber-900">
-                On Hold by Doctor ({onHoldOrders.length})
-              </h2>
-              <div className="space-y-2">
-                {onHoldOrders.map((ord) => (
-                  <div
-                    key={ord.id}
-                    className="rounded-xl border border-amber-300 bg-amber-50/60 p-3 text-xs text-amber-950"
-                  >
-                    <div className="flex items-center justify-between">
-                      <strong className="text-sm">{ord.medicineName}</strong>
-                      <span className="rounded bg-amber-200 px-2 py-0.5 font-bold uppercase text-amber-900">
-                        ⏸ On Hold
-                      </span>
-                    </div>
-                    {ord.specialInstructions && (
-                      <p className="mt-1 text-amber-800 font-medium">
-                        Doctor’s Note / Hold Reason: {ord.specialInstructions}
-                      </p>
-                    )}
+              <div className="max-h-52 overflow-y-auto space-y-1.5 pr-1 text-xs">
+                {sosMedicines.length === 0 ? (
+                  <div className="py-4 text-center text-xs text-ink-400 italic">
+                    No PRN orders prescribed.
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Empty State for Daily Medicines */}
-          {totalDailyDosesCount === 0 && onHoldOrders.length === 0 && (
-            <div className="rounded-2xl border border-dashed border-ink-200 bg-white p-8 text-center">
-              <p className="text-base font-bold text-ink-800">
-                No daily scheduled medicines due right now.
-              </p>
-              <p className="mt-1 text-xs text-ink-500">
-                All daily medications have been administered or none are scheduled for this shift.
-              </p>
-            </div>
-          )}
-
-          {/* Doses Given Today (Recent Log) */}
-          {recentHistory.length > 0 && (
-            <div className="mt-6 border-t border-ink-200 pt-4 space-y-2">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-ink-500">
-                Given Today / Recent Doses ({recentHistory.length})
-              </h3>
-              <div className="space-y-1.5">
-                {recentHistory.slice(0, 5).map((entry) => {
-                  const isVoided = Boolean(entry.voidedAt);
-                  const isGiven = entry.outcome === 'administered';
-                  return (
+                ) : (
+                  sosMedicines.map((med) => (
                     <div
-                      key={entry.id}
-                      className={cn(
-                        'flex items-center justify-between rounded-lg border px-3 py-2 text-xs',
-                        isVoided
-                          ? 'border-ink-200 bg-ink-50 text-ink-400 line-through'
-                          : isGiven
-                          ? 'border-emerald-200 bg-emerald-50/40 text-emerald-950'
-                          : 'border-amber-200 bg-amber-50/40 text-amber-950',
-                      )}
+                      key={med.orderId}
+                      className="p-2 rounded-lg bg-sky-50/60 border border-sky-100 flex items-center justify-between"
                     >
                       <div>
-                        <span className="font-bold">
-                          {entry.doseGiven || 'Dose'} ({formatRoutePlain(entry.routeGiven || 'oral')})
-                        </span>
-                        <span className="mx-2 text-ink-400">•</span>
-                        <span>
-                          {entry.actualTime
-                            ? new Date(entry.actualTime).toLocaleTimeString(undefined, {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })
-                            : 'Logged'}
-                        </span>
-                        {entry.clinicalNote && (
-                          <span className="ml-2 italic text-ink-500">({entry.clinicalNote})</span>
+                        <div className="font-bold text-ink-900">{med.medicineName}</div>
+                        <div className="text-[10px] text-ink-600 font-medium">
+                          {med.doseAmount} {med.doseUnit} · {formatRoutePlain(med.route)}
+                        </div>
+                        {med.prnIndication && (
+                          <div className="text-[10px] text-sky-800 italic">
+                            For: {med.prnIndication}
+                          </div>
                         )}
                       </div>
-
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold capitalize">
-                          {isVoided ? 'Voided' : entry.outcome}
-                        </span>
-                        {!isVoided && canAdminister && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const reason = window.prompt(
-                                'Enter reason to mark this entry as void / entered in error:',
-                              );
-                              if (reason && reason.trim()) {
-                                void handleVoid(entry.id, reason.trim());
-                              }
-                            }}
-                            className="rounded px-1.5 py-0.5 text-[11px] font-bold text-rose-600 hover:bg-rose-50"
-                          >
-                            Void
-                          </button>
+                      <span
+                        className={cn(
+                          'px-1.5 py-0.5 rounded text-[10px] font-bold',
+                          med.eligibility.eligible
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-ink-100 text-ink-600',
                         )}
-                      </div>
+                      >
+                        {med.eligibility.eligible ? 'Ready' : 'Wait'}
+                      </span>
                     </div>
-                  );
-                })}
+                  ))
+                )}
               </div>
             </div>
-          )}
+          </div>
         </div>
       )}
 
@@ -993,6 +1047,21 @@ export function BedsideTreatmentChart({
           }}
         />
       )}
+
+      {/* Record TPR Modal */}
+      <RecordVitalsModal
+        admissionId={admissionId}
+        isOpen={isTprModalOpen}
+        onClose={() => setIsTprModalOpen(false)}
+        onSuccess={() => {
+          setIsTprModalOpen(false);
+          setActionNotice({
+            tone: 'success',
+            text: 'Patient TPR and vital signs recorded successfully.',
+          });
+          handleRefresh();
+        }}
+      />
     </div>
   );
 }
