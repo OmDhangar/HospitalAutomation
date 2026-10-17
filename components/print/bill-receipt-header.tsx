@@ -12,6 +12,7 @@ export interface BillReceiptHeaderProps {
     location: string | null;
     phone: string | null;
     patientId: string | null;
+    roomBed?: string | null;
     doctorName: string | null;
     department: string | null;
   };
@@ -107,6 +108,13 @@ export function BillReceiptHeader({
             <span className="w-3 shrink-0 text-center font-bold">:</span>
             <span className="font-mono font-bold text-ink-900">{patient.patientId || '—'}</span>
           </div>
+          {patient.roomBed ? (
+            <div className="flex">
+              <span className="w-28 shrink-0 font-bold text-ink-700">Room / Bed</span>
+              <span className="w-3 shrink-0 text-center font-bold">:</span>
+              <span className="font-bold uppercase text-ink-950">{patient.roomBed}</span>
+            </div>
+          ) : null}
           <div className="flex">
             <span className="w-28 shrink-0 font-bold text-ink-700">Incharge Doctor</span>
             <span className="w-3 shrink-0 text-center font-bold">:</span>

@@ -42,11 +42,86 @@ const CATEGORY_ORDER: ReceiptCategoryKey[] = [
   'ROOM_CLINICAL',
 ];
 
+export type RoomType = 'General Ward' | 'Private Ward' | 'Semi-Private Bed';
+
+export interface BeddingInfo {
+  roomType: RoomType;
+  bedNumber: string | null;
+  display: string;
+  categoryTitle: string;
+}
+
+export function classifyRoomType(input?: string | null): RoomType {
+  if (!input) return 'General Ward';
+  const text = input.toLowerCase();
+  if (text.includes('semi')) {
+    return 'Semi-Private Bed';
+  }
+  if (
+    text.includes('private') ||
+    text.includes('special') ||
+    text.includes('deluxe') ||
+    text.includes('single')
+  ) {
+    return 'Private Ward';
+  }
+  return 'General Ward';
+}
+
+export function formatBeddingInfo(args?: {
+  wardName?: string | null;
+  bedLabel?: string | null;
+  rawDescription?: string | null;
+}): BeddingInfo {
+  const sourceText = `${args?.wardName ?? ''} ${args?.rawDescription ?? ''}`.trim();
+  const roomType = classifyRoomType(sourceText);
+
+  let bed = args?.bedLabel ?? null;
+  if (!bed && args?.rawDescription) {
+    const match = args.rawDescription.match(/bed\s+([A-Za-z0-9-]+)/i);
+    if (match) bed = match[1];
+  }
+  if (bed) {
+    bed = bed.replace(/^bed\s+/i, '').trim();
+  }
+
+  const bedDisplay = bed ? `Bed ${bed}` : null;
+  const display = bedDisplay ? `${roomType} · ${bedDisplay}` : roomType;
+
+  let categoryTitle = 'ROOM & CLINICAL CHARGES';
+  const hasSpecificRoom = args?.wardName || (args?.rawDescription && /semi|private|special|deluxe|general|ward/i.test(args.rawDescription));
+
+  if (hasSpecificRoom) {
+    if (roomType === 'Semi-Private Bed') {
+      categoryTitle = 'SEMI (SPECIAL ROOM)';
+    } else if (roomType === 'Private Ward') {
+      categoryTitle = 'PRIVATE WARD';
+    } else if (roomType === 'General Ward') {
+      categoryTitle = 'GENERAL WARD';
+    }
+  }
+
+  return {
+    roomType,
+    bedNumber: bed,
+    display,
+    categoryTitle,
+  };
+}
+
 export function categorizeBillLines(
   lines: readonly BillLine[],
   timezone: string = 'Asia/Kolkata',
+  beddingContext?: BeddingInfo | { wardName?: string | null; bedLabel?: string | null } | null,
 ): CategorizedBillGroup[] {
   const activeLines = lines.filter((l) => !l.voidedAt);
+
+  const resolvedBedding =
+    beddingContext && 'roomType' in beddingContext
+      ? (beddingContext as BeddingInfo)
+      : beddingContext
+        ? formatBeddingInfo(beddingContext)
+        : null;
 
   const formatDate = (at: Date | null, day: string) => {
     if (at) {
@@ -75,27 +150,56 @@ export function categorizeBillLines(
 
   const map = new Map<ReceiptCategoryKey, { title: string; lines: ReceiptLineItem[]; subtotalPaise: number }>();
 
+  let roomCategoryTitle = resolvedBedding?.categoryTitle ?? 'ROOM & CLINICAL CHARGES';
+
   for (const line of activeLines) {
+    const isRoomItem = line.itemType.toLowerCase() === 'room';
+    const isServiceItem = line.itemType.toLowerCase() === 'service';
+
     const matched = CATEGORY_MAP[line.itemType.toLowerCase()] ?? {
       key: 'HOSPITAL_CHARGES' as ReceiptCategoryKey,
       title: 'HOSPITAL CHARGES',
     };
 
+    if (matched.key === 'ROOM_CLINICAL' && isRoomItem && !resolvedBedding) {
+      const lineBedding = formatBeddingInfo({ rawDescription: line.description });
+      roomCategoryTitle = lineBedding.categoryTitle;
+    }
+
     let group = map.get(matched.key);
     if (!group) {
-      group = { title: matched.title, lines: [], subtotalPaise: 0 };
+      group = {
+        title: matched.key === 'ROOM_CLINICAL' ? roomCategoryTitle : matched.title,
+        lines: [],
+        subtotalPaise: 0,
+      };
       map.set(matched.key, group);
+    } else if (matched.key === 'ROOM_CLINICAL') {
+      group.title = roomCategoryTitle;
     }
 
     const sNo = group.lines.length + 1;
     const formattedDate = formatDate(line.at, line.day);
 
+    let particulars = line.description;
+    let descriptionText = line.quantity > 1 ? `${line.quantity} UNITS` : '1 UNIT';
+
+    if (isRoomItem) {
+      const lineBedding = resolvedBedding ?? formatBeddingInfo({ rawDescription: line.description });
+      particulars = lineBedding.bedNumber
+        ? `BED CHARGES (Bed ${lineBedding.bedNumber})`
+        : 'BED CHARGES';
+      descriptionText = line.quantity > 1 ? `${line.quantity} DAYS` : '1 DAY';
+    } else if (isServiceItem && line.description.toLowerCase().includes('visit')) {
+      descriptionText = line.quantity > 1 ? `${line.quantity} DAYS` : '1 DAY';
+    }
+
     group.lines.push({
       id: line.id,
       sNo,
       date: formattedDate,
-      particulars: line.description,
-      description: line.quantity > 1 ? `${line.quantity} UNITS` : '1 UNIT',
+      particulars,
+      description: descriptionText,
       ratePaise: line.unitPricePaise,
       quantity: line.quantity,
       discountPaise: line.discountPaise,

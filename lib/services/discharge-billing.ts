@@ -175,6 +175,8 @@ async function admissionHeaderInTx(tx: Tx, admissionId: string) {
       status: admissions.status,
       encounterId: admissions.encounterId,
       patientId: admissions.patientId,
+      patientMrn: patients.mrn,
+      ipdNumber: admissions.ipdNumber,
       patientName: patients.name,
       age: patients.age,
       gender: patients.gender,
@@ -1060,8 +1062,8 @@ export async function getPublicBill(token: string, now: Date = new Date()): Prom
 export type PrintableBill = {
   hospital: { name: string; branchName: string; branchAddress: string | null };
   bill: { id: string; billNumber: string | null; status: string; finalizedAt: Date | null };
-  patient: { name: string; phone: string; address: string | null; age: number | null; gender: string | null };
-  admission: { id: string; admittedAt: Date | null; dischargedAt: Date | null; doctorName: string; bed: { label: string; wardName: string } | null };
+  patient: { id: string; mrn: string | null; name: string; phone: string; address: string | null; age: number | null; gender: string | null };
+  admission: { id: string; ipdNumber: number | null; admittedAt: Date | null; dischargedAt: Date | null; doctorName: string; bed: { label: string; wardName: string } | null };
   payer: { kind: string; payerName: string | null; policyNumber: string | null } | null;
   lines: BillLine[];
   payments: PaymentRow[];
@@ -1182,6 +1184,8 @@ export async function getBillForPrint(args: {
         hospital: { name: place.hospitalName, branchName: place.branchName, branchAddress: place.branchAddress },
         bill: { id: bill.id, billNumber: bill.billNumber, status: bill.status, finalizedAt: bill.finalizedAt },
         patient: {
+          id: header.patientId,
+          mrn: header.patientMrn,
           name: bill.patientName ?? header.patientName,
           phone: bill.patientPhone ?? header.phoneE164,
           address: bill.patientAddress ?? header.address,
@@ -1190,6 +1194,7 @@ export async function getBillForPrint(args: {
         },
         admission: {
           id: header.id,
+          ipdNumber: header.ipdNumber,
           admittedAt: header.admittedAt,
           dischargedAt: header.dischargedAt,
           doctorName: header.doctorName,

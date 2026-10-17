@@ -7,6 +7,7 @@ export interface PatientMedicalReportProps {
     age: number | null;
     gender: string | null;
     ipdNumber: string | null;
+    roomBed?: string | null;
     doctorName: string | null;
   };
   report: PrintableMedicalReport;
@@ -56,6 +57,12 @@ export function PatientMedicalReport({
             <span className="font-bold text-ink-700">Patient: </span>
             <span className="font-black text-ink-950">{patientDemographics}</span>
           </div>
+          {patient.roomBed ? (
+            <div>
+              <span className="font-bold text-ink-700">Room / Bed: </span>
+              <span className="font-bold uppercase text-ink-950">{patient.roomBed}</span>
+            </div>
+          ) : null}
           <div>
             <span className="font-bold text-ink-700">Consultant: </span>
             <span className="font-bold text-ink-950">{patient.doctorName || 'Attending Physician'}</span>

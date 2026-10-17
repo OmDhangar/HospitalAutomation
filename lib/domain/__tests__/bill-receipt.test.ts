@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { categorizeBillLines, computeReceiptSummary } from '../bill-receipt';
+import {
+  categorizeBillLines,
+  classifyRoomType,
+  computeReceiptSummary,
+  formatBeddingInfo,
+} from '../bill-receipt';
 import type { BillLine, PaymentRow } from '@/lib/services/discharge-billing';
 
 describe('bill-receipt categorization & computations', () => {
@@ -233,5 +238,85 @@ describe('bill-receipt categorization & computations', () => {
     expect(summary.netPaymentsPaise).toBe(0);
     expect(summary.balanceDuePaise).toBe(120000);
     expect(summary.netAmountPaise).toBe(120000);
+  });
+
+  describe('room & bedding classification', () => {
+    it('classifies room types into General Ward, Private Ward, or Semi-Private Bed', () => {
+      expect(classifyRoomType('Female Medical Ward')).toBe('General Ward');
+      expect(classifyRoomType('General Ward A')).toBe('General Ward');
+      expect(classifyRoomType('Semi-Private Ward')).toBe('Semi-Private Bed');
+      expect(classifyRoomType('Semi Special Room')).toBe('Semi-Private Bed');
+      expect(classifyRoomType('Private Ward')).toBe('Private Ward');
+      expect(classifyRoomType('Special Deluxe Room')).toBe('Private Ward');
+      expect(classifyRoomType(null)).toBe('General Ward');
+    });
+
+    it('formats bedding display cleanly with room type and bed number', () => {
+      const general = formatBeddingInfo({
+        wardName: 'Female Medical Ward',
+        bedLabel: '12',
+      });
+      expect(general.roomType).toBe('General Ward');
+      expect(general.bedNumber).toBe('12');
+      expect(general.display).toBe('General Ward · Bed 12');
+      expect(general.categoryTitle).toBe('GENERAL WARD');
+
+      const semi = formatBeddingInfo({
+        wardName: 'Semi-Private Room',
+        bedLabel: 'Bed 04',
+      });
+      expect(semi.roomType).toBe('Semi-Private Bed');
+      expect(semi.bedNumber).toBe('04');
+      expect(semi.display).toBe('Semi-Private Bed · Bed 04');
+      expect(semi.categoryTitle).toBe('SEMI (SPECIAL ROOM)');
+
+      const privateWard = formatBeddingInfo({
+        wardName: 'Private Room',
+        bedLabel: '101',
+      });
+      expect(privateWard.roomType).toBe('Private Ward');
+      expect(privateWard.bedNumber).toBe('101');
+      expect(privateWard.display).toBe('Private Ward · Bed 101');
+      expect(privateWard.categoryTitle).toBe('PRIVATE WARD');
+    });
+
+    it('replaces verbose ward names and bed types with clean room and bed number on bill lines', () => {
+      const verboseBedLine: BillLine = {
+        id: 'room-1',
+        itemType: 'room',
+        description: 'Female Medical Ward Bed · Female Medical Ward, bed 12 · 2026-09-24',
+        quantity: 4,
+        unitPricePaise: 80000,
+        subtotalPaise: 320000,
+        totalPaise: 320000,
+        discountPaise: 0,
+        discountReason: null,
+        taxPaise: 0,
+        day: '2026-09-24',
+        at: new Date('2026-09-24T12:00:00Z'),
+        voidedAt: null,
+        voidReason: null,
+        careEntryId: null,
+      };
+
+      const groups = categorizeBillLines([verboseBedLine], 'Asia/Kolkata', {
+        wardName: 'Semi-Private Room',
+        bedLabel: '12',
+      });
+
+      expect(groups).toHaveLength(1);
+      const roomGroup = groups[0];
+      // Category title indicates the room type
+      expect(roomGroup.categoryTitle).toBe('SEMI (SPECIAL ROOM)');
+      expect(roomGroup.lines).toHaveLength(1);
+
+      const line = roomGroup.lines[0];
+      // Does NOT show "Female Medical Ward" or "Female Medical Ward Bed"
+      expect(line.particulars).not.toContain('Female Medical Ward');
+      // Shows clean bed charges with bed number
+      expect(line.particulars).toBe('BED CHARGES (Bed 12)');
+      // Shows DAYS instead of generic UNITS
+      expect(line.description).toBe('4 DAYS');
+    });
   });
 });

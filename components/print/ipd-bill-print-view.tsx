@@ -96,6 +96,7 @@ export function IpdBillPrintView({
                 gender: patient.gender,
                 ipdNumber: bill.ipdNumber,
                 doctorName: patient.doctorName,
+                roomBed: patient.roomBed,
               }}
               report={medicalReport}
             />

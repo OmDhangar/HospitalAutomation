@@ -19,6 +19,7 @@ describe('BillReceipt Components', () => {
       location: 'SHIRPUR',
       phone: '9922247281',
       patientId: '15804',
+      roomBed: 'General Ward · Bed 12',
       doctorName: 'DR VINOD R PAWARA',
       department: 'MEDICINE',
     },
@@ -96,6 +97,8 @@ describe('BillReceipt Components', () => {
     expect(html).toContain('SHIRPUR');
     expect(html).toContain('9922247281');
     expect(html).toContain('15804');
+    expect(html).toContain('Room / Bed');
+    expect(html).toContain('General Ward · Bed 12');
     expect(html).toContain('DR VINOD R PAWARA');
     expect(html).toContain('MEDICINE');
 

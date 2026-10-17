@@ -1,7 +1,7 @@
 import { notFound, redirect } from 'next/navigation';
 import { requireSession } from '@/lib/auth/session';
 import { can } from '@/lib/domain/permissions';
-import { categorizeBillLines, computeReceiptSummary } from '@/lib/domain/bill-receipt';
+import { categorizeBillLines, computeReceiptSummary, formatBeddingInfo } from '@/lib/domain/bill-receipt';
 import { getBillForPrint } from '@/lib/services/discharge-billing';
 import { getLetterheadSettings } from '@/lib/services/letterhead';
 import { getMedicalReportForPrint } from '@/lib/services/medical-report';
@@ -71,7 +71,11 @@ export default async function IpdBillPrintPage({
       : '—';
 
   const isFinal = bill.bill.status === 'final';
-  const groups = categorizeBillLines(bill.lines, tz);
+  const bedding = formatBeddingInfo({
+    wardName: bill.admission.bed?.wardName,
+    bedLabel: bill.admission.bed?.label,
+  });
+  const groups = categorizeBillLines(bill.lines, tz, bedding);
   const summary = computeReceiptSummary(bill.totals, bill.payments);
 
   // Match attending doctor in letterhead settings for qualification and registration number
@@ -95,7 +99,10 @@ export default async function IpdBillPrintPage({
     address: bill.patient.address,
     location: bill.hospital.branchName || 'SHIRPUR',
     phone: bill.patient.phone,
-    patientId: bill.admission.bed ? `${bill.admission.bed.label}` : '15804',
+    patientId: bill.patient.mrn || bill.patient.id.slice(0, 8).toUpperCase(),
+    roomType: bedding.roomType,
+    bedNumber: bedding.bedNumber,
+    roomBed: bill.admission.bed ? bedding.display : null,
     doctorName: bill.admission.doctorName,
     department: 'MEDICINE',
   };
@@ -103,7 +110,7 @@ export default async function IpdBillPrintPage({
   const billMetadata = {
     billNumber: bill.bill.billNumber ? `#${bill.bill.billNumber}` : '#6097 (Draft)',
     billDate: isFinal ? formatDate(bill.bill.finalizedAt) : formatDate(new Date()),
-    ipdNumber: bill.admission.id.slice(0, 8).toUpperCase(),
+    ipdNumber: bill.admission.ipdNumber ? String(bill.admission.ipdNumber) : bill.admission.id.slice(0, 8).toUpperCase(),
     admissionDate: formatDate(bill.admission.admittedAt),
     admissionTime: formatTime(bill.admission.admittedAt),
     dischargeDate: isFinal ? formatDate(bill.admission.dischargedAt) : 'Currently Admitted',
