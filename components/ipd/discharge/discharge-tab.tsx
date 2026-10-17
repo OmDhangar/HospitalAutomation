@@ -68,10 +68,6 @@ export function DischargeTab({
     }
   };
 
-  const handlePrintCard = () => {
-    window.print();
-  };
-
   return (
     <div className={`space-y-4 ${className}`}>
       {/* Cockpit Header */}
@@ -88,14 +84,15 @@ export function DischargeTab({
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handlePrintCard}
+          <Link
+            href={`/print/ipd-bill/draft?admissionId=${admissionId}&report=1`}
+            target="_blank"
+            rel="noreferrer"
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded border border-ink-200 text-ink-800 bg-surface hover:bg-ink-50 shadow-2xs"
           >
             <PrinterIcon className="size-3.5" />
             <span>Print Discharge Card</span>
-          </button>
+          </Link>
         </div>
       </div>
 
@@ -199,11 +196,10 @@ export function DischargeTab({
               </p>
             </div>
             <span
-              className={`text-2xs font-bold px-2 py-0.5 rounded ${
-                pharmacyReturned
+              className={`text-2xs font-bold px-2 py-0.5 rounded ${pharmacyReturned
                   ? 'bg-emerald-100 text-emerald-800'
                   : 'bg-amber-100 text-amber-800'
-              }`}
+                }`}
             >
               {pharmacyReturned ? 'Returned' : 'Check Bedside'}
             </span>
@@ -287,13 +283,12 @@ export function DischargeTab({
               </p>
             </div>
             <span
-              className={`text-2xs font-bold px-2 py-0.5 rounded ${
-                dischargeSummary?.status === 'finalized'
+              className={`text-2xs font-bold px-2 py-0.5 rounded ${dischargeSummary?.status === 'finalized'
                   ? 'bg-emerald-100 text-emerald-800'
                   : dischargeSummary?.status === 'draft'
                     ? 'bg-amber-100 text-amber-800'
                     : 'bg-rose-100 text-rose-800'
-              }`}
+                }`}
             >
               {dischargeSummary?.status === 'finalized'
                 ? `Finalized (v${dischargeSummary.version})`
@@ -319,14 +314,15 @@ export function DischargeTab({
                 <FileTextIcon className="size-3.5" />
                 <span>{dischargeSummary?.status === 'finalized' ? 'View Final Summary' : 'Edit & Finalize Summary'}</span>
               </button>
-              <button
-                type="button"
-                onClick={handlePrintCard}
+              <Link
+                href={`/print/ipd-bill/draft?admissionId=${admissionId}&report=1`}
+                target="_blank"
+                rel="noreferrer"
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded border border-ink-200 text-ink-800 bg-surface hover:bg-ink-50 shadow-2xs"
               >
                 <PrinterIcon className="size-3.5" />
                 <span>Print Card</span>
-              </button>
+              </Link>
             </div>
           </div>
         </div>

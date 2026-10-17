@@ -45,10 +45,6 @@ export function BillingAndConsumablesTab({
     });
   };
 
-  const handlePrint = () => {
-    window.print();
-  };
-
   return (
     <div className="space-y-4">
       {/* Top Header & Financial Overview */}
@@ -67,13 +63,14 @@ export function BillingAndConsumablesTab({
           >
             + Bedside Supplies
           </Link>
-          <button
-            type="button"
-            onClick={handlePrint}
-            className="inline-flex items-center rounded-lg bg-brand-700 px-3.5 py-1.5 text-xs font-bold text-white shadow-2xs hover:bg-brand-800 cursor-pointer"
+          <Link
+            href={`/print/ipd-bill/draft?admissionId=${admissionId}`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-brand-700 px-3.5 py-1.5 text-xs font-bold text-white shadow-2xs hover:bg-brand-800 cursor-pointer"
           >
             Print Interim Bill
-          </button>
+          </Link>
         </div>
       </div>
 

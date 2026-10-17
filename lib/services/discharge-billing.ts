@@ -1077,13 +1077,60 @@ export type PrintableBill = {
 export async function getBillForPrint(args: {
   hospitalId: string;
   billId: string;
+  admissionId?: string;
   actorUserId: string;
 }): Promise<PrintableBill | null> {
-  if (!/^[0-9a-f-]{36}$/i.test(args.billId)) return null;
+  const isUuid = /^[0-9a-f-]{36}$/i.test(args.billId);
+  if (!isUuid && !args.admissionId) return null;
   return withTenant(
     args.hospitalId,
     async (tx) => {
-      const [bill] = await tx.select().from(bills).where(eq(bills.id, args.billId));
+      let bill: typeof bills.$inferSelect | undefined;
+      let targetAdmissionId: string | null = null;
+
+      if (isUuid) {
+        const [foundBill] = await tx.select().from(bills).where(eq(bills.id, args.billId));
+        if (foundBill) {
+          bill = foundBill;
+        } else {
+          const [adm] = await tx.select({ id: admissions.id }).from(admissions).where(eq(admissions.id, args.billId));
+          if (adm) targetAdmissionId = adm.id;
+        }
+      }
+
+      if (!bill && (args.admissionId || targetAdmissionId)) {
+        const admId = (args.admissionId || targetAdmissionId)!;
+        const [adm] = await tx
+          .select({ id: admissions.id, encounterId: admissions.encounterId, patientId: admissions.patientId })
+          .from(admissions)
+          .where(eq(admissions.id, admId));
+        if (adm) {
+          const billRows = await tx
+            .select()
+            .from(bills)
+            .where(and(eq(bills.encounterId, adm.encounterId), ne(bills.status, 'cancelled')))
+            .orderBy(desc(bills.createdAt));
+          bill = billRows.find((b) => b.status === 'final') ?? billRows[0];
+
+          if (!bill) {
+            await tx
+              .insert(bills)
+              .values({
+                hospitalId: args.hospitalId,
+                encounterId: adm.encounterId,
+                patientId: adm.patientId,
+                createdByUserId: args.actorUserId,
+              })
+              .onConflictDoNothing();
+            const [created] = await tx
+              .select()
+              .from(bills)
+              .where(and(eq(bills.encounterId, adm.encounterId), eq(bills.status, 'draft')));
+            bill = created;
+          }
+        }
+      }
+
       if (!bill) return null;
       const [admission] = await tx
         .select({ id: admissions.id })
