@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { drainOutbox } from '@/lib/notify/worker';
 import { safeEqual } from '@/lib/security/tokens';
+import { drainAllHospitalsIpdEmarOutbox } from '@/lib/services/ipd-emar-outbox';
 import { runSweeps } from '@/lib/services/sweeps';
 
 export const dynamic = 'force-dynamic';
@@ -22,7 +23,7 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 /**
- * Drains the notification outbox.
+ * Drains the notification and IPD eMAR outboxes.
  *
  * An HTTP endpoint rather than a long-lived process so the same deployment
  * works whether it is poked by cron, a platform scheduler, or a container
@@ -43,17 +44,19 @@ async function handleTick(request: Request) {
 
   const result = await drainOutbox();
 
+  let ipdEmar = { processed: 0, pendingPricing: 0, failed: 0, recoveredStuckClaims: 0 };
+  try {
+    ipdEmar = await drainAllHospitalsIpdEmarOutbox();
+  } catch (err) {
+    console.error('[tick] IPD eMAR outbox drain failed:', err);
+  }
+
   /**
    * Housekeeping runs after the drain, and never blocks it.
-   *
-   * Expiring yesterday's stale rows is not worth delaying a token link a
-   * patient is waiting on, and runSweeps swallows its own failures for the
-   * same reason — a broken sweep must not turn a successful drain into a
-   * non-2xx that the scheduler then retries.
    */
   const sweeps = await runSweeps();
 
-  return NextResponse.json({ ...result, sweeps });
+  return NextResponse.json({ ...result, ipdEmar, sweeps });
 }
 
 export async function POST(request: Request) {

@@ -52,7 +52,7 @@ export default async function TestsHomePage({ searchParams }: PageProps<'/tests'
               <li key={p.id}>
                 <Link href={`/tests/${p.id}`} className="flex min-h-14 items-center justify-between px-5 text-sm hover:bg-ink-50">
                   <span>
-                    <strong className="text-ink-900">{p.name}</strong> <span className="text-ink-500">· {SERVICE_POINT_KINDS[p.kind]}</span>
+                    <strong className="text-ink-900">{p.name}</strong> <span className="text-ink-500">· {SERVICE_POINT_KINDS[p.kind as keyof typeof SERVICE_POINT_KINDS]}</span>
                   </span>
                   <span aria-hidden className="text-ink-400">
                     →

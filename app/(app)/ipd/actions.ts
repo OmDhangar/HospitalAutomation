@@ -27,6 +27,41 @@ import {
 import { formatUndoToken, idList, isId, parseUndoToken } from '@/lib/domain/undo';
 import { PatientBillingError } from '@/lib/services/patient-billing';
 import { DoctorIpdError, orderTests } from '@/lib/services/doctor-ipd';
+import { withTenant } from '@/lib/db';
+import { admissions, doctors, vitalsReadings, intakeOutput, clinicalAuditLogs } from '@/lib/db/schema';
+import { eq, and } from 'drizzle-orm';
+import {
+  recordAllergyAssessment,
+  saveRoundDraft,
+  type AllergenItem,
+} from '@/lib/services/ipd-rounding-cockpit';
+import {
+  signRoundOrders,
+  adjustMedicationScheduleTimes,
+  executeOrderAction,
+  cosignVerbalOrder,
+  rejectVerbalOrder,
+  AuthorNotLinkedDoctorError,
+  type OrderResolution,
+  type DraftOrderInput,
+} from '@/lib/services/ipd-medication-orders';
+import {
+  recordAdministration,
+  recordException,
+  voidAdministration,
+  recordNurseUrgentAdministration,
+  type RecordAdministrationInput,
+  type RecordExceptionInput,
+  type RecordNurseUrgentAdminInput,
+} from '@/lib/services/ipd-emar';
+import { processPendingOutboxBatch, retryDeadLetterItem } from '@/lib/services/ipd-emar-outbox';
+import { recordPatientMeasurement } from '@/lib/services/patient-measurements';
+import {
+  saveDischargeSummary,
+  finalizeDischargeSummary,
+  reconcileHomeMedication,
+} from '@/lib/services/ipd-discharge-summary';
+import { markBedCleaned } from '@/lib/services/ipd-census';
 import { getModuleStatesForRequest } from '@/lib/auth/modules';
 import { moduleAllows } from '@/lib/modules/registry';
 import { cancelOrdersForCareEntries, createIpdTestOrders } from '@/lib/services/test-orders';
@@ -271,9 +306,9 @@ export async function orderTestsAction(form: FormData) {
     firstError
       ? { error: firstError }
       : {
-          saved: `${ordered} test${ordered === 1 ? '' : 's'} sent.`,
-          ...(entryIds.length > 0 ? { undo: formatUndoToken('tests', entryIds.join(',')) } : {}),
-        },
+        saved: `${ordered} test${ordered === 1 ? '' : 's'} sent.`,
+        ...(entryIds.length > 0 ? { undo: formatUndoToken('tests', entryIds.join(',')) } : {}),
+      },
   );
 }
 
@@ -327,3 +362,691 @@ export async function undoIpdAction(form: FormData) {
   }
   go(back, { saved: message });
 }
+
+/* ---------------------------------------------------- doctor rounding cockpit */
+
+export async function recordAllergyAssessmentAction(args: {
+  admissionId: string;
+  status: 'unreviewed' | 'nkda' | 'allergies_documented';
+  allergens?: Array<string | AllergenItem>;
+  doctorId?: string;
+}): Promise<{ ok: boolean; status: string }> {
+  const session = await authorize('ipd.prescribe');
+  const res = await recordAllergyAssessment({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    status: args.status,
+    allergens: args.allergens,
+    doctorId: args.doctorId,
+    actorUserId: session.userId,
+  });
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  return { ok: true, status: res.status };
+}
+
+async function resolveDoctorId(
+  hospitalId: string,
+  userId: string,
+  admissionId?: string,
+  requestedDoctorId?: string,
+): Promise<string> {
+  return withTenant(hospitalId, async (tx) => {
+    const [linked] = await tx
+      .select({ id: doctors.id })
+      .from(doctors)
+      .where(eq(doctors.userId, userId));
+
+    if (!linked) {
+      throw new AuthorNotLinkedDoctorError();
+    }
+
+    if (requestedDoctorId && requestedDoctorId !== linked.id) {
+      throw new Error('Doctor ID mismatch: cannot sign orders or notes on behalf of another practitioner');
+    }
+
+    return linked.id;
+  });
+}
+
+export async function saveRoundDraftAction(args: {
+  admissionId: string;
+  notes?: string;
+  doctorId?: string;
+}): Promise<{ ok: boolean; roundId: string }> {
+  const session = await authorize('ipd.prescribe');
+  const docId = await resolveDoctorId(session.hospitalId, session.userId, args.admissionId, args.doctorId);
+
+  const res = await saveRoundDraft({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    doctorId: docId,
+    authorUserId: session.userId,
+    notes: args.notes,
+  });
+
+  revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  return { ok: true, roundId: res.roundId };
+}
+
+export async function signRoundOrdersAction(args: {
+  admissionId: string;
+  notes: string;
+  resolutions: OrderResolution[];
+  doctorId?: string;
+  allergyOverrideReason?: string;
+  duplicateOverrideReason?: string;
+}): Promise<{ ok: boolean; roundId: string; signedOrderIds: string[] }> {
+  const session = await authorize('ipd.prescribe');
+  const docId = await resolveDoctorId(session.hospitalId, session.userId, args.admissionId, args.doctorId);
+
+  const res = await signRoundOrders({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    doctorId: docId,
+    authorUserId: session.userId,
+    notes: args.notes,
+    resolutions: args.resolutions,
+    allergyOverrideReason: args.allergyOverrideReason,
+    duplicateOverrideReason: args.duplicateOverrideReason,
+  });
+
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  revalidatePath('/ipd/my-patients');
+  return { ok: true, roundId: res.roundId, signedOrderIds: res.signedOrderIds };
+}
+
+export async function createTreatmentPlanAction(args: {
+  admissionId: string;
+  diagnosis?: string;
+  notes?: string;
+  newOrders: DraftOrderInput[];
+  doctorId?: string;
+  allergyOverrideReason?: string;
+  duplicateOverrideReason?: string;
+}): Promise<{ ok: boolean; roundId: string; signedOrderIds: string[] }> {
+  const session = await authorize('ipd.prescribe');
+  const docId = await resolveDoctorId(session.hospitalId, session.userId, args.admissionId, args.doctorId);
+
+  // If a diagnosis was entered, save it to admission.reason if not yet set
+  if (args.diagnosis?.trim()) {
+    await withTenant(session.hospitalId, async (tx) => {
+      await tx
+        .update(admissions)
+        .set({ reason: args.diagnosis?.trim(), updatedAt: new Date() })
+        .where(and(eq(admissions.id, args.admissionId), eq(admissions.hospitalId, session.hospitalId)));
+    });
+  }
+
+  const resolutions: OrderResolution[] = args.newOrders.map((order) => ({
+    type: 'new' as const,
+    order,
+  }));
+
+  const res = await signRoundOrders({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    doctorId: docId,
+    authorUserId: session.userId,
+    notes: args.notes?.trim() || (args.diagnosis ? `Initial IPD Treatment Plan: ${args.diagnosis.trim()}` : 'Initial IPD Treatment Plan Prescriptions'),
+    resolutions,
+    allergyOverrideReason: args.allergyOverrideReason,
+    duplicateOverrideReason: args.duplicateOverrideReason,
+  });
+
+  revalidatePath(`/ipd/patients/${args.admissionId}/summary`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/orders`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/emar`);
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath('/ipd/my-patients');
+
+  return { ok: true, roundId: res.roundId, signedOrderIds: res.signedOrderIds };
+}
+
+export async function recordAdministrationAction(args: {
+  admissionId: string;
+  orderId: string;
+  input: RecordAdministrationInput;
+}): Promise<{ ok: boolean; administrationId: string }> {
+  const session = await authorize('ipd.administer');
+
+  const res = await recordAdministration({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    orderId: args.orderId,
+    input: args.input,
+    actorUserId: session.userId,
+  });
+
+  try {
+    await processPendingOutboxBatch({ hospitalId: session.hospitalId, limit: 10 });
+  } catch (err) {
+    console.error('Failed processing outbox batch in recordAdministrationAction:', err);
+  }
+
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/billing`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/emar`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/treatment`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/emar`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/bill`);
+  revalidatePath('/ipd');
+  return { ok: true, administrationId: res.administrationId };
+}
+
+export async function recordExceptionAction(args: {
+  admissionId: string;
+  orderId: string;
+  input: RecordExceptionInput;
+}): Promise<{ ok: boolean; administrationId: string }> {
+  const session = await authorize('ipd.administer');
+
+  const res = await recordException({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    orderId: args.orderId,
+    input: args.input,
+    actorUserId: session.userId,
+  });
+
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/treatment`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/emar`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  revalidatePath('/ipd');
+  return { ok: true, administrationId: res.administrationId };
+}
+
+export async function voidAdministrationAction(args: {
+  admissionId: string;
+  administrationId: string;
+  reason: string;
+}): Promise<{ ok: boolean }> {
+  const session = await authorize('ipd.administer');
+
+  await voidAdministration({
+    hospitalId: session.hospitalId,
+    administrationId: args.administrationId,
+    reason: args.reason,
+    actorUserId: session.userId,
+  });
+
+  try {
+    await processPendingOutboxBatch({ hospitalId: session.hospitalId, limit: 10 });
+  } catch (err) {
+    console.error('Failed processing outbox batch in voidAdministrationAction:', err);
+  }
+
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/billing`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/emar`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/treatment`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/emar`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/bill`);
+  revalidatePath('/ipd');
+  return { ok: true };
+}
+
+export async function adjustMedicationTimingAction(args: {
+  admissionId: string;
+  orderId: string;
+  newScheduleTimes: string[];
+  reason: string;
+}): Promise<{ ok: boolean; orderId: string; newScheduleTimes: string[] }> {
+  const session = await authorize('ipd.administer');
+
+  const res = await adjustMedicationScheduleTimes({
+    hospitalId: session.hospitalId,
+    orderId: args.orderId,
+    newScheduleTimes: args.newScheduleTimes,
+    reason: args.reason,
+    actorUserId: session.userId,
+  });
+
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/orders`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/emar`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/treatment`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/emar`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  revalidatePath('/ipd');
+  return { ok: true, orderId: res.orderId, newScheduleTimes: res.newScheduleTimes };
+}
+
+export async function recordNurseUrgentAdministrationAction(args: {
+  admissionId: string;
+  input: RecordNurseUrgentAdminInput;
+}): Promise<{ ok: boolean; orderId: string; administrationId: string }> {
+  const session = await authorize('ipd.administer');
+
+  const res = await recordNurseUrgentAdministration({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    input: args.input,
+    actorUserId: session.userId,
+  });
+
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/treatment`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/emar`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/rounds`);
+  revalidatePath('/ipd');
+  return { ok: true, orderId: res.orderId, administrationId: res.administrationId };
+}
+
+export async function stopMedicationOrderAction(args: {
+  admissionId: string;
+  orderId: string;
+  reason: string;
+}): Promise<{ ok: boolean }> {
+  const session = await authorize('ipd.prescribe');
+  const docId = await resolveDoctorId(session.hospitalId, session.userId, args.admissionId);
+  await executeOrderAction({
+    hospitalId: session.hospitalId,
+    orderId: args.orderId,
+    action: 'discontinue',
+    reason: args.reason,
+    actorUserId: session.userId,
+    doctorId: docId,
+  });
+  revalidatePath(`/ipd/patients/${args.admissionId}/orders`);
+  return { ok: true };
+}
+
+export async function toggleDischargeReadyClientAction(args: {
+  admissionId: string;
+  ready: boolean;
+}): Promise<{ ok: boolean; ready: boolean }> {
+  const session = await authorize('ipd.dischargeReady');
+  await setDischargeReady({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    ready: args.ready,
+    actorUserId: session.userId,
+  });
+  revalidatePath(`/ipd/patients/${args.admissionId}/discharge`);
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  return { ok: true, ready: args.ready };
+}
+
+export async function recordVitalReadingAction(args: {
+  admissionId: string;
+  recordedAt?: string | Date | null;
+  temperatureF?: number | string | null;
+  pulseBpm?: number | null;
+  bpSystolic?: number | null;
+  bpDiastolic?: number | null;
+  respiratoryRate?: number | null;
+  spo2Percent?: number | null;
+  painScore?: number | null;
+  avpu?: 'A' | 'V' | 'P' | 'U';
+  o2Support?: string | null;
+  news2Score?: number | null;
+  bsl?: number | null;
+  abdGirthCm?: number | string | null;
+  scheduledSlot?: string | null;
+}): Promise<{ ok: boolean; id: string }> {
+  const session = await authorize('ipd.chart');
+  const tempStr = args.temperatureF != null ? String(args.temperatureF) : null;
+  const res = await withTenant(
+    session.hospitalId,
+    async (tx) => {
+      const [inserted] = await tx
+        .insert(vitalsReadings)
+        .values({
+          hospitalId: session.hospitalId,
+          admissionId: args.admissionId,
+          recordedAt: args.recordedAt ? new Date(args.recordedAt) : new Date(),
+          temperatureF: tempStr,
+          pulseBpm: args.pulseBpm ?? null,
+          bpSystolic: args.bpSystolic ?? null,
+          bpDiastolic: args.bpDiastolic ?? null,
+          respiratoryRate: args.respiratoryRate ?? null,
+          spo2Percent: args.spo2Percent ?? null,
+          painScore: args.painScore ?? null,
+          avpu: args.avpu ?? null,
+          o2Support: args.o2Support ?? null,
+          news2Score: args.news2Score ?? null,
+          bsl: args.bsl ?? null,
+          abdGirthCm: args.abdGirthCm != null && String(args.abdGirthCm).trim() !== '' ? String(args.abdGirthCm) : null,
+          scheduledSlot: args.scheduledSlot ?? null,
+          recordedByUserId: session.userId,
+        })
+        .returning({ id: vitalsReadings.id });
+
+      if (args.news2Score != null && args.news2Score >= 5) {
+        await tx.insert(clinicalAuditLogs).values({
+          hospitalId: session.hospitalId,
+          tableName: 'vitals_readings',
+          recordId: inserted.id,
+          action: 'NEWS2_ESCALATION',
+          newValue: { news2Score: args.news2Score, admissionId: args.admissionId },
+          reason: `High Risk Clinical Escalation NEWS2 score ${args.news2Score}`,
+          userId: session.userId,
+        });
+      }
+
+      return inserted;
+    },
+    { clinical: true },
+  );
+  revalidatePath(`/ipd/patients/${args.admissionId}/vitals`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/summary`);
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  return { ok: true, id: res.id };
+}
+
+export async function recordIntakeOutputAction(args: {
+  admissionId: string;
+  kind: 'ORAL' | 'IV' | 'URINE' | 'DRAIN' | 'RT_ASPIRATE';
+  ml: number;
+  recordedAt?: string | Date | null;
+  notes?: string | null;
+}): Promise<{ ok: boolean; id: string }> {
+  const session = await authorize('ipd.chart');
+  const res = await withTenant(
+    session.hospitalId,
+    async (tx) => {
+      const [inserted] = await tx
+        .insert(intakeOutput)
+        .values({
+          hospitalId: session.hospitalId,
+          admissionId: args.admissionId,
+          recordedAt: args.recordedAt ? new Date(args.recordedAt) : new Date(),
+          kind: args.kind,
+          ml: args.ml,
+          notes: args.notes ?? null,
+          recordedByUserId: session.userId,
+        })
+        .returning({ id: intakeOutput.id });
+      return inserted;
+    },
+    { clinical: true },
+  );
+  revalidatePath(`/ipd/patients/${args.admissionId}/vitals`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/summary`);
+  return { ok: true, id: res.id };
+}
+
+export async function recordClinicalNoteAction(args: {
+  admissionId: string;
+  noteType: 'SOAP' | 'NURSING' | 'HANDOVER';
+  soapS?: string | null;
+  soapO?: string | null;
+  soapA?: string | null;
+  soapP?: string | null;
+  body?: string | null;
+}): Promise<{ ok: boolean; id: string }> {
+  const permission: Permission = args.noteType === 'SOAP' ? 'clinical.write' : 'ipd.chart';
+  const session = await authorize(permission);
+  const res = await withTenant(
+    session.hospitalId,
+    async (tx) => {
+      const [inserted] = await tx
+        .insert(clinicalAuditLogs)
+        .values({
+          hospitalId: session.hospitalId,
+          tableName: 'clinical_notes',
+          recordId: args.admissionId,
+          action: 'NOTE_RECORDED',
+          newValue: {
+            noteType: args.noteType,
+            soapS: args.soapS ?? null,
+            soapO: args.soapO ?? null,
+            soapA: args.soapA ?? null,
+            soapP: args.soapP ?? null,
+            body: args.body ?? null,
+          },
+          reason: args.noteType,
+          userId: session.userId,
+        })
+        .returning({ id: clinicalAuditLogs.id });
+      return inserted;
+    },
+    { clinical: true },
+  );
+  revalidatePath(`/ipd/patients/${args.admissionId}/notes`);
+  return { ok: true, id: res.id };
+}
+
+export async function retryDeadLetterAction(args: {
+  outboxId: string;
+}): Promise<{ ok: boolean }> {
+  const session = await authorize('ipd.view');
+  await retryDeadLetterItem({
+    hospitalId: session.hospitalId,
+    outboxId: args.outboxId,
+  });
+  revalidatePath('/settings/ipd');
+  return { ok: true };
+}
+
+export async function cosignVerbalOrderAction(args: {
+  orderId: string;
+  notes?: string;
+  doctorId?: string;
+}): Promise<{ ok: boolean }> {
+  const session = await authorize('ipd.prescribe');
+  const docId = await resolveDoctorId(session.hospitalId, session.userId, undefined, args.doctorId);
+
+  await cosignVerbalOrder({
+    hospitalId: session.hospitalId,
+    orderId: args.orderId,
+    doctorId: docId,
+    actorUserId: session.userId,
+    notes: args.notes,
+  });
+
+  revalidatePath('/ipd');
+  return { ok: true };
+}
+
+export async function rejectVerbalOrderAction(args: {
+  orderId: string;
+  rejectionReason: string;
+  doctorId?: string;
+}): Promise<{ ok: boolean }> {
+  const session = await authorize('ipd.prescribe');
+  const docId = await resolveDoctorId(session.hospitalId, session.userId, undefined, args.doctorId);
+
+  await rejectVerbalOrder({
+    hospitalId: session.hospitalId,
+    orderId: args.orderId,
+    doctorId: docId,
+    actorUserId: session.userId,
+    rejectionReason: args.rejectionReason,
+  });
+
+  revalidatePath('/ipd');
+  return { ok: true };
+}
+
+export async function recordPatientMeasurementAction(args: {
+  admissionId: string;
+  weightKg?: number;
+  heightCm?: number;
+  notes?: string | null;
+  recordedAt?: string;
+}): Promise<{ ok: boolean; id: string; bmi: number | null }> {
+  const session = await authorize('ipd.view');
+
+  const adm = await withTenant(session.hospitalId, async (tx) => {
+    return tx.query.admissions.findFirst({
+      where: and(eq(admissions.id, args.admissionId), eq(admissions.hospitalId, session.hospitalId)),
+      columns: { patientId: true },
+    });
+  });
+
+  if (!adm) throw new Error('Admission not found');
+
+  const res = await recordPatientMeasurement({
+    hospitalId: session.hospitalId,
+    patientId: adm.patientId,
+    admissionId: args.admissionId,
+    weightKg: args.weightKg,
+    heightCm: args.heightCm,
+    notes: args.notes ?? undefined,
+    measuredByUserId: session.userId,
+    recordedAt: args.recordedAt ? new Date(args.recordedAt) : undefined,
+  });
+
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/summary`);
+  revalidatePath(`/ipd/patients/${args.admissionId}/vitals`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+
+  return { ok: true, id: res.id, bmi: res.bmi };
+}
+
+export async function saveDischargeSummaryAction(args: {
+  admissionId: string;
+  dischargeType: 'regular' | 'lama' | 'dama' | 'transfer' | 'death';
+  primaryDiagnosis?: string;
+  secondaryDiagnoses?: string;
+  hospitalCourse?: string;
+  conditionAtDischarge?: string;
+  investigationSummary?: string;
+  dischargeAdvice?: string;
+  dietAdvice?: string;
+  urgentWarningSigns?: string;
+  followUpDate?: string;
+  doctorId?: string;
+  takeHomePrescriptions?: Array<{
+    medicineName: string;
+    dosage: string;
+    route?: string;
+    frequency: string;
+    duration?: string;
+    instructions?: string;
+  }>;
+}): Promise<{ ok: boolean; summaryId: string; version: number }> {
+  const session = await authorize('ipd.prescribe');
+  const docId = await resolveDoctorId(session.hospitalId, session.userId, args.admissionId, args.doctorId);
+
+  const res = await saveDischargeSummary({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    dischargeType: args.dischargeType,
+    primaryDiagnosis: args.primaryDiagnosis,
+    secondaryDiagnoses: args.secondaryDiagnoses,
+    hospitalCourse: args.hospitalCourse,
+    conditionAtDischarge: args.conditionAtDischarge,
+    investigationSummary: args.investigationSummary,
+    dischargeAdvice: args.dischargeAdvice,
+    dietAdvice: args.dietAdvice,
+    urgentWarningSigns: args.urgentWarningSigns,
+    followUpDate: args.followUpDate,
+    prescriberDoctorId: docId,
+    takeHomePrescriptions: args.takeHomePrescriptions,
+    userId: session.userId,
+  });
+
+  revalidatePath(`/ipd/patients/${args.admissionId}/discharge`);
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  return { ok: true, summaryId: res.summaryId, version: res.version };
+}
+
+export async function finalizeDischargeSummaryAction(args: {
+  admissionId: string;
+  summaryId: string;
+  doctorId?: string;
+}): Promise<{ ok: boolean }> {
+  const session = await authorize('ipd.prescribe');
+  const docId = await resolveDoctorId(session.hospitalId, session.userId, args.admissionId, args.doctorId);
+
+  await finalizeDischargeSummary({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    summaryId: args.summaryId,
+    prescriberDoctorId: docId,
+    userId: session.userId,
+  });
+
+  revalidatePath(`/ipd/patients/${args.admissionId}/discharge`);
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}`);
+  revalidatePath(`/ipd/admissions/${args.admissionId}/bill`);
+  return { ok: true };
+}
+
+export async function reconcileHomeMedicationAction(args: {
+  admissionId: string;
+  medicineName: string;
+  dosage?: string;
+  frequency?: string;
+  lastTakenAt?: string;
+  reconciliationStatus?: 'continued' | 'stopped' | 'modified';
+  reconciliationNotes?: string;
+}): Promise<{ ok: boolean; id: string }> {
+  const session = await authorize('ipd.prescribe');
+
+  const res = await reconcileHomeMedication({
+    hospitalId: session.hospitalId,
+    admissionId: args.admissionId,
+    medicineName: args.medicineName,
+    dosage: args.dosage,
+    frequency: args.frequency,
+    lastTakenAt: args.lastTakenAt,
+    reconciliationStatus: args.reconciliationStatus,
+    reconciliationNotes: args.reconciliationNotes,
+    recordedByUserId: session.userId,
+  });
+
+  revalidatePath(`/ipd/patients/${args.admissionId}/discharge`);
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  return { ok: true, id: res.id };
+}
+
+export async function markBedCleanedAction(args: { bedId: string }): Promise<{ ok: boolean }> {
+  const session = await authorize('ipd.view');
+  await markBedCleaned(session.hospitalId, args.bedId, session.userId);
+  revalidatePath('/ipd');
+  revalidatePath('/ipd/ward');
+  return { ok: true };
+}
+
+export async function orderVitalsFrequencyAction(args: {
+  admissionId: string;
+  frequency: 'q1h' | 'q2h' | 'q4h' | 'q6h' | 'q8h' | 'q12h' | 'daily' | 'prn';
+  notes?: string;
+}): Promise<{ ok: boolean }> {
+  const session = await authorize('ipd.prescribe');
+
+  await withTenant(session.hospitalId, async (tx) => {
+    await tx
+      .update(admissions)
+      .set({
+        vitalsFrequency: args.frequency,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(admissions.id, args.admissionId), eq(admissions.hospitalId, session.hospitalId)));
+
+    await tx.insert(clinicalAuditLogs).values({
+      hospitalId: session.hospitalId,
+      tableName: 'admissions',
+      recordId: args.admissionId,
+      action: 'ORDER_VITALS_FREQUENCY',
+      newValue: { frequency: args.frequency, notes: args.notes ?? null },
+      reason: `Doctor ordered vitals frequency: ${args.frequency}`,
+      userId: session.userId,
+    });
+  });
+
+  revalidatePath(`/ipd/patients/${args.admissionId}/vitals`);
+  revalidatePath(`/ipd/patients/${args.admissionId}`);
+  return { ok: true };
+}
+
+
+
+
+
+

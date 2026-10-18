@@ -265,6 +265,18 @@ export const isWardToken = (token: string | undefined): boolean =>
 
 /** Paths a ward-device session may reach. Everything else goes back to the ward. */
 export function wardSessionMayVisit(pathname: string): boolean {
+  // Disallow billing, desk registration, and personal doctor roster on shared ward devices
+  if (
+    pathname === '/ipd/new' ||
+    pathname.startsWith('/ipd/new/') ||
+    pathname === '/ipd/my-patients' ||
+    pathname.startsWith('/ipd/my-patients/') ||
+    /\/ipd\/admissions\/[^/]+\/bill(\/.*)?$/.test(pathname) ||
+    /\/ipd\/patients\/[^/]+\/billing(\/.*)?$/.test(pathname)
+  ) {
+    return false;
+  }
+
   const under = (prefix: string) => pathname === prefix || pathname.startsWith(`${prefix}/`);
   return (
     under('/ipd') ||
@@ -279,3 +291,4 @@ export function wardSessionMayVisit(pathname: string): boolean {
     pathname === '/favicon.ico'
   );
 }
+

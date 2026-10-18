@@ -43,9 +43,13 @@ async function AppHeader() {
     navItems.push({ label: 'Queue', href: '/dashboard' });
   }
 
-  // For a nurse this is the first and only work item.
+  // For a nurse this is the first and only work item, pointing directly to the ward.
   if (can(session.role, 'ipd.view')) {
-    navItems.push({ label: 'IPD', href: '/ipd' });
+    navItems.push(
+      session.role === 'nurse'
+        ? { label: 'Ward', href: '/ipd/ward' }
+        : { label: 'IPD', href: '/ipd' },
+    );
   }
 
   /**

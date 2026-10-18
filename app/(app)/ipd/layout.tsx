@@ -1,22 +1,14 @@
-import Link from 'next/link';
-import { Button, Card, EmptyState } from '@/components/ui';
-import { BedIcon, PlusIcon } from '@/components/icons';
-import { SectionTabs, type SectionTab } from '@/components/ipd/section-tabs';
+import { Card, EmptyState } from '@/components/ui';
+import { type SectionTab } from '@/components/ipd/section-tabs';
+import { IpdHubHeader } from '@/components/ipd/shell/ipd-hub-header';
 import { getModuleStatesForRequest } from '@/lib/auth/modules';
 import { requireSession } from '@/lib/auth/session';
 import { can } from '@/lib/domain/permissions';
 import { moduleAllows } from '@/lib/modules/registry';
-import { countMyWitnessRequests, listAwaitingCountersign } from '@/lib/services/mar';
-import { myEscalations } from '@/lib/services/due';
-import { listNotesAwaitingCountersign } from '@/lib/services/notes';
-import { listSummariesToSign } from '@/lib/services/discharge-summary';
-import { readWardDeviceCookie } from '@/lib/auth/ward-device-cookie';
-import { resolveWardDevice } from '@/lib/services/staff-access';
 
 /**
- * The IPD section (IPD plan §5): its own header strip under the app header —
- * a bed icon, "IPD", the hospital — and its own tabs, so staff always know
- * they are on the ward side and not the OPD queue.
+ * The IPD section: streamlined ultra-compact header strip (h-10) for hub views,
+ * auto-bypassed when rendering patient charts or bedside screens to maximize screen real estate.
  */
 export default async function IpdLayout({ children }: LayoutProps<'/ipd'>) {
   const session = await requireSession();
@@ -46,106 +38,12 @@ export default async function IpdLayout({ children }: LayoutProps<'/ipd'>) {
   }
   if (can(session.role, 'ipd.configure')) tabs.push({ label: 'Set up', href: '/settings/ipd' });
 
-  // Treatment card (B3-min): doses waiting for my witness, and telephone orders waiting for my countersign.
-  const marOn = moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'mar', 'read') && !session.readOnly;
-  const [toWitness, toCountersign] = marOn
-    ? await Promise.all([
-        can(session.role, 'ipd.witness') ? countMyWitnessRequests({ hospitalId: session.hospitalId, userId: session.userId }) : 0,
-        can(session.role, 'ipd.countersign') ? listAwaitingCountersign({ hospitalId: session.hospitalId, userId: session.userId }) : [],
-      ])
-    : [0, []];
-  // Doctor's notes (C3) written for me by a nurse, waiting for my countersign.
-  const notesToSign =
-    can(session.role, 'ipd.countersign') && !session.readOnly && moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'doctor_notes', 'read')
-      ? await listNotesAwaitingCountersign({ hospitalId: session.hospitalId, userId: session.userId })
-      : [];
-  // Discharge summaries (B5) finalised for me, waiting for my signature.
-  const summariesToSign =
-    can(session.role, 'ipd.summary') && !session.readOnly && moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'discharge_summary', 'read')
-      ? await listSummariesToSign({ hospitalId: session.hospitalId, userId: session.userId })
-      : [];
-  // Late time-critical doses (B3b): by ward and level, never the patient or the drug (no PHI in a banner).
-  const device = marOn && session.channel === 'ward_device' ? await resolveWardDevice(await readWardDeviceCookie()) : null;
-  const escalations =
-    marOn && can(session.role, 'ipd.dueBoard')
-      ? await myEscalations({
-          hospitalId: session.hospitalId,
-          userId: session.userId,
-          isOwner: session.role === 'owner',
-          wardIds: device ? (device.wardIds.length > 0 ? device.wardIds : 'all') : null,
-        })
-      : [];
-
   return (
-    <div className="space-y-4">
-      <div className="-mx-3.5 -mt-3.5 border-b border-brand-200 bg-brand-50/70 px-3.5 pt-2.5 sm:-mx-6 sm:px-6 lg:-mt-6 lg:pt-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white shadow-xs">
-              <BedIcon className="size-5" />
-            </span>
-            <div className="min-w-0">
-              <p className="text-base font-bold leading-tight text-ink-900">IPD</p>
-              <p className="truncate text-xs text-ink-600">{session.hospitalName}</p>
-            </div>
-          </div>
-          {can(session.role, 'ipd.admit') && !session.readOnly ? (
-            <Link href="/ipd/new">
-              <Button variant="primary" className="h-11 gap-1.5">
-                <PlusIcon className="size-4" />
-                <span className="hidden sm:inline">New admission</span>
-                <span className="sm:hidden">Admit</span>
-              </Button>
-            </Link>
-          ) : null}
-        </div>
-        {tabs.length > 1 ? (
-          <div className="mt-2">
-            <SectionTabs tabs={tabs} />
-          </div>
-        ) : (
-          <div className="h-2.5" />
-        )}
-      </div>
-      {escalations.map((e) => (
-        <Link
-          key={`${e.wardId}-${e.level}`}
-          href={e.wardId ? `/ipd/ward/${e.wardId}/due` : '/ipd/ward'}
-          className="flex min-h-12 items-center justify-between rounded-xl bg-red-600 px-4 text-sm font-semibold text-white"
-        >
-          {e.count} time-critical dose{e.count === 1 ? '' : 's'} overdue in {e.wardName}
-          {e.level === 2 ? ' · for the doctor' : ''} <span aria-hidden>→</span>
-        </Link>
-      ))}
-      {toWitness > 0 ? (
-        <Link href="/ipd/witness" className="flex min-h-12 items-center justify-between rounded-xl bg-amber-100 px-4 text-sm font-semibold text-amber-950 ring-1 ring-amber-300">
-          {toWitness === 1 ? '1 dose or waste' : `${toWitness} doses or wastes`} waiting for your witness <span aria-hidden>→</span>
-        </Link>
-      ) : null}
-      {toCountersign.length > 0 ? (
-        <Link
-          href={`/ipd/admissions/${toCountersign[0].admissionId}/treatment`}
-          className="flex min-h-12 items-center justify-between rounded-xl bg-amber-50 px-4 text-sm font-semibold text-amber-950 ring-1 ring-amber-200"
-        >
-          {toCountersign.length} telephone order{toCountersign.length === 1 ? '' : 's'} waiting for your countersign <span aria-hidden>→</span>
-        </Link>
-      ) : null}
-      {notesToSign.length > 0 ? (
-        <Link
-          href={`/ipd/admissions/${notesToSign[0].admissionId}/notes`}
-          className="flex min-h-12 items-center justify-between rounded-xl bg-amber-50 px-4 text-sm font-semibold text-amber-950 ring-1 ring-amber-200"
-        >
-          {notesToSign.length} note{notesToSign.length === 1 ? '' : 's'} written for you, waiting for your countersign <span aria-hidden>→</span>
-        </Link>
-      ) : null}
-      {summariesToSign.length > 0 ? (
-        <Link
-          href={`/ipd/admissions/${summariesToSign[0].admissionId}/discharge-summary`}
-          className="flex min-h-12 items-center justify-between rounded-xl bg-amber-50 px-4 text-sm font-semibold text-amber-950 ring-1 ring-amber-200"
-        >
-          {summariesToSign.length} discharge summar{summariesToSign.length === 1 ? 'y' : 'ies'} waiting for your signature <span aria-hidden>→</span>
-        </Link>
-      ) : null}
+    <div className="space-y-3">
+      <IpdHubHeader
+        tabs={tabs}
+        canAdmit={can(session.role, 'ipd.admit') && !session.readOnly}
+      />
       {children}
     </div>
   );

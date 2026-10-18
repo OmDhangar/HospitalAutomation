@@ -85,3 +85,33 @@ export function medicineLabel(m: {
  * for those characters rather than for everything starting with "50".
  */
 export const escapeLikePattern = (term: string): string => term.replace(/[\\%_]/g, (c) => `\\${c}`);
+
+/**
+ * Human-friendly route descriptions for bedside eMAR and prescription charts.
+ */
+export function formatRoutePlain(route: string): string {
+  const r = (route || '').toLowerCase().trim();
+  switch (r) {
+    case 'oral':
+      return 'By Mouth (Oral)';
+    case 'iv_push':
+      return 'IV Injection (Direct)';
+    case 'iv_piggyback':
+      return 'IV Drip (Infusion)';
+    case 'im':
+      return 'IM Injection (Muscle)';
+    case 'sc':
+    case 'subcutaneous':
+      return 'SC Injection (Under skin)';
+    case 'nebulization':
+      return 'Nebulization (Inhalation)';
+    case 'topical':
+      return 'Apply to Skin (Topical)';
+    case 'sublingual':
+      return 'Under Tongue (Sublingual)';
+    case 'rectal':
+      return 'Rectal';
+    default:
+      return route ? route.replace(/_/g, ' ') : '';
+  }
+}

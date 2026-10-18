@@ -19,7 +19,7 @@ export function DisplayAudioNotifier({
 }: {
   servingState: ServingTokenState[];
 }) {
-  const [audioEnabled, setAudioEnabled] = useState<boolean>(false);
+  const [audioEnabled, setAudioEnabled] = useState<boolean>(true);
   const prevStateRef = useRef<string | null>(null);
   const isFirstRender = useRef(true);
 
@@ -84,11 +84,10 @@ export function DisplayAudioNotifier({
         role="switch"
         aria-checked={audioEnabled}
         onClick={toggleAudio}
-        className={`group flex items-center gap-2.5 rounded-2xl px-3.5 py-1.5 text-xs font-bold transition-all select-none cursor-pointer ring-1 outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
-          audioEnabled
+        className={`group flex items-center gap-2.5 rounded-2xl px-3.5 py-1.5 text-xs font-bold transition-all select-none cursor-pointer ring-1 outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${audioEnabled
             ? 'bg-emerald-500/15 text-emerald-300 ring-emerald-500/40 hover:bg-emerald-500/25 shadow-sm shadow-emerald-950/40'
             : 'bg-white/5 text-slate-400 ring-white/10 hover:bg-white/10 hover:text-slate-200'
-        }`}
+          }`}
         title={audioEnabled ? 'Click to turn off bell sound' : 'Click to turn on bell sound for called tokens'}
       >
         {audioEnabled ? (
@@ -96,7 +95,7 @@ export function DisplayAudioNotifier({
         ) : (
           <BellOffIcon className="size-4 shrink-0 text-slate-400 group-hover:text-slate-200 transition-colors" />
         )}
-        
+
         <span className="font-semibold tracking-wide">
           Bell Sound: <span className={audioEnabled ? 'text-emerald-400 font-black' : 'text-slate-400 font-bold'}>{audioEnabled ? 'ON' : 'OFF'}</span>
         </span>
@@ -104,14 +103,12 @@ export function DisplayAudioNotifier({
         {/* Visual Toggle Switch Slider */}
         <span
           aria-hidden="true"
-          className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full p-0.5 transition-colors duration-200 ease-in-out ${
-            audioEnabled ? 'bg-emerald-500' : 'bg-slate-700'
-          }`}
+          className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full p-0.5 transition-colors duration-200 ease-in-out ${audioEnabled ? 'bg-emerald-500' : 'bg-slate-700'
+            }`}
         >
           <span
-            className={`inline-block size-3 rounded-full bg-white shadow-md transform transition-transform duration-200 ease-in-out ${
-              audioEnabled ? 'translate-x-3' : 'translate-x-0'
-            }`}
+            className={`inline-block size-3 rounded-full bg-white shadow-md transform transition-transform duration-200 ease-in-out ${audioEnabled ? 'translate-x-3' : 'translate-x-0'
+              }`}
           />
         </span>
       </button>

@@ -177,7 +177,19 @@ describe('ward session scope', () => {
     for (const path of ['/ipd', '/ipd/ward/x', '/api/ipd/care-entries', '/print/ipd-file/x', '/ward-device', '/_next/static/a.js']) {
       expect(wardSessionMayVisit(path), path).toBe(true);
     }
-    for (const path of ['/dashboard', '/settings', '/settings/ipd', '/reports', '/ipdx', '/api/medicines/search', '/print/ipd-bill/x']) {
+    for (const path of [
+      '/dashboard',
+      '/settings',
+      '/settings/ipd',
+      '/reports',
+      '/ipdx',
+      '/api/medicines/search',
+      '/print/ipd-bill/x',
+      '/ipd/new',
+      '/ipd/my-patients',
+      '/ipd/admissions/adm-1/bill',
+      '/ipd/patients/adm-1/billing',
+    ]) {
       expect(wardSessionMayVisit(path), path).toBe(false);
     }
   });

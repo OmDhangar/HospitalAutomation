@@ -8,6 +8,7 @@ import {
   ClockIcon,
   ZapIcon,
   StethoscopeIcon,
+  MapPinIcon,
   XIcon,
 } from '@/components/icons';
 import { useToast } from '@/components/toast';
@@ -228,47 +229,57 @@ export function DoctorScheduleManager({
   return (
     <div className="space-y-5 sm:space-y-6">
       {/* 1. Doctor & Date Selection Ribbon */}
-      <Card className="p-4 sm:p-5 bg-gradient-to-r from-ink-50/70 to-white">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
-          <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
-            <span className="text-xs sm:text-sm font-semibold text-ink-700 shrink-0">
-              Select Doctor:
-            </span>
-            <select
-              value={selectedDoctorId}
-              onChange={(e) => setSelectedDoctorId(e.target.value)}
-              className="rounded-lg border-0 bg-white py-1.5 px-3 text-xs sm:text-sm font-semibold text-ink-900 ring-1 ring-inset ring-ink-300 focus:ring-2 focus:ring-brand-600 cursor-pointer max-w-[220px] truncate"
-            >
-              {doctors.map((doc) => (
-                <option key={doc.id} value={doc.id}>
-                  {doc.name} {doc.specialty ? `(${doc.specialty})` : ''}
-                </option>
-              ))}
-            </select>
+      <Card className="p-4 sm:p-5 bg-gradient-to-r from-ink-50/80 via-white to-ink-50/40 border-ink-200">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-3 min-w-0">
+            <div className="flex items-center gap-2">
+              <label htmlFor="doctor-select" className="text-xs sm:text-sm font-semibold text-ink-700 shrink-0">
+                Doctor:
+              </label>
+              <select
+                id="doctor-select"
+                value={selectedDoctorId}
+                onChange={(e) => setSelectedDoctorId(e.target.value)}
+                className="rounded-lg border-0 bg-white py-1.5 px-3 text-xs sm:text-sm font-semibold text-ink-900 ring-1 ring-inset ring-ink-300 focus:ring-2 focus:ring-brand-600 cursor-pointer max-w-[240px] truncate shadow-xs"
+              >
+                {doctors.map((doc) => (
+                  <option key={doc.id} value={doc.id}>
+                    {doc.name} {doc.specialty ? `(${doc.specialty})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-            <div className="hidden sm:flex items-center gap-1.5">
+            {selectedDoc?.branchName ? (
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-ink-700 bg-white border border-ink-200 px-2.5 py-1 rounded-lg shadow-xs">
+                <MapPinIcon className="size-3.5 text-brand-600" />
+                <span>{selectedDoc.branchName}</span>
+              </span>
+            ) : null}
+
+            <div className="flex items-center gap-1.5">
               <span
-                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 sm:py-1 text-xs font-bold ${
+                className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold border shadow-xs ${
                   scheduleMode === 'both'
-                    ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                    ? 'bg-amber-50 text-amber-900 border-amber-300'
                     : scheduleMode === 'queue'
-                    ? 'bg-blue-100 text-blue-900 border border-blue-200'
-                    : 'bg-emerald-100 text-emerald-900 border border-emerald-200'
+                    ? 'bg-blue-50 text-blue-900 border-blue-200'
+                    : 'bg-emerald-50 text-emerald-900 border-emerald-200'
                 }`}
               >
                 {scheduleMode === 'both' ? (
                   <>
-                    <LayersIcon className="size-3 text-amber-700" />
+                    <LayersIcon className="size-3.5 text-amber-700" />
                     <span>Hybrid (Queue + Slots)</span>
                   </>
                 ) : scheduleMode === 'queue' ? (
                   <>
-                    <ActivityIcon className="size-3 text-blue-700" />
+                    <ActivityIcon className="size-3.5 text-blue-700" />
                     <span>Live Queue Mode</span>
                   </>
                 ) : (
                   <>
-                    <ClockIcon className="size-3 text-emerald-700" />
+                    <ClockIcon className="size-3.5 text-emerald-700" />
                     <span>Time Slots Mode</span>
                   </>
                 )}
@@ -276,33 +287,33 @@ export function DoctorScheduleManager({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-ink-100">
-            <label className="text-xs sm:text-sm font-semibold text-ink-700 shrink-0">Date:</label>
+          <div className="flex items-center gap-2.5 pt-2 lg:pt-0 border-t lg:border-t-0 border-ink-100">
+            <label className="text-xs sm:text-sm font-semibold text-ink-700 shrink-0">Schedule Date:</label>
             <Input
               type="date"
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
-              className="py-1.5 px-3 text-xs sm:text-sm w-full sm:w-auto"
+              className="py-1.5 px-3 text-xs sm:text-sm w-full sm:w-auto shadow-xs"
             />
           </div>
         </div>
       </Card>
 
-      <div className="grid gap-5 sm:gap-6 lg:grid-cols-3">
-        {/* Left 1 Column: Schedule Configuration & Emergency Interval Block */}
-        <div className="space-y-5 sm:space-y-6 lg:col-span-1">
-          {/* 3.1 Availability Config */}
+      {/* 2. Balanced 2-Column Bento Layout (7:5) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Left Column: Routine Schedule Setup (lg:col-span-7) */}
+        <div className="lg:col-span-7 space-y-6">
           <Card>
             <CardHeader
-              title="Practice & Schedule Settings"
-              hint="Configure appointment slots, live OPD queue, or both"
+              title="Doctor Schedule Settings"
+              hint="Configure consultation hours, booking modes, slot intervals & breaks"
             />
-            <form onSubmit={handleSaveConfig} className="p-4 sm:p-5 space-y-4">
+            <form onSubmit={handleSaveConfig} className="p-4 sm:p-5 space-y-5">
               <fieldset className="block">
-                <legend className="mb-1.5 block text-sm font-medium text-ink-700">
+                <legend className="mb-2 block text-xs font-bold uppercase tracking-wider text-ink-500">
                   Practice / Schedule Mode
                 </legend>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                   {SCHEDULE_MODE_OPTIONS.map((option) => {
                     const selected = scheduleMode === option.value;
                     return (
@@ -311,7 +322,7 @@ export function DoctorScheduleManager({
                         className={`relative flex items-center sm:flex-col justify-start sm:justify-center p-3 rounded-xl border text-left sm:text-center transition-all cursor-pointer ${
                           selected
                             ? option.selectedClass
-                            : 'bg-ink-50 border-ink-200 text-ink-700 hover:bg-ink-100 font-medium'
+                            : 'bg-ink-50/70 border-ink-200 text-ink-700 hover:bg-ink-100/80 font-medium'
                         }`}
                       >
                         <input
@@ -343,45 +354,42 @@ export function DoctorScheduleManager({
                     );
                   })}
                 </div>
-                <span className="mt-1 block text-xs text-ink-500">
-                  Choose Hybrid (both) for regular OPD, or Live Queue for visiting specialists.
-                </span>
               </fieldset>
 
               {scheduleMode === 'both' ? (
-                <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-950 leading-relaxed space-y-1">
-                  <p className="font-bold flex items-center gap-1.5">
+                <div className="rounded-xl bg-amber-50 border border-amber-200 p-3.5 text-xs text-amber-950 leading-relaxed space-y-1">
+                  <p className="font-bold flex items-center gap-1.5 text-amber-900">
                     <LayersIcon className="size-4 text-amber-700" />
-                    <span>Hybrid Mode (Both Active)</span>
+                    <span>Hybrid Mode Active</span>
                   </p>
-                  <p>
-                    Patients can walk-in / join today&apos;s live token queue without restriction, while advance bookings can select convenient time slots.
+                  <p className="text-amber-900/90">
+                    Patients can walk in or join today&apos;s live token queue without restriction, while advance bookings can reserve specific time slots.
                   </p>
                 </div>
               ) : scheduleMode === 'queue' ? (
-                <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-900 leading-relaxed space-y-1">
-                  <p className="font-bold flex items-center gap-1.5">
+                <div className="rounded-xl bg-blue-50 border border-blue-200 p-3.5 text-xs text-blue-900 leading-relaxed space-y-1">
+                  <p className="font-bold flex items-center gap-1.5 text-blue-900">
                     <ActivityIcon className="size-4 text-blue-700" />
                     <span>Live Running Queue Mode (Visiting Doctors)</span>
                   </p>
-                  <p>
+                  <p className="text-blue-900/90">
                     All patients join a live dynamic token queue sequentially. Ideal for visiting doctors to cover all visiting patients arriving that day.
                   </p>
                 </div>
               ) : (
-                <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-950 leading-relaxed space-y-1">
-                  <p className="font-bold flex items-center gap-1.5">
+                <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-3.5 text-xs text-emerald-950 leading-relaxed space-y-1">
+                  <p className="font-bold flex items-center gap-1.5 text-emerald-900">
                     <ClockIcon className="size-4 text-emerald-700" />
                     <span>Time-based Appointment Slots Only</span>
                   </p>
-                  <p>
+                  <p className="text-emerald-900/90">
                     Strict slot schedule. Consultations are strictly booked into fixed time slots.
                   </p>
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <Field label="Start Time">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Field label="Shift Start Time">
                   <Input
                     type="time"
                     value={startTime}
@@ -390,7 +398,7 @@ export function DoctorScheduleManager({
                   />
                 </Field>
 
-                <Field label="End Time">
+                <Field label="Shift End Time">
                   <Input
                     type="time"
                     value={endTime}
@@ -400,7 +408,7 @@ export function DoctorScheduleManager({
                 </Field>
               </div>
 
-              <Field label="Estimated Consult Duration" hint="Used for queue ETAs & slot spacing">
+              <Field label="Estimated Consult / Slot Duration" hint="Used for queue ETAs & slot spacing">
                 <select
                   value={slotMinutes}
                   onChange={(e) => setSlotMinutes(Number(e.target.value))}
@@ -416,7 +424,7 @@ export function DoctorScheduleManager({
                 </select>
               </Field>
 
-              <div className="border-t border-ink-100 pt-3 space-y-3">
+              <div className="border-t border-ink-100 pt-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <label className="flex items-center gap-2 text-xs font-semibold text-ink-700 cursor-pointer">
                     <input
@@ -432,16 +440,14 @@ export function DoctorScheduleManager({
                     onClick={applySplitDayPreset}
                     className="text-xs font-semibold text-brand-700 hover:text-brand-900 underline underline-offset-2 cursor-pointer"
                   >
-                    Use: queue 12–7 PM, slots 8–10 PM
+                    Preset: Queue 12–7 PM, Slots 8–10 PM
                   </button>
                 </div>
                 {eveningEnabled ? (
-                  <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 space-y-3">
+                  <div className="rounded-xl bg-emerald-50/70 border border-emerald-200 p-3.5 space-y-3">
                     <p className="text-xs text-emerald-950 leading-relaxed">
-                      After the session above ends, the live queue closes for the day. From the evening start,
-                      patients can only book a slot; they are numbered S1, S2… by time, join the line when the
-                      session starts, and are called in slot order. Switch individual slots on or off in the
-                      grid to choose which ones patients may book.
+                      After the daytime session ends, the live queue closes. From the evening start,
+                      patients can only book a slot (S1, S2…), called in slot order.
                     </p>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <Field label="Evening Start">
@@ -468,17 +474,17 @@ export function DoctorScheduleManager({
                 ) : null}
               </div>
 
-              <div className="border-t border-ink-100 pt-3">
-                <p className="text-xs font-semibold text-ink-700 mb-2">Default Lunch / Break</p>
+              <div className="border-t border-ink-100 pt-4">
+                <p className="text-xs font-bold uppercase tracking-wider text-ink-500 mb-2">Default Lunch / Break Window</p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <Field label="Break Start">
+                  <Field label="Break Start" hint="Optional">
                     <Input
                       type="time"
                       value={breakStart}
                       onChange={(e) => setBreakStart(e.target.value)}
                     />
                   </Field>
-                  <Field label="Break End">
+                  <Field label="Break End" hint="Optional">
                     <Input
                       type="time"
                       value={breakEnd}
@@ -488,31 +494,91 @@ export function DoctorScheduleManager({
                 </div>
               </div>
 
-              <Button
-                type="submit"
-                variant="primary"
-                size="md"
-                className="w-full justify-center"
-                isLoading={isSavingConfig}
-              >
-                {scheduleMode === 'both'
-                  ? 'Save Hybrid (Queue & Slot) Schedule'
-                  : scheduleMode === 'queue'
-                  ? 'Save Running Queue Mode'
-                  : 'Generate & Save Slot Schedule'}
-              </Button>
+              <div className="pt-2">
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="md"
+                  className="w-full justify-center shadow-xs"
+                  isLoading={isSavingConfig}
+                >
+                  Save Scheduling Rules
+                </Button>
+              </div>
             </form>
           </Card>
+        </div>
 
-          {/* 3.4 Emergency / Temporary Unavailability Block */}
-          <Card>
-            <CardHeader
-              title="Emergency Unavailability"
-              hint="Block custom interval without altering whole schedule"
-            />
+        {/* Right Column: Guidance & Emergency Overrides (lg:col-span-5) */}
+        <div className="lg:col-span-5 space-y-6">
+          {/* Top Card: Guidance */}
+          <Card className="p-4 sm:p-5 bg-gradient-to-br from-blue-50/70 via-white to-sky-50/40 border-blue-200">
+            <div className="flex items-start gap-3.5">
+              <div className="size-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs shrink-0">
+                <ActivityIcon className="size-5 text-white" />
+              </div>
+              <div className="space-y-3 min-w-0 flex-1">
+                <div>
+                  <h3 className="text-sm font-bold text-ink-900">
+                    How Booking Modes Work
+                  </h3>
+                  <p className="text-xs text-ink-500 mt-0.5">
+                    Choose the right practice model for each doctor
+                  </p>
+                </div>
+
+                <div className="space-y-2 text-xs text-ink-700">
+                  <div className="p-2.5 rounded-lg bg-white/80 border border-blue-100 shadow-2xs">
+                    <p className="font-semibold text-blue-900 flex items-center gap-1.5">
+                      <LayersIcon className="size-3.5 text-amber-600" />
+                      <span>Hybrid (Queue + Slots)</span>
+                    </p>
+                    <p className="text-ink-600 mt-0.5 text-[11px] leading-relaxed">
+                      Recommended for busy OPDs. Same-day walk-ins get live numbered tokens, while advance patients choose time slots.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-white/80 border border-blue-100 shadow-2xs">
+                    <p className="font-semibold text-blue-900 flex items-center gap-1.5">
+                      <ActivityIcon className="size-3.5 text-blue-600" />
+                      <span>Live Queue Mode</span>
+                    </p>
+                    <p className="text-ink-600 mt-0.5 text-[11px] leading-relaxed">
+                      All patients enter a single dynamic queue. Ideal for visiting specialists who want to see every patient arriving that day.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-white/80 border border-blue-100 shadow-2xs">
+                    <p className="font-semibold text-blue-900 flex items-center gap-1.5">
+                      <ClockIcon className="size-3.5 text-emerald-600" />
+                      <span>Time Slots Only</span>
+                    </p>
+                    <p className="text-ink-600 mt-0.5 text-[11px] leading-relaxed">
+                      Strict appointment schedule with fixed durations. Best for procedural or low-volume specialty consults.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          {/* Bottom Card: Emergency Unavailability / Cancellation */}
+          <Card className="border-red-200 bg-red-50/30 overflow-hidden">
+            <div className="border-b border-red-200/80 px-4 py-3 sm:px-5 bg-red-50/60 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-red-950 flex items-center gap-2">
+                  <ZapIcon className="size-4 text-red-600" />
+                  <span>Emergency Cancellation & Overrides</span>
+                </h3>
+                <p className="text-xs text-red-800/80 mt-0.5">
+                  Temporarily block custom intervals without altering weekly routine
+                </p>
+              </div>
+            </div>
+
             <form onSubmit={handleAddIntervalBlock} className="p-4 sm:p-5 space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <Field label="Block Start">
+                <Field label="Block Start Time">
                   <Input
                     type="time"
                     value={intervalStart}
@@ -521,7 +587,7 @@ export function DoctorScheduleManager({
                   />
                 </Field>
 
-                <Field label="Block End">
+                <Field label="Block End Time">
                   <Input
                     type="time"
                     value={intervalEnd}
@@ -531,12 +597,12 @@ export function DoctorScheduleManager({
                 </Field>
               </div>
 
-              <Field label="Reason / Notes">
+              <Field label="Reason / Notes" hint="Shown on schedules & queue notices">
                 <Input
                   type="text"
                   value={intervalReason}
                   onChange={(e) => setIntervalReason(e.target.value)}
-                  placeholder="e.g. Emergency, Surgery, Hospital Meeting"
+                  placeholder="e.g. Emergency surgery, Hospital meeting"
                 />
               </Field>
 
@@ -544,23 +610,23 @@ export function DoctorScheduleManager({
                 type="submit"
                 variant="danger"
                 size="md"
-                className="w-full justify-center"
+                className="w-full justify-center shadow-xs"
                 isLoading={isAddingBlock}
               >
-                Block Interval For Today
+                Block Interval For Selected Date
               </Button>
             </form>
 
             {scheduleData?.intervalBlocks && scheduleData.intervalBlocks.length > 0 ? (
-              <div className="border-t border-ink-200 p-4 space-y-2">
-                <p className="text-xs font-bold text-ink-800 uppercase tracking-wider">
+              <div className="border-t border-red-200/80 p-4 space-y-2 bg-white/60">
+                <p className="text-xs font-bold text-red-900 uppercase tracking-wider">
                   Active Emergency Blocks:
                 </p>
                 <div className="space-y-2">
                   {scheduleData.intervalBlocks.map((block) => (
                     <div
                       key={block.id}
-                      className="flex items-center justify-between gap-2 rounded-lg bg-rose-50 border border-rose-200 px-3 py-2 text-xs text-rose-900"
+                      className="flex items-center justify-between gap-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-950"
                     >
                       <div>
                         <span className="font-bold">
@@ -573,7 +639,7 @@ export function DoctorScheduleManager({
                       <button
                         type="button"
                         onClick={() => handleRemoveIntervalBlock(block.id)}
-                        className="text-rose-700 hover:text-rose-900 font-bold px-2 py-1 rounded-md bg-rose-100 hover:bg-rose-200 cursor-pointer inline-flex items-center gap-1"
+                        className="text-red-700 hover:text-red-900 font-bold px-2 py-1 rounded-md bg-red-100 hover:bg-red-200 cursor-pointer inline-flex items-center gap-1 transition-colors"
                         title="Clear block"
                       >
                         <span>Clear</span>
@@ -586,139 +652,88 @@ export function DoctorScheduleManager({
             ) : null}
           </Card>
         </div>
-
-        {/* Right 2 Columns: Interactive Slot Grid or Live Queue Info */}
-        <div className="lg:col-span-2">
-          {scheduleMode === 'queue' && !eveningEnabled ? (
-            <Card className="p-4 sm:p-6 bg-gradient-to-br from-blue-50/50 via-white to-indigo-50/30 border-blue-200">
-              <div className="flex flex-col sm:flex-row items-start gap-4">
-                <div className="size-12 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-xs shrink-0">
-                  <ActivityIcon className="size-6 text-white" />
-                </div>
-                <div className="space-y-3 flex-1">
-                  <div>
-                    <h3 className="text-base font-bold text-ink-900">
-                      Live Running Queue Mode (Active for {selectedDoc?.name})
-                    </h3>
-                    <p className="text-xs text-ink-600 mt-0.5">
-                      Visiting Doctor / High Capacity Walk-in & Token Management
-                    </p>
-                  </div>
-
-                  <div className="grid gap-3 sm:grid-cols-2 pt-2">
-                    <div className="p-3.5 rounded-xl bg-white border border-blue-100 shadow-xs">
-                      <p className="text-xs font-semibold text-blue-900 flex items-center gap-1.5">
-                        <ZapIcon className="size-3.5 text-blue-700" />
-                        <span>Dynamic First-Come Tokens</span>
-                      </p>
-                      <p className="text-xs text-ink-600 mt-1 leading-relaxed">
-                        Patients do not have to compete for limited time slots. They get sequential tokens (Token #1, #2...) and live wait-time estimates on WhatsApp.
-                      </p>
-                    </div>
-
-                    <div className="p-3.5 rounded-xl bg-white border border-blue-100 shadow-xs">
-                      <p className="text-xs font-semibold text-blue-900 flex items-center gap-1.5">
-                        <StethoscopeIcon className="size-3.5 text-blue-700" />
-                        <span>Covers All Visiting Patients</span>
-                      </p>
-                      <p className="text-xs text-ink-600 mt-1 leading-relaxed">
-                        Ideal for specialists visiting specific days. The doctor can consult everyone who arrives, without hard slot cutoffs.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl bg-blue-100/60 p-4 border border-blue-200/80 text-xs text-blue-950 space-y-1.5">
-                    <p className="font-semibold">How Receptionists & WhatsApp Handle This:</p>
-                    <ul className="list-disc list-inside space-y-1 text-blue-900">
-                      <li>Walk-in registrations on the <strong>Dashboard</strong> insert directly into the active token queue.</li>
-                      <li>WhatsApp bookings register patients into the live line and send them their live tracking link.</li>
-                      <li>Consultations are managed sequentially from the <strong>Dashboard</strong> (Next, Recall, Park, Priority).</li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-            </Card>
-          ) : (
-            <Card>
-              <div className="border-b border-ink-200 px-4 py-3.5 sm:px-5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div>
-                  <h2 className="text-sm font-bold text-ink-900">
-                    Slot Schedule: {selectedDoc?.name}
-                  </h2>
-                  <p className="text-xs text-ink-500 mt-0.5">
-                    {selectedDate} · {scheduleData?.totalAvailable ?? 0} slots available for online / reception booking
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 text-xs">
-                  <span className="flex items-center gap-1">
-                    <span className="size-2.5 rounded-sm bg-emerald-500" /> Available
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="size-2.5 rounded-sm bg-rose-400" /> Blocked
-                  </span>
-                </div>
-              </div>
-
-              <div className="p-4 sm:p-5">
-                {loadingSchedule ? (
-                  <div className="py-16 text-center text-sm text-ink-400 animate-pulse">
-                    Loading slot schedule...
-                  </div>
-                ) : !scheduleData?.slots || scheduleData.slots.length === 0 ? (
-                  <div className="py-12 text-center">
-                    <p className="text-sm font-semibold text-ink-700">No slots generated for this day.</p>
-                    <p className="text-xs text-ink-500 mt-1">
-                      Check your start and end times or ensure the doctor is active.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-2.5">
-                    {scheduleData.slots.map((slot) => {
-                      const isAvailable = slot.available;
-                      return (
-                        <div
-                          key={slot.time24}
-                          className={`relative rounded-xl border p-2.5 text-center transition-all ${
-                            isAvailable
-                              ? 'bg-emerald-50 border-emerald-300 text-emerald-950 hover:border-emerald-400 hover:shadow-xs'
-                              : 'bg-rose-50 border-rose-200 text-rose-800 opacity-80'
-                          }`}
-                        >
-                          <p className="text-sm font-bold tracking-tight">
-                            {slot.timeStr || slot.time24}
-                            {slot.slotNumber !== null ? (
-                              <span className="ml-1 text-[10px] font-semibold text-ink-500">S{slot.slotNumber}</span>
-                            ) : null}
-                          </p>
-                          <span
-                            className={`text-[10px] font-bold uppercase tracking-wider block mt-0.5 ${
-                              isAvailable ? 'text-emerald-700' : 'text-rose-700'
-                            }`}
-                          >
-                            {isAvailable ? 'Available' : slot.reason || 'Blocked'}
-                          </span>
-
-                          <button
-                            type="button"
-                            onClick={() => handleToggleSlot(slot.time24, isAvailable)}
-                            className={`mt-1.5 w-full rounded-md py-0.5 text-[10px] font-bold transition-colors cursor-pointer ${
-                              isAvailable
-                                ? 'bg-rose-200/80 hover:bg-rose-300 text-rose-900'
-                                : 'bg-emerald-200/80 hover:bg-emerald-300 text-emerald-900'
-                            }`}
-                          >
-                            {isAvailable ? 'Block Slot' : 'Enable Slot'}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </Card>
-          )}
-        </div>
       </div>
+
+      {/* 3. Interactive Slot Grid (Full Width below the 2-column setup) */}
+      {scheduleMode !== 'queue' || eveningEnabled ? (
+        <Card className="mt-6">
+          <div className="border-b border-ink-200 px-4 py-3.5 sm:px-5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-ink-900">
+                Slot Availability Grid: {selectedDoc?.name}
+              </h3>
+              <p className="text-xs text-ink-500 mt-0.5">
+                {selectedDate} · {scheduleData?.totalAvailable ?? 0} slots available for online / reception booking
+              </p>
+            </div>
+            <div className="flex items-center gap-3 text-xs">
+              <span className="flex items-center gap-1.5 font-medium text-emerald-800">
+                <span className="size-2.5 rounded-sm bg-emerald-500" /> Available
+              </span>
+              <span className="flex items-center gap-1.5 font-medium text-rose-800">
+                <span className="size-2.5 rounded-sm bg-rose-400" /> Blocked
+              </span>
+            </div>
+          </div>
+
+          <div className="p-4 sm:p-5">
+            {loadingSchedule ? (
+              <div className="py-12 text-center text-sm text-ink-400 animate-pulse">
+                Loading slot schedule...
+              </div>
+            ) : !scheduleData?.slots || scheduleData.slots.length === 0 ? (
+              <div className="py-10 text-center">
+                <p className="text-sm font-semibold text-ink-700">No slots generated for this day.</p>
+                <p className="text-xs text-ink-500 mt-1">
+                  Check shift start/end times or ensure the doctor is active.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2.5">
+                {scheduleData.slots.map((slot) => {
+                  const isAvailable = slot.available;
+                  return (
+                    <div
+                      key={slot.time24}
+                      className={`relative rounded-xl border p-2.5 text-center transition-all ${
+                        isAvailable
+                          ? 'bg-emerald-50 border-emerald-300 text-emerald-950 hover:border-emerald-400 hover:shadow-xs'
+                          : 'bg-rose-50 border-rose-200 text-rose-800 opacity-85'
+                      }`}
+                    >
+                      <p className="text-sm font-bold tracking-tight">
+                        {slot.timeStr || slot.time24}
+                        {slot.slotNumber !== null ? (
+                          <span className="ml-1 text-[10px] font-semibold text-ink-500">S{slot.slotNumber}</span>
+                        ) : null}
+                      </p>
+                      <span
+                        className={`text-[10px] font-bold uppercase tracking-wider block mt-0.5 truncate ${
+                          isAvailable ? 'text-emerald-700' : 'text-rose-700'
+                        }`}
+                      >
+                        {isAvailable ? 'Available' : slot.reason || 'Blocked'}
+                      </span>
+
+                      <button
+                        type="button"
+                        onClick={() => handleToggleSlot(slot.time24, isAvailable)}
+                        className={`mt-1.5 w-full rounded-md py-1 text-[10px] font-bold transition-colors cursor-pointer ${
+                          isAvailable
+                            ? 'bg-rose-200/80 hover:bg-rose-300 text-rose-900'
+                            : 'bg-emerald-200/80 hover:bg-emerald-300 text-emerald-900'
+                        }`}
+                      >
+                        {isAvailable ? 'Block' : 'Enable'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </Card>
+      ) : null}
     </div>
   );
 }

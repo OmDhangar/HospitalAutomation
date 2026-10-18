@@ -16,6 +16,7 @@ import {
   voidBillLine,
 } from '@/lib/services/discharge-billing';
 import { PatientBillingError } from '@/lib/services/patient-billing';
+import { DischargeSummaryRequiredError } from '@/lib/services/ipd-discharge-summary';
 import {
   UndoError,
   reopenDischarge,
@@ -52,7 +53,9 @@ async function attempt(admissionId: string, work: () => Promise<unknown>) {
   try {
     await work();
   } catch (err) {
-    if (err instanceof DischargeBillError || err instanceof PatientBillingError) go(admissionId, { error: err.message });
+    if (err instanceof DischargeBillError || err instanceof PatientBillingError || err instanceof DischargeSummaryRequiredError) {
+      go(admissionId, { error: err.message });
+    }
     throw err;
   }
 }
@@ -127,7 +130,12 @@ export async function finalizeAction(form: FormData) {
   const admissionId = text(form, 'admissionId');
   let billNumber = '';
   await attempt(admissionId, async () => {
-    ({ billNumber } = await finalizeDischarge({ hospitalId: session.hospitalId, admissionId, actorUserId: session.userId }));
+    ({ billNumber } = await finalizeDischarge({
+      hospitalId: session.hospitalId,
+      admissionId,
+      actorUserId: session.userId,
+      enforceDischargeSummaryGate: true,
+    }));
   });
   go(admissionId, { saved: `Discharged. Bill ${billNumber} is final.`, undo: formatUndoToken('finalize', admissionId) });
 }

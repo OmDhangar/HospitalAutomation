@@ -10,6 +10,7 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgEnum,
   pgTable,
   primaryKey,
@@ -1958,9 +1959,15 @@ export const beds = pgTable(
     wardId: uuid('ward_id').notNull(),
     label: text('label').notNull(),
     sortOrder: smallint('sort_order').notNull().default(0),
-    active: boolean('active').notNull().default(true),
+    status: text('status')
+      .$type<'vacant' | 'occupied' | 'cleaning' | 'maintenance'>()
+      .notNull()
+      .default('vacant'),
+    cleanedAt: timestamp('cleaned_at', { withTimezone: true }),
+    cleanedByUserId: uuid('cleaned_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     /** Printed on the bed; typed (or scanned) to prove the nurse is at the bedside (0048). Given on first need. */
     bedCode: text('bed_code'),
+    active: boolean('active').notNull().default(true),
     createdAt: createdAt(),
   },
   (t) => [
@@ -2011,6 +2018,8 @@ export const admissions = pgTable(
       onDelete: 'set null',
     }),
     cancelReason: text('cancel_reason'),
+    /** Doctor ordered frequency for vitals (q1h, q2h, q4h, q6h, q8h, q12h, daily, prn). */
+    vitalsFrequency: text('vitals_frequency').default('q4h'),
     /** The family's running-bill link (0033): hashed token, expiry 7 days after discharge. */
     billLinkTokenHash: text('bill_link_token_hash'),
     billLinkCreatedAt: timestamp('bill_link_created_at', { withTimezone: true }),
@@ -2666,6 +2675,792 @@ export const stockBalances = pgTable(
   },
   (t) => [primaryKey({ columns: [t.hospitalId, t.locationId, t.batchId] })],
 );
+
+/* =========================================================================
+   IPD Doctor Rounding Cockpit & eMAR Foundation (SPEC-IPD-EMAR-001)
+   ========================================================================= */
+
+export const ipdClinicalRounds = pgTable(
+  'ipd_clinical_rounds',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'restrict' }),
+    admissionId: uuid('admission_id').notNull(),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    doctorId: uuid('doctor_id')
+      .notNull()
+      .references(() => doctors.id, { onDelete: 'restrict' }),
+    authorUserId: uuid('author_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    evaluationNotes: text('evaluation_notes').notNull(),
+    status: text('status').$type<'draft' | 'signed'>().notNull(),
+    version: integer('version').notNull().default(1),
+    signedAt: timestamp('signed_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('ipd_clinical_rounds_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('ipd_clinical_rounds_tenant_admission_key').on(t.hospitalId, t.admissionId, t.id),
+    foreignKey({
+      columns: [t.hospitalId, t.admissionId, t.encounterId, t.patientId],
+      foreignColumns: [admissions.hospitalId, admissions.id, admissions.encounterId, admissions.patientId],
+      name: 'ipd_clinical_rounds_tenant_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [t.hospitalId, t.doctorId],
+      foreignColumns: [doctors.hospitalId, doctors.id],
+      name: 'ipd_clinical_rounds_doctor_fk',
+    }).onDelete('restrict'),
+    check(
+      'ipd_clinical_rounds_signed_chk',
+      sql`(status = 'draft' AND signed_at IS NULL) OR (status = 'signed' AND signed_at IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const ipdMedicationOrders = pgTable(
+  'ipd_medication_orders',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'restrict' }),
+    admissionId: uuid('admission_id').notNull(),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    orderChainId: uuid('order_chain_id').notNull(),
+
+    medicineId: uuid('medicine_id').notNull(),
+    medicineName: text('medicine_name').notNull(),
+    strength: text('strength'),
+    form: text('form'),
+
+    doseAmount: numeric('dose_amount', { precision: 8, scale: 2 }).notNull(),
+    doseUnit: text('dose_unit').notNull(),
+    route: text('route')
+      .$type<
+        | 'oral'
+        | 'iv_push'
+        | 'iv_piggyback'
+        | 'im'
+        | 'sc'
+        | 'nebulization'
+        | 'topical'
+        | 'inhalation'
+        | 'sublingual'
+        | 'rectal'
+        | 'ophthalmic'
+        | 'otic'
+      >()
+      .notNull(),
+
+    scheduleType: text('schedule_type').$type<'scheduled' | 'prn' | 'stat'>().notNull(),
+    frequencyCode: text('frequency_code'),
+    scheduleTimes: jsonb('schedule_times').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    isPrn: boolean('is_prn').notNull().default(false),
+    prnIndication: text('prn_indication'),
+    prnMaxDailyDoses: smallint('prn_max_daily_doses'),
+    prnMaxDailyQuantity: numeric('prn_max_daily_quantity', { precision: 8, scale: 2 }),
+    prnMaxDailyUnit: text('prn_max_daily_unit'),
+    prnMinIntervalHours: smallint('prn_min_interval_hours'),
+    specialInstructions: text('special_instructions'),
+
+    origin: text('origin').$type<'inpatient_order' | 'home_medication'>().notNull().default('inpatient_order'),
+    patientSupplied: boolean('patient_supplied').notNull().default(false),
+
+    startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
+    endsAt: timestamp('ends_at', { withTimezone: true }),
+    durationDays: smallint('duration_days'),
+
+    status: text('status')
+      .$type<'draft' | 'active' | 'on_hold' | 'discontinued' | 'completed' | 'superseded' | 'voided'>()
+      .notNull(),
+
+    supersedesOrderId: uuid('supersedes_order_id'),
+    supersededByOrderId: uuid('superseded_by_order_id'),
+    orderSetId: uuid('order_set_id'),
+    orderSetVersion: integer('order_set_version'),
+    voidedAt: timestamp('voided_at', { withTimezone: true }),
+    voidedByUserId: uuid('voided_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    voidReason: text('void_reason'),
+
+    prescriberDoctorId: uuid('prescriber_doctor_id').notNull(),
+    createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    signedAt: timestamp('signed_at', { withTimezone: true }),
+    roundNoteId: uuid('round_note_id'),
+
+    isVerbal: boolean('is_verbal').notNull().default(false),
+    verbalOrderStatus: text('verbal_order_status')
+      .$type<'none' | 'pending_cosign' | 'cosigned' | 'rejected' | 'modified'>()
+      .notNull()
+      .default('none'),
+    verbalDoctorName: text('verbal_doctor_name'),
+    verbalClinicalRationale: text('verbal_clinical_rationale'),
+    cosignedByDoctorId: uuid('cosigned_by_doctor_id').references(() => doctors.id, { onDelete: 'set null' }),
+    cosignedAt: timestamp('cosigned_at', { withTimezone: true }),
+    cosignNotes: text('cosign_notes'),
+
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('ipd_med_orders_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('ipd_med_orders_tenant_admission_key').on(t.hospitalId, t.admissionId, t.id),
+    index('ipd_med_orders_active_idx')
+      .on(t.hospitalId, t.admissionId, t.status)
+      .where(sql`status IN ('active', 'on_hold')`),
+    index('ipd_med_orders_chain_idx').on(t.hospitalId, t.orderChainId),
+    foreignKey({
+      columns: [t.hospitalId, t.admissionId, t.encounterId, t.patientId],
+      foreignColumns: [admissions.hospitalId, admissions.id, admissions.encounterId, admissions.patientId],
+      name: 'ipd_med_orders_tenant_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [t.hospitalId, t.medicineId],
+      foreignColumns: [medicines.hospitalId, medicines.id],
+      name: 'ipd_med_orders_medicine_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [t.hospitalId, t.prescriberDoctorId],
+      foreignColumns: [doctors.hospitalId, doctors.id],
+      name: 'ipd_med_orders_doctor_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [t.hospitalId, t.admissionId, t.roundNoteId],
+      foreignColumns: [ipdClinicalRounds.hospitalId, ipdClinicalRounds.admissionId, ipdClinicalRounds.id],
+      name: 'ipd_med_orders_round_note_fk',
+    }).onDelete('restrict'),
+    check(
+      'ipd_med_orders_signed_chk',
+      sql`(status = 'draft' AND signed_at IS NULL) OR (status != 'draft' AND signed_at IS NOT NULL)`,
+    ),
+    check(
+      'ipd_med_orders_superseded_chk',
+      sql`(status = 'superseded' AND superseded_by_order_id IS NOT NULL) OR (status != 'superseded' AND superseded_by_order_id IS NULL)`,
+    ),
+    check(
+      'ipd_med_orders_void_chk',
+      sql`(status = 'voided' AND voided_at IS NOT NULL AND void_reason IS NOT NULL) OR (status != 'voided' AND voided_at IS NULL AND void_reason IS NULL)`,
+    ),
+    check(
+      'ipd_med_orders_prn_chk',
+      sql`(is_prn = false AND prn_indication IS NULL) OR (is_prn = true AND prn_indication IS NOT NULL AND prn_max_daily_doses IS NOT NULL)`,
+    ),
+    check(
+      'ipd_med_orders_schedule_chk',
+      sql`(schedule_type = 'prn' AND is_prn = true) OR (schedule_type != 'prn' AND is_prn = false)`,
+    ),
+  ],
+);
+
+export const ipdMedicationOrderActions = pgTable(
+  'ipd_medication_order_actions',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'restrict' }),
+    orderId: uuid('order_id').notNull(),
+    action: text('action')
+      .$type<'sign' | 'hold' | 'resume' | 'discontinue' | 'modify' | 'renew' | 'expire' | 'void'>()
+      .notNull(),
+    reason: text('reason'),
+    actorUserId: uuid('actor_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    doctorId: uuid('doctor_id'),
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      columns: [t.hospitalId, t.orderId],
+      foreignColumns: [ipdMedicationOrders.hospitalId, ipdMedicationOrders.id],
+      name: 'ipd_order_actions_order_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [t.hospitalId, t.doctorId],
+      foreignColumns: [doctors.hospitalId, doctors.id],
+      name: 'ipd_order_actions_doctor_fk',
+    }).onDelete('restrict'),
+    check(
+      'ipd_order_actions_reason_chk',
+      sql`action IN ('sign', 'expire') OR (reason IS NOT NULL AND char_length(reason) >= 3)`,
+    ),
+  ],
+);
+
+export const ipdMedicationAdministrations = pgTable(
+  'ipd_medication_administrations',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'restrict' }),
+    admissionId: uuid('admission_id').notNull(),
+    orderId: uuid('order_id').notNull(),
+    orderChainId: uuid('order_chain_id').notNull(),
+    clientId: uuid('client_id').notNull(),
+
+    scheduledTime: timestamp('scheduled_time', { withTimezone: true }),
+    actualTime: timestamp('actual_time', { withTimezone: true }),
+    decisionTime: timestamp('decision_time', { withTimezone: true }),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+
+    outcome: text('outcome').$type<'administered' | 'omitted' | 'refused' | 'held'>().notNull(),
+    doseGiven: text('dose_given'),
+    doseAmountNumeric: numeric('dose_amount_numeric', { precision: 8, scale: 2 }),
+    routeGiven: text('route_given'),
+    nonAdminReason: text('non_admin_reason'),
+    clinicalNote: text('clinical_note'),
+
+    nurseUserId: uuid('nurse_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    recordedChannel: text('recorded_channel').$type<'personal' | 'ward_device'>(),
+    recordedDeviceId: text('recorded_device_id'),
+
+    voidedAt: timestamp('voided_at', { withTimezone: true }),
+    voidedByUserId: uuid('voided_by_user_id').references(() => users.id, { onDelete: 'restrict' }),
+    voidReason: text('void_reason'),
+    correctsAdministrationId: uuid('corrects_administration_id'),
+    correctedByAdministrationId: uuid('corrected_by_administration_id'),
+
+    careEntryId: uuid('care_entry_id'),
+    stockLedgerId: uuid('stock_ledger_id'),
+
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('ipd_med_admin_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('ipd_med_admin_client_key').on(t.hospitalId, t.clientId),
+    uniqueIndex('ipd_med_admin_scheduled_occurrence_key')
+      .on(t.hospitalId, t.orderId, t.scheduledTime)
+      .where(sql`voided_at IS NULL AND scheduled_time IS NOT NULL`),
+    index('ipd_med_admin_admission_time_idx')
+      .on(t.hospitalId, t.admissionId, t.recordedAt)
+      .where(sql`voided_at IS NULL`),
+    index('ipd_med_admin_chain_time_idx')
+      .on(t.hospitalId, t.orderChainId, t.actualTime)
+      .where(sql`voided_at IS NULL AND outcome = 'administered'`),
+    foreignKey({
+      columns: [t.hospitalId, t.admissionId, t.orderId],
+      foreignColumns: [ipdMedicationOrders.hospitalId, ipdMedicationOrders.admissionId, ipdMedicationOrders.id],
+      name: 'ipd_med_admin_order_admission_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [t.hospitalId, t.correctsAdministrationId],
+      foreignColumns: [t.hospitalId, t.id],
+      name: 'ipd_med_admin_corrects_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [t.hospitalId, t.correctedByAdministrationId],
+      foreignColumns: [t.hospitalId, t.id],
+      name: 'ipd_med_admin_corrected_by_fk',
+    }).onDelete('restrict'),
+    check('ipd_med_admin_void_chk', sql`(voided_at IS NULL) = (void_reason IS NULL)`),
+    check(
+      'ipd_med_admin_timing_chk',
+      sql`(outcome = 'administered' AND actual_time IS NOT NULL AND decision_time IS NULL AND non_admin_reason IS NULL) OR (outcome != 'administered' AND actual_time IS NULL AND decision_time IS NOT NULL AND non_admin_reason IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const ipdAllergyAssessments = pgTable(
+  'ipd_allergy_assessments',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'restrict' }),
+    admissionId: uuid('admission_id').notNull(),
+    encounterId: uuid('encounter_id').notNull(),
+    patientId: uuid('patient_id').notNull(),
+    status: text('status').$type<'unreviewed' | 'nkda' | 'allergies_documented'>().notNull(),
+    allergens: jsonb('allergens')
+      .$type<Array<{ substance: string; reaction?: string; severity?: 'mild' | 'moderate' | 'severe' }>>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    isCurrent: boolean('is_current').notNull().default(true),
+    reviewedByUserId: uuid('reviewed_by_user_id').references(() => users.id, { onDelete: 'restrict' }),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('ipd_allergy_current_idx').on(t.hospitalId, t.admissionId).where(sql`is_current = true`),
+    foreignKey({
+      columns: [t.hospitalId, t.admissionId, t.encounterId, t.patientId],
+      foreignColumns: [admissions.hospitalId, admissions.id, admissions.encounterId, admissions.patientId],
+      name: 'ipd_allergy_assessments_tenant_fk',
+    }).onDelete('restrict'),
+    check(
+      'ipd_allergy_review_chk',
+      sql`(status = 'unreviewed' AND reviewed_by_user_id IS NULL AND reviewed_at IS NULL) OR (status IN ('nkda', 'allergies_documented') AND reviewed_by_user_id IS NOT NULL AND reviewed_at IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const ipdOrderSets = pgTable(
+  'ipd_order_sets',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'restrict' }),
+    code: text('code').notNull(),
+    name: text('name').notNull(),
+    category: text('category').notNull(),
+    description: text('description'),
+    version: integer('version').notNull().default(1),
+    status: text('status').$type<'draft' | 'pending_review' | 'approved' | 'deprecated'>().notNull(),
+    approvedByDoctorId: uuid('approved_by_doctor_id'),
+    approvedAt: timestamp('approved_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('ipd_order_sets_hospital_id_key').on(t.hospitalId, t.id),
+    uniqueIndex('ipd_order_sets_hospital_code_ver').on(t.hospitalId, t.code, t.version),
+    foreignKey({
+      columns: [t.hospitalId, t.approvedByDoctorId],
+      foreignColumns: [doctors.hospitalId, doctors.id],
+      name: 'ipd_order_sets_doctor_fk',
+    }).onDelete('restrict'),
+    check(
+      'ipd_order_sets_approved_chk',
+      sql`(status IN ('draft', 'pending_review') AND approved_by_doctor_id IS NULL AND approved_at IS NULL) OR (status IN ('approved', 'deprecated') AND approved_by_doctor_id IS NOT NULL AND approved_at IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const ipdOrderSetItems = pgTable(
+  'ipd_order_set_items',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'restrict' }),
+    orderSetId: uuid('order_set_id').notNull(),
+    medicineId: uuid('medicine_id').notNull(),
+    defaultDoseAmount: numeric('default_dose_amount', { precision: 8, scale: 2 }).notNull(),
+    defaultDoseUnit: text('default_dose_unit').notNull(),
+    defaultRoute: text('default_route')
+      .$type<
+        | 'oral'
+        | 'iv_push'
+        | 'iv_piggyback'
+        | 'im'
+        | 'sc'
+        | 'nebulization'
+        | 'topical'
+        | 'inhalation'
+        | 'sublingual'
+        | 'rectal'
+        | 'ophthalmic'
+        | 'otic'
+      >()
+      .notNull(),
+    defaultScheduleType: text('default_schedule_type').$type<'scheduled' | 'prn' | 'stat'>().notNull(),
+    defaultFrequencyCode: text('default_frequency_code'),
+    defaultScheduleTimes: jsonb('default_schedule_times').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    defaultDurationDays: smallint('default_duration_days'),
+    defaultInstructions: text('default_instructions'),
+    sortOrder: smallint('sort_order').notNull().default(0),
+  },
+  (t) => [
+    index('ipd_order_set_items_set_idx').on(t.hospitalId, t.orderSetId, t.sortOrder),
+    foreignKey({
+      columns: [t.hospitalId, t.orderSetId],
+      foreignColumns: [ipdOrderSets.hospitalId, ipdOrderSets.id],
+      name: 'ipd_order_set_items_set_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [t.hospitalId, t.medicineId],
+      foreignColumns: [medicines.hospitalId, medicines.id],
+      name: 'ipd_order_set_items_medicine_fk',
+    }).onDelete('restrict'),
+  ],
+);
+
+export const ipdEmarIntegrationOutbox = pgTable(
+  'ipd_emar_integration_outbox',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'restrict' }),
+    administrationId: uuid('administration_id').notNull(),
+    integrationType: text('integration_type').$type<'billing' | 'stock'>().notNull(),
+    eventType: text('event_type').$type<'administer' | 'void' | 'correction'>().notNull(),
+    payload: jsonb('payload').notNull(),
+    status: text('status')
+      .$type<'pending' | 'pending_pricing' | 'processing' | 'processed' | 'failed' | 'skipped'>()
+      .notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    scheduledFor: timestamp('scheduled_for', { withTimezone: true }).notNull().defaultNow(),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    processedAt: timestamp('processed_at', { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('ipd_emar_outbox_event_key').on(t.hospitalId, t.administrationId, t.integrationType, t.eventType),
+    index('ipd_emar_outbox_pending_idx')
+      .on(t.hospitalId, t.status, t.scheduledFor)
+      .where(sql`status = 'pending'`),
+    foreignKey({
+      columns: [t.hospitalId, t.administrationId],
+      foreignColumns: [ipdMedicationAdministrations.hospitalId, ipdMedicationAdministrations.id],
+      name: 'ipd_emar_outbox_admin_fk',
+    }).onDelete('restrict'),
+  ],
+);
+
+export type IpdClinicalRoundRow = typeof ipdClinicalRounds.$inferSelect;
+export type NewIpdClinicalRound = typeof ipdClinicalRounds.$inferInsert;
+
+export type IpdMedicationOrderRow = typeof ipdMedicationOrders.$inferSelect;
+export type NewIpdMedicationOrder = typeof ipdMedicationOrders.$inferInsert;
+
+export type IpdMedicationOrderActionRow = typeof ipdMedicationOrderActions.$inferSelect;
+export type NewIpdMedicationOrderAction = typeof ipdMedicationOrderActions.$inferInsert;
+
+export type IpdMedicationAdministrationRow = typeof ipdMedicationAdministrations.$inferSelect;
+export type NewIpdMedicationAdministration = typeof ipdMedicationAdministrations.$inferInsert;
+
+export type IpdAllergyAssessmentRow = typeof ipdAllergyAssessments.$inferSelect;
+export type NewIpdAllergyAssessment = typeof ipdAllergyAssessments.$inferInsert;
+
+export type IpdOrderSetRow = typeof ipdOrderSets.$inferSelect;
+export type NewIpdOrderSet = typeof ipdOrderSets.$inferInsert;
+
+export type IpdOrderSetItemRow = typeof ipdOrderSetItems.$inferSelect;
+export type NewIpdOrderSetItem = typeof ipdOrderSetItems.$inferInsert;
+
+export type IpdEmarIntegrationOutboxRow = typeof ipdEmarIntegrationOutbox.$inferSelect;
+export type NewIpdEmarIntegrationOutbox = typeof ipdEmarIntegrationOutbox.$inferInsert;
+
+export type SelectIpdMedicationOrder = IpdMedicationOrderRow;
+export type InsertIpdMedicationOrder = NewIpdMedicationOrder;
+export type SelectIpdMedicationAdministration = IpdMedicationAdministrationRow;
+export type InsertIpdMedicationAdministration = NewIpdMedicationAdministration;
+export type SelectIpdEmarIntegrationOutbox = IpdEmarIntegrationOutboxRow;
+export type InsertIpdEmarIntegrationOutbox = NewIpdEmarIntegrationOutbox;
+export type SelectIpdClinicalRound = IpdClinicalRoundRow;
+export type InsertIpdClinicalRound = NewIpdClinicalRound;
+
+/* ---------------------------------------------------- IPD Phase 2 Clinical Ledger & Tasks */
+
+export const clinicalAuditLogs = pgTable(
+  'clinical_audit_logs',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    tableName: text('table_name').notNull(),
+    recordId: text('record_id').notNull(),
+    action: text('action').notNull(),
+    oldValue: jsonb('old_value'),
+    newValue: jsonb('new_value'),
+    reason: text('reason'),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('clinical_audit_logs_hospital_record_idx').on(t.hospitalId, t.tableName, t.recordId),
+  ],
+);
+
+export const ipdClinicalTasks = pgTable(
+  'ipd_clinical_tasks',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'restrict' }),
+    orderId: uuid('order_id').notNull(),
+    admissionId: uuid('admission_id').notNull(),
+    scheduledAt: timestamp('scheduled_at', { withTimezone: true }).notNull(),
+    status: text('status')
+      .$type<'DUE' | 'OVERDUE' | 'GIVEN' | 'HELD' | 'REFUSED' | 'NOT_AVAILABLE' | 'MISSED'>()
+      .notNull()
+      .default('DUE'),
+    actedByUserId: uuid('acted_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    actedAt: timestamp('acted_at', { withTimezone: true }),
+    doseGiven: text('dose_given'),
+    site: text('site'),
+    reason: text('reason'),
+    note: text('note'),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('ipd_clinical_tasks_adm_idx').on(t.hospitalId, t.admissionId, t.scheduledAt),
+    index('ipd_clinical_tasks_order_idx').on(t.hospitalId, t.orderId),
+  ],
+);
+
+export const draftRounds = pgTable(
+  'draft_rounds',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id').notNull(),
+    authorUserId: uuid('author_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    doctorId: uuid('doctor_id'),
+    soapS: text('soap_s'),
+    soapO: text('soap_o'),
+    soapA: text('soap_a'),
+    soapP: text('soap_p'),
+    body: text('body'),
+    status: text('status').$type<'DRAFT' | 'SIGNED'>().notNull().default('DRAFT'),
+    signedAt: timestamp('signed_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('draft_rounds_user_adm_idx').on(t.hospitalId, t.admissionId, t.authorUserId),
+  ],
+);
+
+export const vitalsReadings = pgTable(
+  'vitals_readings',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id').notNull(),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    temperatureF: numeric('temperature_f', { precision: 4, scale: 1 }),
+    pulseBpm: integer('pulse_bpm'),
+    bpSystolic: integer('bp_systolic'),
+    bpDiastolic: integer('bp_diastolic'),
+    respiratoryRate: integer('respiratory_rate'),
+    spo2Percent: integer('spo2_percent'),
+    painScore: integer('pain_score'),
+    avpu: text('avpu').$type<'A' | 'V' | 'P' | 'U'>(),
+    o2Support: text('o2_support'),
+    news2Score: integer('news2_score'),
+    abdGirthCm: numeric('abd_girth_cm', { precision: 5, scale: 1 }),
+    bsl: integer('bsl'),
+    scheduledSlot: text('scheduled_slot'),
+    recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('vitals_readings_adm_idx').on(t.hospitalId, t.admissionId, t.recordedAt),
+  ],
+);
+
+export const intakeOutput = pgTable(
+  'intake_output',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id').notNull(),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    kind: text('kind').$type<'ORAL' | 'IV' | 'URINE' | 'DRAIN' | 'RT_ASPIRATE'>().notNull(),
+    ml: integer('ml').notNull(),
+    notes: text('notes'),
+    recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('intake_output_adm_idx').on(t.hospitalId, t.admissionId, t.recordedAt),
+  ],
+);
+
+export type ClinicalAuditLogRow = typeof clinicalAuditLogs.$inferSelect;
+export type NewClinicalAuditLog = typeof clinicalAuditLogs.$inferInsert;
+export type IpdClinicalTaskRow = typeof ipdClinicalTasks.$inferSelect;
+export type NewIpdClinicalTask = typeof ipdClinicalTasks.$inferInsert;
+export type DraftRoundRow = typeof draftRounds.$inferSelect;
+export type NewDraftRound = typeof draftRounds.$inferInsert;
+export type VitalsReadingRow = typeof vitalsReadings.$inferSelect;
+export type NewVitalsReading = typeof vitalsReadings.$inferInsert;
+export type IntakeOutputRow = typeof intakeOutput.$inferSelect;
+export type NewIntakeOutput = typeof intakeOutput.$inferInsert;
+
+export const patientMeasurements = pgTable(
+  'patient_measurements',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id')
+      .notNull()
+      .references(() => admissions.id, { onDelete: 'cascade' }),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    weightKg: numeric('weight_kg', { precision: 5, scale: 2 }),
+    heightCm: numeric('height_cm', { precision: 5, scale: 2 }),
+    bmi: numeric('bmi', { precision: 4, scale: 1 }),
+    measuredByUserId: uuid('measured_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    notes: text('notes'),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('patient_measurements_adm_idx').on(t.hospitalId, t.admissionId, t.recordedAt),
+    index('patient_measurements_patient_idx').on(t.hospitalId, t.patientId, t.recordedAt),
+  ],
+);
+
+export type PatientMeasurementRow = typeof patientMeasurements.$inferSelect;
+export type NewPatientMeasurement = typeof patientMeasurements.$inferInsert;
+
+export const ipdAdmissionHomeMedications = pgTable(
+  'ipd_admission_home_medications',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id')
+      .notNull()
+      .references(() => admissions.id, { onDelete: 'cascade' }),
+    medicineName: text('medicine_name').notNull(),
+    dosage: text('dosage'),
+    frequency: text('frequency'),
+    lastTakenAt: text('last_taken_at'),
+    reconciliationStatus: text('reconciliation_status')
+      .$type<'continued' | 'stopped' | 'modified'>()
+      .notNull()
+      .default('continued'),
+    reconciliationNotes: text('reconciliation_notes'),
+    recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('ipd_home_meds_adm_idx').on(t.hospitalId, t.admissionId),
+  ],
+);
+
+export const ipdDischargeSummaries = pgTable(
+  'ipd_discharge_summaries',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id')
+      .notNull()
+      .references(() => admissions.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull().default(1),
+    dischargeType: text('discharge_type')
+      .$type<'regular' | 'lama' | 'dama' | 'transfer' | 'death'>()
+      .notNull()
+      .default('regular'),
+    status: text('status')
+      .$type<'draft' | 'finalized'>()
+      .notNull()
+      .default('draft'),
+    primaryDiagnosis: text('primary_diagnosis'),
+    secondaryDiagnoses: text('secondary_diagnoses'),
+    hospitalCourse: text('hospital_course'),
+    conditionAtDischarge: text('condition_at_discharge'),
+    investigationSummary: text('investigation_summary'),
+    dischargeAdvice: text('discharge_advice'),
+    dietAdvice: text('diet_advice'),
+    urgentWarningSigns: text('urgent_warning_signs'),
+    followUpDate: text('follow_up_date'),
+    prescriberDoctorId: uuid('prescriber_doctor_id').references(() => doctors.id, { onDelete: 'set null' }),
+    prescriberRegistrationNo: text('prescriber_registration_no'),
+    finalizedAt: timestamp('finalized_at', { withTimezone: true }),
+    finalizedByUserId: uuid('finalized_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('ipd_discharge_summaries_adm_idx').on(t.hospitalId, t.admissionId),
+  ],
+);
+
+export const ipdTakeHomePrescriptions = pgTable(
+  'ipd_take_home_prescriptions',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    dischargeSummaryId: uuid('discharge_summary_id')
+      .notNull()
+      .references(() => ipdDischargeSummaries.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id')
+      .notNull()
+      .references(() => admissions.id, { onDelete: 'cascade' }),
+    medicineName: text('medicine_name').notNull(),
+    dosage: text('dosage').notNull(),
+    route: text('route').notNull().default('oral'),
+    frequency: text('frequency').notNull(),
+    duration: text('duration'),
+    instructions: text('instructions'),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('ipd_take_home_prescriptions_summary_idx').on(t.hospitalId, t.dischargeSummaryId),
+  ],
+);
+
+export type IpdAdmissionHomeMedicationRow = typeof ipdAdmissionHomeMedications.$inferSelect;
+export type NewIpdAdmissionHomeMedication = typeof ipdAdmissionHomeMedications.$inferInsert;
+export type IpdDischargeSummaryRow = typeof ipdDischargeSummaries.$inferSelect;
+export type NewIpdDischargeSummary = typeof ipdDischargeSummaries.$inferInsert;
+export type IpdTakeHomePrescriptionRow = typeof ipdTakeHomePrescriptions.$inferSelect;
+export type NewIpdTakeHomePrescription = typeof ipdTakeHomePrescriptions.$inferInsert;
+
+/**
+ * Universal global medicine catalogue. Not tenant-scoped; available across all hospitals.
+ */
+export const globalMedicines = pgTable(
+  'global_medicines',
+  {
+    id: id(),
+    name: text('name').notNull(),
+    genericName: text('generic_name'),
+    strength: text('strength'),
+    form: text('form'),
+    category: text('category').notNull().default('General'),
+    unit: text('unit').notNull().default('unit'),
+    defaultRoute: text('default_route').default('oral'),
+    defaultFrequency: text('default_frequency').default('OD'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('global_medicines_identity_key').on(
+      sql`lower(${t.name})`,
+      sql`coalesce(lower(${t.strength}), '')`,
+      sql`coalesce(lower(${t.form}), '')`,
+    ),
+    index('global_medicines_name_idx').on(sql`lower(${t.name}) text_pattern_ops`),
+    index('global_medicines_generic_idx').on(sql`lower(${t.genericName}) text_pattern_ops`),
+  ],
+);
+
+export type GlobalMedicineRow = typeof globalMedicines.$inferSelect;
+export type NewGlobalMedicine = typeof globalMedicines.$inferInsert;
 
 /* ------------------------------------------------ test orders and follow-up (0047, C4a) */
 

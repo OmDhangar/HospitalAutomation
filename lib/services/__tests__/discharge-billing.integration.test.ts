@@ -73,15 +73,20 @@ describe.skipIf(!enabled)('discharge billing', () => {
     const room = await createChargeItem({ hospitalId, input: { kind: 'room', name: 'General ward bed', sellingPricePaise: 800_00 }, actorUserId: deskId });
     ({ id: syringeId } = await createChargeItem({ hospitalId, input: { kind: 'consumable', name: 'Syringe 5 ml', sellingPricePaise: 15_00 }, actorUserId: deskId }));
     ({ id: unpricedId } = await createChargeItem({ hospitalId, input: { kind: 'consumable', name: 'Gauze' }, actorUserId: deskId }));
-    const { wardId } = await createWard({ hospitalId, branchId, name: 'Ward A', dailyChargeItemId: room.id, bedLabels: '1-3', actorUserId: deskId });
+    const { wardId } = await createWard({ hospitalId, branchId, name: 'Ward A', dailyChargeItemId: room.id, bedLabels: '1-5', actorUserId: deskId });
     bedIds = (await admin`select id from beds where ward_id = ${wardId} order by sort_order`).map((row) => row.id as string);
   });
 
   afterAll(async () => {
     if (!enabled) return;
-    await admin`delete from hospitals where name = ${HOSPITAL_NAME}`;
-    await admin`delete from users where email like '%@discharge.test'`;
-    await Promise.all([admin.end(), closeDb()]);
+    try {
+      await admin`set session_replication_role = 'replica'`;
+      await admin`delete from hospitals where name = ${HOSPITAL_NAME}`;
+      await admin`delete from users where email like '%@discharge.test'`;
+    } finally {
+      await admin`set session_replication_role = 'origin'`;
+      await Promise.all([admin.end(), closeDb()]);
+    }
   });
 
   it('refuses to finalise while an item is unpriced, then finalises gap-free', async () => {
@@ -112,6 +117,7 @@ describe.skipIf(!enabled)('discharge billing', () => {
       where a.id = ${admissionId}`;
     expect(row).toMatchObject({ status: 'discharged', encounter_status: 'closed', total_paise: 830_00, open_beds: 0 });
 
+    await admin`update beds set status = 'vacant' where id = ${bedIds[0]}`;
     const second = await admit(bedIds[0]);
     const { billNumber } = await finalizeDischarge({ hospitalId, admissionId: second.admissionId, actorUserId: deskId });
     expect(billNumber).toMatch(/\/0002$/);
@@ -162,5 +168,46 @@ describe.skipIf(!enabled)('discharge billing', () => {
     await revokeBillLink({ hospitalId, admissionId, actorUserId: deskId });
     expect((await getPublicBill(token)).state).toBe('expired');
     expect((await getPublicBill(`${hospitalId.replace(/-/g, '')}AAAAAAAAAAAAAAAAAAAAAA`)).state).toBe('missing');
+  });
+
+  it('automatically synchronizes administered eMAR medicines into bill lines with itemType medicine', async () => {
+    const { admissionId } = await admit(bedIds[3]);
+    const medicineId = uuid();
+    await admin`
+      insert into medicines (id, hospital_id, name, generic_name, unit, selling_price_paise)
+      values (${medicineId}, ${hospitalId}, 'Amoxicillin 500mg Cap', 'Amoxicillin', 'capsule', 2500)
+    `;
+
+    // Prescribe and record administration
+    const [order] = await admin`
+      insert into ipd_medication_orders (
+        id, hospital_id, admission_id, encounter_id, patient_id, prescriber_doctor_id,
+        order_chain_id, medicine_id, medicine_name, dose_amount, dose_unit, route, schedule_type,
+        status, signed_at, starts_at
+      )
+      select
+        gen_random_uuid(), ${hospitalId}, ${admissionId}, a.encounter_id, a.patient_id, ${doctorId},
+        gen_random_uuid(), ${medicineId}, 'Amoxicillin 500mg Cap', '500', 'mg', 'oral', 'stat',
+        'active', now(), now()
+      from admissions a where a.id = ${admissionId}
+      returning id, order_chain_id
+    `;
+
+    await admin`
+      insert into ipd_medication_administrations (
+        id, hospital_id, admission_id, order_id, order_chain_id, nurse_user_id, client_id, actual_time, outcome, dose_given, route_given
+      )
+      values (
+        gen_random_uuid(), ${hospitalId}, ${admissionId}, ${order.id}, ${order.order_chain_id}, ${deskId}, gen_random_uuid(), now(), 'administered', '500 mg', 'oral'
+      )
+    `;
+
+    // Fetch view
+    const view = (await getDischargeBillView({ hospitalId, admissionId }))!;
+    const medLine = view.lines.find((line) => line.itemType === 'medicine' && line.description === 'Amoxicillin 500mg Cap');
+    expect(medLine).toBeDefined();
+    expect(medLine?.unitPricePaise).toBe(2500);
+    expect(medLine?.totalPaise).toBe(2500);
+    expect(view.totals.totalPaise).toBeGreaterThanOrEqual(2500);
   });
 });

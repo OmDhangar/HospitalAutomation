@@ -14,13 +14,12 @@ import {
 import { compareBedLabels } from '@/lib/domain/ipd-config';
 import type { AdmissionStatus } from '@/lib/domain/admission';
 
-/**
- * Who is where: the reads behind the IPD home, the ward grids and the OPD
- * dashboard's "IPD · awaiting bed" badges (IPD plan §5.2, task T1.5).
- *
- * Admissions are clinical, so these run with the clinical key. They return
- * names, beds and statuses — never anything recorded at the bedside.
- */
+export class BedCleaningInProgressError extends Error {
+  constructor(message = 'Bed is currently undergoing housekeeping sanitization. Mark as cleaned before assigning.') {
+    super(message);
+    this.name = 'BedCleaningInProgressError';
+  }
+}
 
 export type IpdStatus = Exclude<AdmissionStatus, 'cancelled' | 'discharged'>;
 
@@ -71,8 +70,69 @@ export type CensusPatient = {
 export type CensusBed = {
   id: string;
   label: string;
+  status: 'vacant' | 'occupied' | 'cleaning' | 'maintenance';
   occupant: CensusPatient | null;
+  cleanedAt?: Date | null;
 };
+
+export async function assertBedAvailableForAdmission(
+  hospitalId: string,
+  bedId: string,
+  executorDb?: any,
+): Promise<void> {
+  const check = (bed: any) => {
+    if (!bed) throw new Error('Bed not found');
+    if (bed.status === 'cleaning') {
+      throw new BedCleaningInProgressError(
+        `Bed ${bed.label} is currently in cleaning status. Housekeeping must sanitize and mark bed cleaned before admitting a patient.`,
+      );
+    }
+  };
+
+  if (executorDb?.query?.beds) {
+    const bed = await executorDb.query.beds.findFirst({
+      where: and(eq(beds.id, bedId), eq(beds.hospitalId, hospitalId)),
+    });
+    check(bed);
+  } else {
+    await withTenant(hospitalId, async (tx) => {
+      const bed = await tx.query.beds.findFirst({
+        where: and(eq(beds.id, bedId), eq(beds.hospitalId, hospitalId)),
+      });
+      check(bed);
+    });
+  }
+}
+
+export async function markBedCleaned(
+  hospitalId: string,
+  bedId: string,
+  userId?: string,
+  executorDb?: any,
+): Promise<{ ok: boolean }> {
+  const now = new Date();
+  const updateData = {
+    status: 'vacant' as const,
+    cleanedAt: now,
+    cleanedByUserId: userId ?? null,
+  };
+
+  if (executorDb) {
+    await executorDb
+      .update(beds)
+      .set(updateData)
+      .where(and(eq(beds.id, bedId), eq(beds.hospitalId, hospitalId)));
+    return { ok: true };
+  }
+
+  return withTenant(hospitalId, async (tx) => {
+    await tx
+      .update(beds)
+      .set(updateData)
+      .where(and(eq(beds.id, bedId), eq(beds.hospitalId, hospitalId)));
+    return { ok: true };
+  });
+}
 
 export type CensusWard = {
   id: string;
@@ -149,7 +209,14 @@ export async function getIpdCensus(args: {
           .where(and(eq(wards.active, true), wardBranchFilter))
           .orderBy(asc(wards.sortOrder), asc(wards.name)),
         tx
-          .select({ id: beds.id, wardId: beds.wardId, label: beds.label, sortOrder: beds.sortOrder })
+          .select({
+            id: beds.id,
+            wardId: beds.wardId,
+            label: beds.label,
+            sortOrder: beds.sortOrder,
+            status: beds.status,
+            cleanedAt: beds.cleanedAt,
+          })
           .from(beds)
           .where(eq(beds.active, true)),
       ]);
@@ -171,7 +238,19 @@ export async function getIpdCensus(args: {
         const wardBeds = bedRows
           .filter((bed) => bed.wardId === ward.id)
           .sort((a, b) => a.sortOrder - b.sortOrder || compareBedLabels(a.label, b.label))
-          .map((bed) => ({ id: bed.id, label: bed.label, occupant: occupantByBed.get(bed.id) ?? null }));
+          .map((bed) => {
+            const occupant = occupantByBed.get(bed.id) ?? null;
+            const effectiveStatus: CensusBed['status'] = occupant
+              ? 'occupied'
+              : (bed.status ?? 'vacant');
+            return {
+              id: bed.id,
+              label: bed.label,
+              status: effectiveStatus,
+              occupant,
+              cleanedAt: bed.cleanedAt,
+            };
+          });
         return {
           ...ward,
           beds: wardBeds,
@@ -230,6 +309,7 @@ export type AdmissionSummary = {
   admittedAt: Date | null;
   dischargeReadyAt: Date | null;
   dischargedAt: Date | null;
+  vitalsFrequency: string | null;
   bed: { id: string; label: string; wardId: string; wardName: string } | null;
   payer: {
     kind: 'self' | 'insurer' | 'tpa' | 'corporate';
@@ -274,6 +354,7 @@ export async function getAdmissionSummary(
           admittedAt: admissions.admittedAt,
           dischargeReadyAt: admissions.dischargeReadyAt,
           dischargedAt: admissions.dischargedAt,
+          vitalsFrequency: admissions.vitalsFrequency,
         })
         .from(admissions)
         .innerJoin(patients, eq(patients.id, admissions.patientId))

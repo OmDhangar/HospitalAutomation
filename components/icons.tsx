@@ -28,6 +28,30 @@ export function StethoscopeIcon({ className = 'size-4', size, ...props }: IconPr
   );
 }
 
+export function RefreshCwIcon({ className = 'size-4', size, ...props }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+      {...props}
+    >
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+      <path d="M21 3v5h-5" />
+      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+      <path d="M8 16H3v5" />
+    </svg>
+  );
+}
+
 export function TvIcon({ className = 'size-4', size, ...props }: IconProps) {
   return (
     <svg
@@ -524,6 +548,27 @@ export function ChevronRightIcon({ className = 'size-4', size, ...props }: IconP
   );
 }
 
+export function ChevronDownIcon({ className = 'size-4', size, ...props }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+      {...props}
+    >
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  );
+}
+
 export function PlusIcon({ className = 'size-4', size, ...props }: IconProps) {
   return (
     <svg
@@ -822,3 +867,26 @@ export function PrinterIcon({ className = 'size-4', size, ...props }: IconProps)
     </svg>
   );
 }
+
+export function TabletIcon({ className = 'size-4', size, ...props }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+      {...props}
+    >
+      <rect width="16" height="20" x="4" y="2" rx="2" ry="2" />
+      <line x1="12" x2="12.01" y1="18" y2="18" />
+    </svg>
+  );
+}
+

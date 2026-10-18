@@ -1,8 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { CompactPatientBar } from '@/components/ipd/shell/compact-patient-bar';
 import { PrinterIcon } from '@/components/icons';
-import { AllergyBanner } from '@/components/ipd/allergy-banner';
-import { PatientHeader } from '@/components/ipd/patient-header';
 import { SheetTabs } from '@/components/ipd/sheet-tabs';
 import { requireModule } from '@/lib/auth/modules';
 import { requireSession } from '@/lib/auth/session';
@@ -48,38 +47,9 @@ export default async function PatientFileLayout({ children, params }: LayoutProp
   }));
   const printable = printSheetsFor(states, session.role);
   const inBed = admission.status === 'admitted' || admission.status === 'discharge_ready';
-  // B2: allergies on every sheet, once the owner has switched them on.
-  const allergies = moduleAllows(states, 'allergy', 'read') ? await getAllergies(session.hospitalId, admission.patientId) : null;
-
   return (
-    <div className="mx-auto max-w-4xl space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <Link href="/ipd" className="inline-flex min-h-11 items-center text-sm text-ink-500 hover:text-ink-800">
-          ← IPD
-        </Link>
-        <div className="flex items-center gap-2">
-          {can(session.role, 'acct.view') && !session.readOnly ? (
-            <Link
-              href={`/accountability/record/admission/${id}`}
-              className="inline-flex min-h-11 items-center rounded-lg px-3 text-sm font-semibold text-ink-700 ring-1 ring-ink-300 hover:bg-ink-50"
-            >
-              History
-            </Link>
-          ) : null}
-          {printable.length > 0 ? (
-            <Link
-              href={`/print/ipd-file/${id}?sheets=${printable.map((sheet) => sheet.id).join(',')}`}
-              target="_blank"
-              className="inline-flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold text-ink-700 ring-1 ring-ink-300 hover:bg-ink-50"
-            >
-              <PrinterIcon className="size-4" />
-              Print file
-            </Link>
-          ) : null}
-        </div>
-      </div>
-
-      <PatientHeader
+    <div className="mx-auto max-w-4xl space-y-3">
+      <CompactPatientBar
         name={admission.patientName}
         age={admission.age}
         gender={admission.gender}
@@ -91,11 +61,45 @@ export default async function PatientFileLayout({ children, params }: LayoutProp
         timezone={session.timezone}
         now={new Date()}
         ipdNumber={admission.ipdNumber}
+        backHref={
+          session.role === 'nurse'
+            ? admission.bed?.wardId
+              ? `/ipd/ward/${admission.bed.wardId}`
+              : '/ipd/ward'
+            : session.role === 'doctor'
+              ? '/ipd/my-patients'
+              : '/ipd'
+        }
+        backLabel={
+          session.role === 'nurse'
+            ? '← Ward'
+            : session.role === 'doctor'
+              ? '← My patients'
+              : '← IPD'
+        }
+        actions={
+          <>
+            {can(session.role, 'acct.view') && !session.readOnly ? (
+              <Link
+                href={`/accountability/record/admission/${id}`}
+                className="inline-flex min-h-8 items-center rounded-lg px-2.5 text-xs font-semibold text-ink-700 ring-1 ring-ink-300 hover:bg-ink-50"
+              >
+                History
+              </Link>
+            ) : null}
+            {printable.length > 0 ? (
+              <Link
+                href={`/print/ipd-file/${id}?sheets=${printable.map((sheet) => sheet.id).join(',')}`}
+                target="_blank"
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold text-ink-700 ring-1 ring-ink-300 hover:bg-ink-50"
+              >
+                <PrinterIcon className="size-3.5" />
+                Print file
+              </Link>
+            ) : null}
+          </>
+        }
       />
-
-      {allergies ? (
-        <AllergyBanner status={allergies.status} allergies={allergies.allergies} href={`${base}/allergies`} timezone={session.timezone} />
-      ) : null}
 
       {tabs.length > 1 ? <SheetTabs tabs={tabs} base={base} /> : null}
 

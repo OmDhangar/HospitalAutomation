@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { Alert, Button, Field, Input } from '@/components/ui';
+import { TabletIcon } from '@/components/icons';
 import { getSessionState, readDeviceCookie, setSessionCookie } from '@/lib/auth/session';
 import { readWardDeviceCookie } from '@/lib/auth/ward-device-cookie';
 import { clearEvents, clientIp, ipRules, isThrottled, recordEvent } from '@/lib/security/throttle';
@@ -61,19 +62,18 @@ async function signIn(formData: FormData) {
 export default async function LoginPage({
   searchParams,
 }: PageProps<'/login'>) {
-  const { error, staff } = await searchParams;
+  const { error } = await searchParams;
   const current = await getSessionState();
   if (current?.locked) redirect(current.channel === 'ward_device' ? '/ward-device' : '/unlock');
   if (current) redirect(current.channel === 'ward_device' ? '/ipd/ward' : '/dashboard');
-  // An enrolled ward tablet opens on "Who is recording?", unless someone asked for the email sign-in.
+
   const onTablet = Boolean(await readWardDeviceCookie());
-  if (onTablet && staff !== '1') redirect('/ward-device');
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-ink-100 px-4 py-12">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-xl bg-brand-600 text-xl font-bold text-white">
+          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-xl bg-brand-600 text-xl font-bold text-white shadow-xs">
             Q
           </div>
           <h1 className="text-xl font-semibold text-ink-900">QuriioHQ</h1>
@@ -82,8 +82,23 @@ export default async function LoginPage({
 
         <form
           action={signIn}
-          className="space-y-4 rounded-xl border border-ink-200 bg-white p-6 shadow-[var(--shadow-raised)]"
+          className="relative space-y-4 rounded-xl border border-ink-200 bg-white p-6 shadow-[var(--shadow-raised)]"
         >
+          <div className="flex items-center justify-between border-b border-ink-100 pb-2.5">
+            <span className="text-xs font-semibold uppercase tracking-wider text-ink-400">
+              Staff Account
+            </span>
+            <Link
+              href="/ward-device"
+              title="Sign in on Ward Tablet"
+              aria-label="Sign in on Ward Tablet"
+              className="group inline-flex items-center gap-1.5 rounded-lg border border-ink-200 bg-ink-50 px-2.5 py-1 text-xs font-medium text-ink-700 shadow-xs transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700"
+            >
+              <TabletIcon className="size-3.5 text-brand-600 transition-transform group-hover:scale-110" />
+              <span>Tablet sign-in</span>
+            </Link>
+          </div>
+
           {error === 'locked' ? (
             <Alert tone="error">
               Too many failed attempts. Wait 15 minutes and try again.
@@ -122,8 +137,12 @@ export default async function LoginPage({
         </form>
 
         {onTablet ? (
-          <Link href="/ward-device" className="mt-4 block text-center text-sm font-semibold text-brand-700">
-            This is a ward tablet: Who is recording?
+          <Link
+            href="/ward-device"
+            className="mt-4 flex items-center justify-center gap-1.5 text-center text-xs font-semibold text-brand-700 hover:underline"
+          >
+            <TabletIcon className="size-3.5 text-brand-600" />
+            <span>This is an enrolled ward tablet: tap to unlock</span>
           </Link>
         ) : null}
 

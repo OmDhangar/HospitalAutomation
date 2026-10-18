@@ -146,8 +146,11 @@ async function main() {
     console.log(`    removed ${purged} placeholder WhatsApp number(s) from earlier runs`);
   }
 
+  await admin`set session_replication_role = 'replica'`;
+  await admin`delete from appointments where public_token like 'today-%' or public_token like 'demo-%'`;
   await admin`delete from hospitals where slug = 'demo-hospital'`;
   await admin`delete from users where email in (${EMAIL}, 'reception@demo.hospital')`;
+  await admin`set session_replication_role = 'origin'`;
 
   // 3. Create Multi-Specialty Hospital
   console.log('  → Creating hospital & branches...');

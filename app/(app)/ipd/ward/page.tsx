@@ -17,10 +17,10 @@ export const metadata = { title: 'Ward · IPD' };
 export default async function WardPickerPage({ searchParams }: PageProps<'/ipd/ward'>) {
   const session = await requireSession();
   const params = await searchParams;
-  if (!can(session.role, 'ipd.record')) {
+  if (!can(session.role, 'ipd.view')) {
     return (
       <Card>
-        <EmptyState title="Recording is for the ward team" hint="Nurses and the desk record items here." />
+        <EmptyState title="Access restricted" hint="IPD view permissions required." />
       </Card>
     );
   }
