@@ -72,6 +72,25 @@ describe('Bedside eMAR Task Bucket Components', () => {
       expect(html).toContain('Withhold / Omit');
     });
 
+    it('renders scheduled task within 10-minute buffer as due right now without overdue alert', () => {
+      const withinBufferItem = {
+        ...mockDueItem,
+        scheduledTime: new Date(Date.now() - 6 * 60 * 1000), // 6 minutes past scheduled (within 10m buffer)
+        status: 'dueNow' as const,
+      };
+      const html = renderToString(
+        <EmarTaskCard
+          kind="scheduled"
+          dueItem={withinBufferItem}
+          onAdminister={() => {}}
+          onException={() => {}}
+        />,
+      );
+
+      expect(html).toContain('Due right now (within 10m buffer)');
+      expect(html).not.toContain('overdue');
+    });
+
     it('renders PRN item with indication and eligibility info', () => {
       const mockPrnItem: BedsidePrnItem = {
         orderId: 'ord-2',
@@ -257,6 +276,70 @@ describe('Bedside eMAR Task Bucket Components', () => {
       expect(html).toContain('A-102');
       expect(html).toContain('Pantoprazole 40mg IV');
       expect(html).toContain('Confirm Dose Administered');
+    });
+
+    it('renders on-time buffer badge when given within the 10-minute buffer', () => {
+      // Scheduled 4 minutes ago (within 10-minute buffer)
+      const scheduledTime = new Date(Date.now() - 4 * 60 * 1000);
+      const html = renderToString(
+        <AdministerModal
+          isOpen={true}
+          onClose={() => {}}
+          admissionId="adm-1"
+          dueItem={{
+            orderId: 'ord-1',
+            orderChainId: 'chain-1',
+            medicineId: 'med-1',
+            medicineName: 'Pantoprazole 40mg IV',
+            doseAmount: '40',
+            doseUnit: 'mg',
+            route: 'iv_push',
+            scheduleType: 'scheduled',
+            scheduledTime,
+            status: 'dueNow',
+          }}
+          patientName="Ramesh Verma"
+          bedLabel="A-102"
+          onSuccess={() => {}}
+        />,
+      );
+
+      expect(html).toContain('✓ On Time:');
+      expect(html).toContain('10-minute buffer window');
+      expect(html).not.toContain('⚠️ Medication Delayed');
+    });
+
+    it('renders prominent delayed medication warning and prompts for reason when exceeds 10-minute buffer', () => {
+      // Scheduled 25 minutes ago (exceeds 10-minute buffer)
+      const scheduledTime = new Date(Date.now() - 25 * 60 * 1000);
+      const html = renderToString(
+        <AdministerModal
+          isOpen={true}
+          onClose={() => {}}
+          admissionId="adm-1"
+          dueItem={{
+            orderId: 'ord-1',
+            orderChainId: 'chain-1',
+            medicineId: 'med-1',
+            medicineName: 'Pantoprazole 40mg IV',
+            doseAmount: '40',
+            doseUnit: 'mg',
+            route: 'iv_push',
+            scheduleType: 'scheduled',
+            scheduledTime,
+            status: 'overdue',
+          }}
+          patientName="Ramesh Verma"
+          bedLabel="A-102"
+          onSuccess={() => {}}
+        />,
+      );
+
+      expect(html).toContain('⚠️');
+      expect(html).toContain('Medication Delayed');
+      expect(html).toContain('exceeds 10-minute buffer');
+      expect(html).toContain('Reason for Delay');
+      expect(html).toContain('-- Select reason for delay * --');
     });
   });
 

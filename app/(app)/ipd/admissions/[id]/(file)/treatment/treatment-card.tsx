@@ -918,12 +918,13 @@ function GiveForm(props: {
   const [clientId, setClientId] = useState(() => crypto.randomUUID());
   const [at, setAt] = useState(() => localInput(new Date()));
   const due = useDuePicker(order, props.initialDue);
-  // Outside the window of the chosen due time: say why (required in enforce).
+  const delayMinutes = due.dueAt ? Math.round((new Date(at).getTime() - new Date(due.dueAt).getTime()) / 60_000) : 0;
+  // 10-minute buffer: doses up to 10 minutes past scheduled due time are on-time
+  const bufferAfter = Math.max(order.windowAfter || 0, 10);
   const offWindow = (() => {
     if (!due.dueAt) return null;
-    const delay = (new Date(at).getTime() - new Date(due.dueAt).getTime()) / 60_000;
-    if (delay > order.windowAfter) return 'late';
-    if (delay < -order.windowBefore) return 'early';
+    if (delayMinutes > bufferAfter) return 'late';
+    if (delayMinutes < -order.windowBefore) return 'early';
     return null;
   })();
   const [code, setCode] = useState('');
@@ -997,11 +998,40 @@ function GiveForm(props: {
       ) : stockTracked && props.stores.length === 1 ? (
         <p className="text-xs text-ink-600">Comes off {props.stores[0].name}’s stock, earliest expiry first.</p>
       ) : null}
-      {offWindow ? (
+      {offWindow === 'late' ? (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-950 font-medium space-y-1">
+          <div className="flex items-center gap-1.5 font-bold text-amber-900">
+            <span>⚠️ Medication Delayed</span>
+            <span className="rounded bg-amber-200 px-1.5 py-0.5 text-[11px] font-semibold text-amber-900">
+              +{delayMinutes} min late
+            </span>
+          </div>
+          <p className="text-amber-900">
+            This medication is delayed by {delayMinutes} minutes (exceeds the 10-minute buffer). You have delayed this medication — please specify the clinical reason for the delay:
+          </p>
+          <label className="block pt-1 text-xs font-semibold text-amber-950">
+            Reason for delay {props.enforce ? <span className="text-rose-500">* (Required)</span> : '(Asked; not required yet)'}
+            <input
+              name="timingReason"
+              required={props.enforce}
+              maxLength={200}
+              placeholder="e.g. Patient away for scan, cannula re-sited, delayed after meal"
+              className={cn(field, 'mt-1 bg-white')}
+            />
+          </label>
+        </div>
+      ) : offWindow === 'early' ? (
         <label className="block text-sm font-medium text-amber-900">
-          {offWindow === 'late' ? 'Given after its window' : 'Given before its window'}: why? {props.enforce ? '' : '(asked; not required yet)'}
+          Given before its window: why? {props.enforce ? '' : '(asked; not required yet)'}
           <input name="timingReason" required={props.enforce} maxLength={200} className={field} />
         </label>
+      ) : due.dueAt ? (
+        <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-900">
+          <span className="font-bold text-emerald-800">✓ On Time</span>
+          <span className="text-emerald-700">
+            {delayMinutes > 0 ? `Given within 10-minute buffer (+${delayMinutes}m)` : 'Given on schedule'}
+          </span>
+        </div>
       ) : null}
       {late ? (
         <label className="block text-sm font-medium text-ink-700">

@@ -27,8 +27,12 @@ function formatScheduledTime(date: Date): string {
 
 function formatRelativeSchedule(date: Date): { text: string; isPast: boolean } {
   const diffMins = Math.round((new Date(date).getTime() - Date.now()) / 60000);
-  if (Math.abs(diffMins) < 5) return { text: 'Due right now', isPast: false };
-  if (diffMins < 0) {
+  // 10-minute grace buffer: doses up to 10 minutes past scheduled time are on-time / due right now
+  if (diffMins <= 0 && Math.abs(diffMins) <= 10) {
+    return { text: 'Due right now (within 10m buffer)', isPast: false };
+  }
+  if (diffMins > 0 && diffMins < 5) return { text: 'Due right now', isPast: false };
+  if (diffMins < -10) {
     const minsPast = Math.abs(diffMins);
     if (minsPast < 60) return { text: `${minsPast}m overdue`, isPast: true };
     const hrs = Math.floor(minsPast / 60);

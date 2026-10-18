@@ -307,13 +307,14 @@ export function instancesFor(args: {
   return out;
 }
 
-/** How a give stands against the due time it answers: for the dose row (timing_status, delay_min). */
+/** How a give stands against the due time it answers: for the dose row (timing_status, delay_min). Includes at least a 10-minute grace buffer after due time. */
 export function timingOfGive(args: { dueAt: Date; occurredAt: Date; windowBeforeMin: number; windowAfterMin: number }): {
   status: 'on_time' | 'late' | 'early';
   delayMin: number;
 } {
   const delayMin = Math.round((args.occurredAt.getTime() - args.dueAt.getTime()) / MIN);
-  if (delayMin > args.windowAfterMin) return { status: 'late', delayMin };
+  const effectiveWindowAfter = Math.max(args.windowAfterMin, 10);
+  if (delayMin > effectiveWindowAfter) return { status: 'late', delayMin };
   if (delayMin < -args.windowBeforeMin) return { status: 'early', delayMin };
   return { status: 'on_time', delayMin };
 }
