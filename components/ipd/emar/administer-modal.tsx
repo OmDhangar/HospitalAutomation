@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useMemo, useState, useTransition } from 'react';
 import { Button, cn } from '@/components/ui';
 import type { BedsideDueItem } from '@/lib/services/ipd-emar';
 import type { AllergenItem } from '@/lib/services/ipd-rounding-cockpit';
@@ -57,11 +57,55 @@ export function AdministerModal({
     minute: '2-digit',
   });
 
+  // 10-minute grace buffer: doses up to 10 minutes past scheduled time are on-time
+  const BUFFER_MINUTES = 10;
+
+  const { delayMinutes, isDelayed, isWithinBuffer } = useMemo(() => {
+    if (!dueItem?.scheduledTime) {
+      return { delayMinutes: 0, isDelayed: false, isWithinBuffer: false };
+    }
+    const scheduled = new Date(dueItem.scheduledTime);
+    let actual = new Date(scheduled);
+    if (actualTimeStr) {
+      const [h, m] = actualTimeStr.split(':').map(Number);
+      if (!isNaN(h) && !isNaN(m)) {
+        actual.setHours(h, m, 0, 0);
+        // Handle crossover across midnight if scheduled at 23:50 and given at 00:05
+        if (actual.getTime() - scheduled.getTime() < -12 * 3600000) {
+          actual.setDate(actual.getDate() + 1);
+        } else if (actual.getTime() - scheduled.getTime() > 12 * 3600000) {
+          actual.setDate(actual.getDate() - 1);
+        }
+      }
+    }
+    const diffMs = actual.getTime() - scheduled.getTime();
+    const diffMins = Math.round(diffMs / 60000);
+    const delayed = diffMins > BUFFER_MINUTES;
+    const withinBuffer = diffMins >= 0 && diffMins <= BUFFER_MINUTES;
+    return { delayMinutes: diffMins, isDelayed: delayed, isWithinBuffer: withinBuffer };
+  }, [actualTimeStr, dueItem?.scheduledTime]);
+
   const handleConfirm = () => {
     setErrorMsg(null);
     if (!doseGiven.trim()) {
       setErrorMsg('Please specify the dose given.');
       return;
+    }
+
+    const effectiveReason = timingReason === 'Other' ? customTimingReason.trim() : timingReason.trim();
+
+    // If medication is delayed past the 10-minute buffer, require a specific clinical delay reason
+    if (isDelayed) {
+      if (!effectiveReason) {
+        setErrorMsg(
+          `This medication is delayed by ${delayMinutes} minutes (past the 10-minute buffer). You have delayed this medication — please select a clinical reason for the delay.`,
+        );
+        return;
+      }
+      if (timingReason === 'Other' && !customTimingReason.trim()) {
+        setErrorMsg('Please specify the clinical reason for the medication delay.');
+        return;
+      }
     }
 
     startTransition(async () => {
@@ -76,10 +120,11 @@ export function AdministerModal({
           }
         }
 
-        const effectiveReason = timingReason === 'Other' ? customTimingReason.trim() : timingReason.trim();
         let finalClinicalNote = siteNote.trim();
         if (effectiveReason) {
-          const timingPrefix = `[Timing deviation: Scheduled ${formattedScheduled}, Given at ${actualTimeStr} — Reason: ${effectiveReason}]`;
+          const timingPrefix = isDelayed
+            ? `[Timing deviation: Scheduled ${formattedScheduled}, Given at ${actualTimeStr} (+${delayMinutes}m late) — Reason: ${effectiveReason}]`
+            : `[Timing note: ${effectiveReason}]`;
           finalClinicalNote = finalClinicalNote ? `${timingPrefix} ${finalClinicalNote}` : timingPrefix;
         }
 
@@ -221,6 +266,32 @@ export function AdministerModal({
             </div>
           </div>
 
+          {/* Timing Buffer & Delay Indication Banner */}
+          {isDelayed ? (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-950 space-y-1 shadow-2xs">
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 font-bold text-amber-900">
+                  <span>⚠️</span> Medication Delayed
+                </span>
+                <span className="rounded-md bg-amber-200 px-2 py-0.5 text-[11px] font-bold text-amber-900">
+                  +{delayMinutes} min late
+                </span>
+              </div>
+              <p className="text-amber-900 leading-relaxed">
+                This dose was scheduled for <strong>{formattedScheduled}</strong> and is being given at <strong>{actualTimeStr}</strong> ({delayMinutes} minutes late, exceeds 10-minute buffer). You have delayed this medication — <strong>please select a clinical reason for the delay</strong>.
+              </p>
+            </div>
+          ) : isWithinBuffer ? (
+            <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-900">
+              <span className="font-bold text-emerald-800">✓ On Time:</span>
+              <span className="text-emerald-700">
+                {delayMinutes > 0
+                  ? `Given within the 10-minute buffer window (+${delayMinutes}m). No delay reason required.`
+                  : 'Given on scheduled slot.'}
+              </span>
+            </div>
+          ) : null}
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-ink-700">
@@ -234,21 +305,38 @@ export function AdministerModal({
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-ink-700">
-                Timing Status / Deviation Reason
+              <label className={cn('block text-xs font-medium', isDelayed ? 'font-bold text-amber-900' : 'text-ink-700')}>
+                {isDelayed ? (
+                  <>
+                    Reason for Delay <span className="text-rose-500">* (Required)</span>
+                  </>
+                ) : (
+                  'Clinical Timing Note (Optional)'
+                )}
               </label>
               <select
                 value={timingReason}
                 onChange={(e) => setTimingReason(e.target.value)}
-                className="mt-1 w-full rounded-lg border border-ink-300 bg-white px-3 py-2 text-xs text-ink-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                className={cn(
+                  'mt-1 w-full rounded-lg border px-3 py-2 text-xs text-ink-900 focus:outline-none focus:ring-2',
+                  isDelayed
+                    ? 'border-amber-400 bg-amber-50/40 focus:ring-amber-500'
+                    : 'border-ink-300 bg-white focus:ring-emerald-500',
+                )}
               >
-                <option value="">Given on time / standard slot</option>
+                {isDelayed ? (
+                  <option value="">-- Select reason for delay * --</option>
+                ) : (
+                  <option value="">Given on time / standard slot</option>
+                )}
                 <option value="Patient away from ward (scan/X-ray/OT)">Patient away from ward (scan/X-ray/OT)</option>
                 <option value="Patient was sleeping / resting">Patient was sleeping / resting</option>
-                <option value="Delayed after meal / food timing requirement">Delayed after meal / food requirement</option>
+                <option value="Delayed after meal / food timing requirement">Delayed after meal / food timing requirement</option>
                 <option value="Doctor verbal instruction to delay">Doctor verbal instruction to delay</option>
                 <option value="IV cannula re-siting in progress">IV cannula re-siting in progress</option>
                 <option value="Patient requested delay">Patient requested delay</option>
+                <option value="Nurse occupied with emergency / critical patient">Nurse occupied with emergency / critical patient</option>
+                <option value="Pharmacy delivery / medication supply delay">Pharmacy delivery / medication supply delay</option>
                 <option value="Other">Other clinical reason</option>
               </select>
             </div>
