@@ -8,7 +8,7 @@ import { LOCATION_KINDS, RISK_KINDS } from '@/lib/domain/stock';
 import { listBranches } from '@/lib/services/auth';
 import { listWardSetup } from '@/lib/services/ipd-config';
 import { listLocations, listMedicinesForStock, listRiskClasses } from '@/lib/services/stock';
-import { createLocationAction, createRiskClassAction, setLocationActiveAction, setMedicineRiskClassAction } from './actions';
+import { createLocationAction, createRiskClassAction, setLocationActiveAction, setMedicineRiskClassAction, setRiskClassWitnessAction } from './actions';
 
 export const metadata = { title: 'Stock · Settings' };
 
@@ -120,8 +120,20 @@ export default async function StockSettingsPage({ searchParams }: PageProps<'/se
         {classes.length > 0 ? (
           <ul className="divide-y divide-ink-100">
             {classes.map((c) => (
-              <li key={c.id} className="px-4 py-2.5 text-sm sm:px-5">
-                <strong>{c.name}</strong> · {RISK_KINDS[c.kind]} · counted {c.countEvery} · {c.medicines} medicine{c.medicines === 1 ? '' : 's'}
+              <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-sm sm:px-5">
+                <span>
+                  <strong>{c.name}</strong> · {RISK_KINDS[c.kind]} · counted {c.countEvery} · {c.medicines} medicine{c.medicines === 1 ? '' : 's'}
+                  {c.kind === 'ndps' || c.witnessAtGive ? ' · witness at every give' : ''}
+                </span>
+                {c.kind !== 'ndps' ? (
+                  <form action={setRiskClassWitnessAction}>
+                    <input type="hidden" name="riskClassId" value={c.id} />
+                    <input type="hidden" name="witnessAtGive" value={String(!c.witnessAtGive)} />
+                    <Button type="submit" variant="ghost" size="sm" className="h-11">
+                      {c.witnessAtGive ? 'No witness at give' : 'Witness at every give'}
+                    </Button>
+                  </form>
+                ) : null}
               </li>
             ))}
           </ul>

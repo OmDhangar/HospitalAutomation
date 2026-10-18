@@ -141,15 +141,8 @@ describe('tabs and print sheets', () => {
 
   it('shows the Summary tab to every IPD role', () => {
     for (const role of ['owner', 'receptionist', 'doctor', 'nurse'] as const) {
-      expect(fileTabsFor(states, role).map((t) => t.slug)).toContain('');
+      expect(fileTabsFor(states, role).map((t) => t.slug)).toEqual(['']);
     }
-    // Receptionist only has ipd.view, so they see only Summary
-    expect(fileTabsFor(states, 'receptionist').map((t) => t.slug)).toEqual(['']);
-    // Nurse has ipd.administer, so they see Summary and treatment
-    expect(fileTabsFor(states, 'nurse').map((t) => t.slug)).toEqual(['', 'treatment']);
-    // Doctor and owner have ipd.prescribe and ipd.administer
-    expect(fileTabsFor(states, 'doctor').map((t) => t.slug)).toEqual(['', 'rounds', 'treatment']);
-    expect(fileTabsFor(states, 'owner').map((t) => t.slug)).toEqual(['', 'rounds', 'treatment']);
   });
 
   it('offers the file cover for printing', () => {

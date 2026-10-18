@@ -434,3 +434,151 @@ session, channel or device (none was ever recorded on an entry or access-log row
 (the identity definer functions saw none), or — for a support session — its read-only flag at the
 database (the app's own checks still refused writes). Tests passed because they always set the
 context explicitly; `lib/db/__tests__/request-context.test.ts` now also covers the per-request path.
+
+### ADR-032 · Test follow-up: per-lab clock, the lab's own staff call, the admin sees what was missed
+*11 Oct 2026 · IPD sheets plan Rev 5.1, phase C4a (D-LABCLOCK, D-LABFU, D-LABMSG)*
+
+**Decision:** A test the doctor orders is done at a service point (a lab or a room) with its own
+staff. If the patient has not arrived within the service point's set time — counted from the order
+or from payment, per service point, 30 minutes by default — the patient goes on that staff's list as
+"call now"; if nobody calls within 15 more minutes it is raised to the owner. The staff call (no
+WhatsApp), read the way to the lab in the patient's language, and record what the patient said;
+"went home" and "refused" close the test. Every assigned person counts as on duty: there is no
+roster. OPD tests go on the visit's bill so the desk's Paid tap starts a payment clock; ward tests
+are billed at discharge and always count from the order. Each order keeps the clock it was ordered
+under. The sweep stamps the moment a task was raised and escalated (for the evidence log); the
+screens compute the same states from the times. Orders move forward only and calls are append-only,
+enforced by the database.
+
+**Why:** the pilot hospital's admin asked for it: patients sent for a test get lost or go home, and
+nobody knows until the doctor asks for the report. Making it the lab's own staff's job, with a
+deadline and an escalation, and showing the owner each lab's day and each person's calls, closes the
+loop without a new role or messages that cost money and carry patient data.
+
+### ADR-033 · MAR controls: flags before enforce, typed bed codes, witness at give first
+*11 Oct 2026 · IPD sheets plan B3-min (§7.2, D-WITNESS, D-ORD)*
+
+**Decision:** The treatment card takes any medicine; the controls apply to risk-class medicines only.
+Until the module's stage is `enforce`, a dose missing its countersign, bedside proof or witness is
+saved with a flag on the row (`control_flags`), never refused and never silently passed; in `enforce`
+it is refused with the reason. Bedside proof is the bed's 6-character code (no 0/O/1/I/L) typed within
+5 minutes before the give; QR labels and camera scanning come later on the same code. A witness is
+taken at give (NDPS always, IV psychotropics, and classes the owner marks): on the ward tablet by the
+witness's own PIN, or by approval in the witness's own session — never by typing a PIN on someone
+else's phone. Witness at waste waits for B4b, where waste posts to the stock ledger. A dose is saved
+at once and waits for its witness; a missing witness after 15 minutes is a flag, not a delay to care.
+
+**Why:** the pilot ward needs a few weeks of real use to see how often each control would fire before
+any of them blocks a nurse at the bedside (§12 stages); recording what was missing gives that data
+and the evidence log a trail from day one. Typed codes work on every phone today; `BarcodeDetector`
+is missing from many browsers and printing QR needs a generator we have not chosen.
+
+### ADR-034 · Due times are computed, not stored; time-critical alerts wait for a signed list
+*11 Oct 2026 · IPD sheets plan B3b (§7.3, D-TIMECRIT, D-ESC)*
+
+**Decision:** A treatment line stores its timing (clock times or every N hours from a first dose,
+and whether a late dose keeps the schedule or shifts it); due instances are computed from that and
+the doses recorded against them by one pure function (`lib/domain/due.ts`) used by the server, the
+due board in the browser and the round-list print. Nothing per instance is stored except what
+happened: a dose carries the `due_at` it answers, its timing status and delay, and a reason when
+late or early; snoozes and escalations are their own append-only rows. Windows are two-sided (30
+minutes for time-critical medicines, 60 for others, per medicine where the list says so). Escalation:
+L1 to the ward (nurse in charge) at window end + 15 minutes, L2 to the on-call doctor (else the
+ordering doctor) at + 45. Stages: in `observe` escalations are counted only (`mode = 'observe'`); in
+`warn` L1 is shown; in `enforce` L1 and L2 are shown and a late or early dose needs a reason. A
+medicine is treated as time-critical only after a doctor has signed off the hospital's list and its
+windows; any later change to the list or windows clears the sign-off until signed again. The due
+board keeps its last payload on the tablet and recomputes statuses offline, showing how old the data
+is; doses are still recorded online only.
+
+**Why:** stored instances drift the moment an order is changed, stopped or a dose is shifted; computing
+them keeps one source of truth and lets the board work from a cached payload. The sign-off gate is
+D-TIMECRIT: a vendor's starter list must not page a doctor until a clinician owns it (legal item L8).
+Showing escalations only from `warn` gives the pilot ward data on how often alerts would fire (and a
+once-a-shift "too many / about right / too few" answer) before anyone is woken by them. Nurses'
+timing is reported per ward and hour as a staffing signal (`due_rollups_daily`), never per person.
+
+**QR codes:** the bed label carries `QB1:` + the bed code as a QR made by our own encoder
+(`lib/qr/encode.ts`: byte and alphanumeric modes, versions 1–10, all ECC levels, checked against the
+ISO 18004 worked example and decoded by jsQR in tests), not a dependency. Scanning uses the browser's
+`BarcodeDetector` where present; typing the code always works.
+
+### ADR-035 · Doses post to stock in the dose's own transaction; short is saved, never refused
+*11 Oct 2026 · IPD sheets plan B4b (§7.2, §7.3, D-WITNESS)*
+
+**Decision:** A risk-class dose given from the treatment card is taken off the ward's store in the
+same transaction as the dose: earliest unexpired batch first, across batches if needed, all or
+nothing, one ledger row per batch with the reference `mar:<dose>:<n>` (unique in the database, so a
+retried save cannot take stock twice). If the store cannot cover it — or another give took the
+last ampoule a moment earlier (a savepoint catches the balance CHECK) — the dose is still saved,
+marked `stock_status = 'short'`, and listed on the stock page for someone to take off a store by
+hand. A struck-out dose is put back by `reversal` rows referenced to the rows it took. Waste
+(`mar_wastes`) always needs a witness through the same witness requests as a give, and nothing
+comes off stock until the witness confirms it; the rest of an opened ampoule records the amount
+only, since its dose already took the ampoule. Posting happens only where both the treatment card
+and stock are in use for the ward (`marPostsStock`); there, counts stop asking for the paper
+register's "used" figure and giving doses no longer counts as having moved the store's stock (it is
+not issuing). D13 runs in observe: stores, counters and shifts with differences on two or more
+counts in 7 days are listed for approvers, with no alert and no case.
+
+**Why:** the books must never block or delay a dose (§7.2: never delays care), yet every dose has to
+reach the ledger exactly once for the counts to mean anything; a short list keeps the gap visible
+and owned instead of silently failing. Keeping the ledger free of patient ids keeps it out of the
+clinical key: the patient-wise register joins the doses (clinical) to the ledger by reference.
+
+### ADR-036 · Allergies belong to the patient; a match asks for a reason, it never blocks
+*11 Oct 2026 · IPD sheets plan B2 (§8)*
+
+**Decision:** Allergies are stored per patient (`patient_allergies`), not per stay, so they follow the
+patient into every admission; "asked: none known" and "could not ask" are separate review rows, so
+the file can say *not asked yet* instead of implying "none". When a doctor writes a medicine line,
+it is matched against the patient's medicine allergies by the same medicine, the allergy's words in
+the medicine's name or generic name, or the same drug class from a small class map (penicillins,
+cephalosporins, sulfa, NSAIDs, aspirin). A match refuses the line until the doctor writes why to go
+ahead; the matches and the reason are kept on the line (a CHECK requires the reason) and audited.
+Allergies recorded after a line was written still show on it. The matching is labelled decision
+support, not an interaction database. Medication reconciliation keeps the home medicines and the
+discharge list as items with a doctor's decision, completed by a doctor's own login (append-only
+sign-offs; the latest counts); the discharge list is started from the active card lines and the
+home medicines continued or held. Deposit alerts are computed on read from the bill lines and
+payments (D-DEP: 80% of the deposit used, or more than ₹5,000 owed; both hospital settings).
+
+**Why:** a hard block on a name match would stop legitimate care (test doses, no alternative) and
+teach staff to work around it; a written reason keeps the decision with the doctor and on record.
+A per-stay allergy list would be re-asked and re-typed every admission and miss old reactions.
+
+### ADR-037 · Doctor's notes write their vitals to the chart, once
+*11 Oct 2026 · IPD sheets plan C3*
+
+**Decision:** The case sheet and progress notes are one table (`ipd_notes`) in the paper's sections,
+one live case sheet per stay (partial unique index), struck out never edited. A note written from
+the named doctor's own login is signed; a nurse/RMO may transcribe it for the doctor, and only that
+doctor's login countersigns. The O/E vitals start from the latest chart reading within 2 hours of
+the time seen: if the doctor keeps them the note links that reading; if they change them (or there
+is none) the note writes one `chart_entries` row with `source = 'doctor_note'` in the same
+transaction and links it. Striking out the note voids a reading it wrote, never one it only
+confirmed. When the chart module is off for the ward, the vitals stay on the note only.
+
+**Why:** two places holding the same vitals drift; a doctor re-measuring at the bedside is a real
+reading the nurses and the early-warning score should see, and an unchanged prefill must not create
+a duplicate.
+
+### ADR-038 · Discharge summary: a free draft outside the record, numbered signed versions in it
+*11 Oct 2026 · IPD sheets plan B5*
+
+**Decision:** The summary being written lives in `discharge_summary_drafts` (one per stay, edited
+freely, not the record). The draft starts from the record deterministically — no AI: diagnosis from
+the case sheet's "Case of" (else the admission reason), complaints, history and findings from the
+case sheet, investigations from the test orders, treatment given from the card, the course from the
+progress notes, and the medicines from the completed discharge reconciliation (else the active card
+lines, marked "not reconciled"); follow-up, diet and warning signs start from plain defaults.
+"Fill again from the record" refreshes only the record's sections. Finalising writes
+`discharge_summaries` version n (never edited; version 2+ supersedes the previous with a reason):
+signed at once from the responsible doctor's own login, otherwise waiting for that doctor's
+signature (banner). Anything not signed prints with DRAFT and "NOT SIGNED"; sharing (C5) will offer
+only a signed version.
+
+**Why:** doctors edit a summary many times before it is right, and a half-written draft must never
+be mistaken for the record; once handed over, a summary must stay exactly as signed, so a correction
+is a new, explained version.
+

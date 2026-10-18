@@ -109,3 +109,41 @@ export const isBillLinkLive = (args: {
   revokedAt: Date | null;
   now: Date;
 }): boolean => !args.revokedAt && (args.expiresAt === null || args.expiresAt.getTime() > args.now.getTime());
+
+/* ---------------------------------------------------------------- deposit alerts (B2) */
+
+/** D-DEP: alert when the charges reach 80% of what was paid, or more than ₹5,000 is owed. Hospital settings. */
+export type DepositAlertSettings = { usedPct: number; balancePaise: number };
+export const DEFAULT_DEPOSIT_ALERT: DepositAlertSettings = { usedPct: 80, balancePaise: 500_000 };
+
+export function depositAlertSettingsFrom(raw: Record<string, unknown> | null | undefined): DepositAlertSettings {
+  const pct = raw?.usedPct;
+  const rupees = raw?.balanceRupees;
+  return {
+    usedPct: typeof pct === 'number' && Number.isInteger(pct) && pct >= 50 && pct <= 100 ? pct : DEFAULT_DEPOSIT_ALERT.usedPct,
+    balancePaise:
+      typeof rupees === 'number' && Number.isInteger(rupees) && rupees >= 0 && rupees <= 10_00_000 ? rupees * 100 : DEFAULT_DEPOSIT_ALERT.balancePaise,
+  };
+}
+
+export type DepositAlert = {
+  /** 'used': the deposit is mostly used up; 'owed': the patient owes more than the limit. */
+  reason: 'used' | 'owed';
+  usedPct: number | null;
+  balancePaise: number;
+};
+
+/**
+ * Should the desk ask for more deposit? Owed beyond the limit wins (it is
+ * already money at risk); otherwise the deposit used up past the percentage.
+ * Nothing charged yet, or nothing at all: no alert.
+ */
+export function depositAlert(args: { totalPaise: number; paidPaise: number; settings: DepositAlertSettings }): DepositAlert | null {
+  const { totalPaise, paidPaise, settings } = args;
+  if (totalPaise <= 0) return null;
+  const balancePaise = totalPaise - paidPaise;
+  const usedPct = paidPaise > 0 ? Math.floor((totalPaise * 100) / paidPaise) : null;
+  if (balancePaise > settings.balancePaise) return { reason: 'owed', usedPct, balancePaise };
+  if (usedPct !== null && usedPct >= settings.usedPct) return { reason: 'used', usedPct, balancePaise };
+  return null;
+}

@@ -123,3 +123,70 @@ describe('adjustments', () => {
     expect(() => adjustmentQuantity('found', 'out', 1)).toThrow(/only add stock/);
   });
 });
+
+describe('B4b: doses from the treatment card', () => {
+  const b = (batchId: string, expiryDate: string, quantity: number) => ({ batchId, batchNo: batchId, expiryDate, quantity });
+
+  it('draws a dose earliest expiry first, across batches, all or nothing', async () => {
+    const { planDraw } = await import('@/lib/domain/stock');
+    const shelf = [b('LATE', '2028-01-31', 5), b('SOON', '2027-01-31', 2)];
+    expect(planDraw(shelf, 1)).toEqual([{ batchId: 'SOON', quantity: 1 }]);
+    expect(planDraw(shelf, 4)).toEqual([{ batchId: 'SOON', quantity: 2 }, { batchId: 'LATE', quantity: 2 }]);
+    expect(planDraw(shelf, 7)).toHaveLength(2);
+    expect(planDraw(shelf, 8)).toBeNull();
+    expect(planDraw(shelf, 0)).toEqual([]);
+  });
+
+  it('reconciles opening + movements to closing, keeping the card apart from the paper register', async () => {
+    const { reconcile } = await import('@/lib/domain/stock');
+    const from = new Date('2026-10-10T02:30:00Z');
+    const to = new Date('2026-10-11T02:30:00Z');
+    const at = (iso: string) => new Date(iso);
+    const lines = reconcile(
+      [
+        { batchId: 'A', kind: 'receive', source: 'app', quantity: 10, occurredAt: at('2026-10-09T10:00:00Z') },
+        { batchId: 'A', kind: 'give', source: 'manual_register', quantity: -2, occurredAt: at('2026-10-09T12:00:00Z') },
+        { batchId: 'A', kind: 'transfer_in', source: 'app', quantity: 5, occurredAt: at('2026-10-10T03:00:00Z') },
+        { batchId: 'A', kind: 'give', source: 'mar', quantity: -3, occurredAt: at('2026-10-10T04:00:00Z') },
+        { batchId: 'A', kind: 'reversal', source: 'mar', quantity: 1, occurredAt: at('2026-10-10T05:00:00Z') },
+        { batchId: 'A', kind: 'waste', source: 'mar', quantity: -1, occurredAt: at('2026-10-10T06:00:00Z') },
+        { batchId: 'A', kind: 'give', source: 'manual_register', quantity: -1, occurredAt: at('2026-10-10T07:00:00Z') },
+        { batchId: 'A', kind: 'transfer_out', source: 'app', quantity: -2, occurredAt: at('2026-10-10T08:00:00Z') },
+        { batchId: 'A', kind: 'count_variance', source: 'app', quantity: -1, occurredAt: at('2026-10-10T09:00:00Z') },
+        { batchId: 'A', kind: 'adjust', source: 'app', quantity: 2, occurredAt: at('2026-10-10T10:00:00Z') },
+        { batchId: 'A', kind: 'give', source: 'mar', quantity: -4, occurredAt: at('2026-10-11T03:00:00Z') }, // after the period
+        { batchId: 'B', kind: 'receive', source: 'app', quantity: 3, occurredAt: at('2026-10-01T00:00:00Z') },
+        { batchId: 'C', kind: 'receive', source: 'app', quantity: 3, occurredAt: at('2026-10-01T00:00:00Z') },
+        { batchId: 'C', kind: 'return', source: 'app', quantity: -3, occurredAt: at('2026-10-02T00:00:00Z') },
+      ],
+      from,
+      to,
+    );
+    expect(lines.find((l) => l.batchId === 'A')).toEqual({
+      batchId: 'A', opening: 8, received: 0, transferredIn: 5, sentOut: 2, givenMar: 3, givenRegister: 1, wasted: 1, returned: 0,
+      adjusted: 2, countDifference: -1, putBack: 1, closing: 8,
+    });
+    expect(lines.find((l) => l.batchId === 'B')).toMatchObject({ opening: 3, closing: 3 });
+    // A batch with nothing before, during or at the end of the period is left out.
+    expect(lines.some((l) => l.batchId === 'C')).toBe(false);
+  });
+
+  it('D13: two counts with a difference in 7 days on one store, counter or shift', async () => {
+    const { shiftOf, varianceRecurrence } = await import('@/lib/domain/stock');
+    expect(shiftOf(new Date('2026-10-10T03:00:00Z'), 'Asia/Kolkata')).toBe('morning'); // 08:30 IST
+    expect(shiftOf(new Date('2026-10-10T09:00:00Z'), 'Asia/Kolkata')).toBe('evening'); // 14:30
+    expect(shiftOf(new Date('2026-10-10T15:00:00Z'), 'Asia/Kolkata')).toBe('night'); // 20:30
+    const now = new Date('2026-10-11T00:00:00Z');
+    const e = (countId: string, locationId: string, person: string, daysAgo: number, shift: 'morning' | 'evening' | 'night' = 'morning') => ({
+      countId, locationId, countedByUserId: person, approvedAt: new Date(now.getTime() - daysAgo * 86_400_000), shift,
+    });
+    const flags = varianceRecurrence([e('c1', 'W1', 'asha', 1), e('c2', 'W1', 'bina', 3, 'night'), e('c3', 'W2', 'asha', 2, 'night'), e('c4', 'W2', 'chaya', 9)], now);
+    expect(flags.map((f) => [f.on, f.key, f.counts]).sort()).toEqual([
+      ['location', 'W1', 2],
+      ['person', 'asha', 2],
+      ['shift', 'night', 2],
+    ]);
+    // One count, however many lines differ, is one count.
+    expect(varianceRecurrence([e('c1', 'W1', 'asha', 1), e('c1', 'W1', 'asha', 1)], now)).toEqual([]);
+  });
+});

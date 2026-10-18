@@ -10,6 +10,9 @@ import { expireStalePaymentLinks } from './payments';
 import { applyQueueAction, resumeAppointment } from './queue';
 import { loadDaySessionsInTx } from './scheduling';
 import { expireLapsedSubscriptions } from './subscriptions';
+import { raiseTestFollowUps } from './test-order-clock';
+import { sweepWitnesses } from './mar';
+import { computeDueRollups, sweepDueEscalations } from './due';
 
 /**
  * The housekeeping nobody was running.
@@ -164,7 +167,11 @@ export async function resumePausedAppointments(now: Date = new Date()): Promise<
 const SLOT_SESSION_LOOKAHEAD_MS = 4 * 60 * 60 * 1000;
 
 /** Monthly-partitioned tables (plan §9.4 rule 8) and how far ahead their months are made. */
-const PARTITIONED_TABLES = ['chart_entries', 'acct_events'] as const;
+/** The due roll-ups (B3b) are refreshed hourly, never per request. */
+const DUE_ROLLUP_EVERY_MS = 60 * 60 * 1000;
+let dueRollupsAt = 0;
+
+const PARTITIONED_TABLES = ['chart_entries', 'acct_events', 'mar_administrations'] as const;
 const PARTITION_MONTHS_AHEAD = 12;
 const PARTITION_CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 let partitionsCheckedAt = 0;
@@ -275,6 +282,14 @@ export type SweepResult = {
   paymentLinksExpired: number;
   /** IPD room charges posted (T1.10): one line per occupied bed per day. */
   bedDaysCharged: number;
+  /** Test follow-up (C4a): "not arrived" tasks raised, and those raised to the admin. */
+  testTasksRaised: number;
+  testTasksEscalated: number;
+  /** MAR (B3-min): witness requests closed unanswered, and gives flagged as unwitnessed after 15 minutes. */
+  witnessRequestsExpired: number;
+  witnessesLate: number;
+  /** B3b: live escalations of late time-critical doses raised this tick. */
+  dueEscalations: number;
 };
 
 /**
@@ -292,6 +307,11 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
     subscriptionsExpired: 0,
     paymentLinksExpired: 0,
     bedDaysCharged: 0,
+    testTasksRaised: 0,
+    testTasksEscalated: 0,
+    witnessRequestsExpired: 0,
+    witnessesLate: 0,
+    dueEscalations: 0,
   };
 
   try {
@@ -367,9 +387,43 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
     console.error('[sweeps] bed-day charges failed', error);
   }
 
+  try {
+    // MAR witnesses (B3-min): close approval requests past 10 minutes; flag gives still unwitnessed after 15.
+    const witnesses = await sweepWitnesses(now);
+    result.witnessRequestsExpired = witnesses.expired;
+    result.witnessesLate = witnesses.late;
+  } catch (error) {
+    console.error('[sweeps] witness sweep failed', error);
+  }
+
+  try {
+    // Time-critical doses (B3b): level 1 / level 2 escalations of overdue doses, every tick.
+    const escalations = await sweepDueEscalations(now);
+    result.dueEscalations = escalations.live;
+    if (escalations.observed > 0) console.log('[sweeps] escalations counted in observe', escalations.observed);
+    // The on-time figures, once an hour.
+    if (now.getTime() - dueRollupsAt >= DUE_ROLLUP_EVERY_MS) {
+      dueRollupsAt = now.getTime();
+      await computeDueRollups(now);
+    }
+  } catch (error) {
+    // Logged loudly: time-critical alerts depend on this sweep (plan §9 alerting).
+    console.error('[sweeps] CRITICAL due escalation sweep failed', error);
+  }
+
+  try {
+    // Test follow-up (C4a): stamps each "not arrived" task and each escalation to the admin.
+    const tests = await raiseTestFollowUps(now);
+    result.testTasksRaised = tests.raised;
+    result.testTasksEscalated = tests.escalated;
+  } catch (error) {
+    console.error('[sweeps] test follow-up failed', error);
+  }
+
   const total =
     result.appointmentsMarkedNoShow + result.appointmentsResumed + result.slotBookingsEnqueued +
-    result.subscriptionsExpired + result.paymentLinksExpired + result.bedDaysCharged;
+    result.subscriptionsExpired + result.paymentLinksExpired + result.bedDaysCharged +
+    result.testTasksRaised + result.testTasksEscalated + result.witnessRequestsExpired + result.witnessesLate + result.dueEscalations;
   if (total > 0) {
     console.log('[sweeps] completed', JSON.stringify(result));
   }

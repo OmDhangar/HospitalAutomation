@@ -8,6 +8,9 @@ import { OutboxStatus } from '@/components/ipd/outbox-status';
 import { requireSession } from '@/lib/auth/session';
 import { can } from '@/lib/domain/permissions';
 import { getIpdCensus } from '@/lib/services/ipd-census';
+import { getModuleStatesForRequest } from '@/lib/auth/modules';
+import { moduleAllows } from '@/lib/modules/registry';
+import { wardBadges } from '@/lib/services/due';
 
 export const metadata = { title: 'Ward grid · IPD' };
 
@@ -25,6 +28,9 @@ export default async function WardGridPage({ params }: PageProps<'/ipd/ward/[war
   const ward = census.wards.find((w) => w.id === wardId);
   if (!ward) notFound();
   const now = new Date();
+  // Due times (B3b): badges on the tiles and the way to the due board, once the treatment card is on.
+  const marOn = can(session.role, 'ipd.dueBoard') && moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'mar', 'read');
+  const badges = marOn ? await wardBadges({ hospitalId: session.hospitalId, wardId: ward.id, userId: session.userId, timezone: session.timezone, now }) : null;
 
   return (
     <div className="mx-auto max-w-xl space-y-4">
@@ -34,6 +40,11 @@ export default async function WardGridPage({ params }: PageProps<'/ipd/ward/[war
 
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-2xl font-bold text-ink-900">{ward.name}</h1>
+        {marOn ? (
+          <Link href={`/ipd/ward/${ward.id}/due`} className="inline-flex min-h-12 items-center rounded-lg bg-brand-600 px-3 font-semibold text-white hover:bg-brand-700">
+            Due board
+          </Link>
+        ) : null}
         {census.wards.length > 1 ? (
           <Link href="/ipd/ward?pick=1" className="inline-flex min-h-12 items-center rounded-lg px-3 font-semibold text-brand-700 hover:bg-brand-50">
             Change ward
@@ -57,6 +68,14 @@ export default async function WardGridPage({ params }: PageProps<'/ipd/ward/[war
           now={now}
           size="lg"
           hrefFor={(bed) => `/ipd/ward/${ward.id}/bed/${bed.id}`}
+          badgeFor={(bed) => {
+            const b = bed.occupant ? badges?.get(bed.occupant.admissionId) : undefined;
+            if (!b) return null;
+            if (b.escalated) return { text: `${b.overdue} overdue`, tone: 'escalated' };
+            if (b.overdue > 0) return { text: `${b.overdue} overdue`, tone: 'overdue' };
+            if (b.due > 0) return { text: `${b.due} due`, tone: 'due' };
+            return null;
+          }}
         />
       )}
     </div>

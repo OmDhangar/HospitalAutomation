@@ -353,7 +353,7 @@ export async function resetPin(args: { hospitalId: string; userId: string; actor
   invalidateSessionCache();
 }
 
-type PinCheck = { ok: true } | { ok: false; error: string; personLocked?: boolean; deviceLocked?: boolean };
+export type PinCheck = { ok: true } | { ok: false; error: string; personLocked?: boolean; deviceLocked?: boolean };
 
 /**
  * One PIN check, with both lock-outs: five wrong tries lock the person's PIN
@@ -421,6 +421,18 @@ async function checkPinInTx(
     return { ok: false, error: 'Too many wrong PINs. Wait 15 minutes, or use your password.', personLocked: true };
   }
   return { ok: false, error: 'Wrong PIN' };
+}
+
+/**
+ * A witness confirms a dose on a ward tablet with their own PIN (IPD sheets
+ * plan §7.2, D-WITNESS). The same counting and locking as an unlock. Its own
+ * transaction, so a wrong PIN is counted even though the witnessing fails.
+ */
+export async function verifyWitnessPin(args: { device: WardDevice; userId: string; pin: string; now?: Date }): Promise<PinCheck> {
+  const now = args.now ?? new Date();
+  return withTenant(args.device.hospitalId, (tx) =>
+    checkPinInTx(tx, { hospitalId: args.device.hospitalId, userId: args.userId, pin: args.pin, deviceId: args.device.id, now }),
+  );
 }
 
 /** "Who is recording?": people who may unlock this tablet, with a PIN set. */

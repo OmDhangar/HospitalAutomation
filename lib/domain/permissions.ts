@@ -129,6 +129,71 @@ const PERMISSIONS = {
   'stock.approve': ['owner', 'doctor'],
   'stock.configure': ['owner'],
 
+  /**
+   * The treatment card and the MAR (IPD sheets plan B3-min). A doctor writes
+   * and stops lines on the card (signed when the line names them); a nurse
+   * may write a telephone or verbal order, which waits for that doctor's
+   * countersign (only the named doctor's own login can countersign — the
+   * service checks it). Doses are recorded by clinical staff, and a
+   * risk-class give is witnessed by a second clinical person — never the
+   * same one (the database refuses that too).
+   */
+  'ipd.order': ['owner', 'doctor'],
+  'ipd.transcribe': ['owner', 'nurse'],
+  'ipd.countersign': ['owner', 'doctor'],
+  'ipd.witness': ['owner', 'doctor', 'nurse'],
+  /** Print the bed codes that prove a nurse is at the bedside. */
+  'ipd.bedCodes': ['owner'],
+  /**
+   * Due times (B3b): the ward's due board and snoozing a time-critical alert
+   * are the ward's; the windows, chime, roster and ward in-charge are the
+   * owner's; the time-critical list is the doctors' to set and sign off (the
+   * service checks the signer is linked to a doctor); the quality figures
+   * are the owner's.
+   */
+  'ipd.dueBoard': ['owner', 'doctor', 'nurse'],
+  'ipd.dueConfigure': ['owner'],
+  'ipd.tcList': ['owner', 'doctor'],
+  'ipd.dueQuality': ['owner'],
+
+  /**
+   * Allergies and medication reconciliation (B2). Any clinical person records
+   * an allergy or the patient's home medicines (the nurse usually asks first);
+   * the decisions on each medicine and completing the reconciliation are a
+   * doctor's (the service checks the signer is linked to a doctor). The
+   * deposit alert is the desk's, like the money it is about.
+   */
+  /**
+   * The doctor's case sheet and progress notes (C3): written by the doctor
+   * (signed) or transcribed by a nurse/RMO for the doctor, who countersigns
+   * (`ipd.countersign`; the service checks it is that doctor's own login).
+   */
+  /**
+   * The discharge summary (B5): the doctor finalises and signs; a nurse or RMO
+   * may prepare it and finalise it for the doctor, who signs it after.
+   */
+  'ipd.summary': ['owner', 'doctor'],
+  'ipd.summaryTranscribe': ['owner', 'nurse'],
+  'ipd.notes': ['owner', 'doctor'],
+  'ipd.notesTranscribe': ['owner', 'nurse'],
+  'ipd.allergy': ['owner', 'doctor', 'nurse'],
+  'ipd.medrecRecord': ['owner', 'doctor', 'nurse'],
+  'ipd.medrecDecide': ['owner', 'doctor'],
+  'ipd.depositAlerts': ['owner', 'receptionist'],
+
+  /**
+   * Test orders and follow-up (IPD sheets plan C4a). The doctor sends a
+   * patient for tests from OPD (on the ward it stays `ipd.orderTests`). Any
+   * staff member can be assigned to a lab or room and work its list — the
+   * service checks they are assigned there (the owner works every list). The
+   * day view per lab and per person, and the tasks raised to the admin, are
+   * the owner's; so is setting up the labs, rooms and their staff.
+   */
+  'tests.order': ['owner', 'doctor'],
+  'tests.work': ['owner', 'receptionist', 'doctor', 'nurse'],
+  'tests.oversee': ['owner'],
+  'tests.configure': ['owner'],
+
   /*
    * Patient identity (0039). Each list must equal the staff roles the matching
    * definer function accepts in SQL; permissions.test.ts compares them.

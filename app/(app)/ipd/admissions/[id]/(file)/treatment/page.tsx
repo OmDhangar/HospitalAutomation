@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation';
-import { requireModule, getModuleStatesForRequest } from '@/lib/auth/modules';
+import { requireModule } from '@/lib/auth/modules';
 import { requireSession } from '@/lib/auth/session';
 import { can } from '@/lib/domain/permissions';
 import { dayOfStay } from '@/lib/domain/admission';
@@ -24,14 +24,14 @@ export default async function BedsideTreatmentPage({
   params: Promise<{ id: string }>;
 }) {
   const session = await requireSession();
-  await requireModule(session, 'patient_file');
+  const states = await requireModule(session, 'mar');
   const { id } = await params;
 
   const admission = await loadAdmission(session.hospitalId, id);
   if (!admission) notFound();
 
-  // Load bedside eMAR data, allergy assessments, supply quick-picks, and module states in parallel
-  const [emarData, [currentAllergy], picks, states] = await Promise.all([
+  // Load bedside eMAR data, allergy assessments, and supply quick-picks in parallel
+  const [emarData, [currentAllergy], picks] = await Promise.all([
     getBedsideEmar({
       hospitalId: session.hospitalId,
       admissionId: id,
@@ -52,7 +52,6 @@ export default async function BedsideTreatmentPage({
         ),
     ),
     getQuickPicks({ hospitalId: session.hospitalId, admissionId: id }),
-    getModuleStatesForRequest(session.hospitalId),
   ]);
 
   const allergies: AllergenItem[] = (
@@ -61,13 +60,13 @@ export default async function BedsideTreatmentPage({
     typeof item === 'string'
       ? { substance: item }
       : {
-          substance: item.substance ?? String(item),
-          reaction: item.reaction,
-          severity:
-            item.severity === 'mild' || item.severity === 'moderate' || item.severity === 'severe'
-              ? item.severity
-              : undefined,
-        },
+        substance: item.substance ?? String(item),
+        reaction: item.reaction,
+        severity:
+          item.severity === 'mild' || item.severity === 'moderate' || item.severity === 'severe'
+            ? item.severity
+            : undefined,
+      },
   );
 
   const chartHref = moduleAllows(states, 'charts', 'read')

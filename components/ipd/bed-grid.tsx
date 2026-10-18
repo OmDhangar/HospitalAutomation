@@ -24,6 +24,7 @@ export function BedGrid({
   emptyHrefFor,
   selectedBedId,
   label,
+  badgeFor,
 }: {
   beds: readonly CensusBed[];
   timezone: string;
@@ -36,6 +37,8 @@ export function BedGrid({
   emptyHrefFor?: (bed: CensusBed) => string | null;
   selectedBedId?: string | null;
   label: string;
+  /** "1 due", "2 overdue" from the due board (B3b); red once a time-critical dose is escalated. */
+  badgeFor?: (bed: CensusBed) => { text: string; tone: 'due' | 'overdue' | 'escalated' } | null;
 }) {
   if (beds.length === 0) {
     return <p className="px-1 py-3 text-sm text-ink-500">No beds in this ward yet.</p>;
@@ -55,6 +58,7 @@ export function BedGrid({
         const isCleaning = !occupant && bed.status === 'cleaning';
         const href = occupant ? (hrefFor?.(bed) ?? null) : !isCleaning ? (emptyHrefFor?.(bed) ?? null) : null;
         const going = occupant?.status === 'discharge_ready';
+        const badge = occupant ? (badgeFor?.(bed) ?? null) : null;
         const body = (
           <>
             <span

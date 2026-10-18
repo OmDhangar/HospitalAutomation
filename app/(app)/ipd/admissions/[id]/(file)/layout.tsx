@@ -6,7 +6,8 @@ import { SheetTabs } from '@/components/ipd/sheet-tabs';
 import { requireModule } from '@/lib/auth/modules';
 import { requireSession } from '@/lib/auth/session';
 import { can } from '@/lib/domain/permissions';
-import { fileTabsFor, printSheetsFor } from '@/lib/modules/registry';
+import { fileTabsFor, moduleAllows, printSheetsFor } from '@/lib/modules/registry';
+import { getAllergies } from '@/lib/services/allergy';
 import { logRecordAccess } from '@/lib/services/record-access';
 import { loadAdmission } from './data';
 

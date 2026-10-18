@@ -64,14 +64,9 @@ export const MODULES = [
       '/api/ipd',
       '/print/ipd-bill',
       '/settings/ipd',
-      '/ipd/admissions/[id]/(file)/rounds',
-      '/ipd/admissions/[id]/(file)/emar',
-      '/ipd/admissions/[id]/(file)/treatment',
     ],
     fileTabs: [
       { slug: '', label: 'Summary', permission: 'ipd.view', order: 0 },
-      { slug: 'rounds', label: 'Doctor rounds', permission: 'ipd.prescribe', order: 5 },
-      { slug: 'treatment', label: 'Treatment & eMAR', permission: 'ipd.administer', order: 8 },
     ],
     printSheets: [],
     hasStages: false,
@@ -107,6 +102,106 @@ export const MODULES = [
     defaultState: 'off',
   },
   {
+    id: 'mar',
+    title: 'Treatment card and MAR',
+    description:
+      'The doctor’s treatment card and every dose given or not given. Telephone orders are countersigned by the doctor; risk-class doses need the bed’s code from a personal phone and a second person’s witness.',
+    tier: 'basic',
+    core: false,
+    dependsOn: ['patient_file'],
+    uses: ['stock'],
+    routes: [
+      '/ipd/admissions/[id]/(file)/treatment',
+      '/ipd/witness',
+      '/print/bed-codes',
+      '/ipd/ward/[wardId]/due',
+      '/api/ipd/due',
+      '/print/round-list',
+      '/settings/treatment',
+      '/ipd/quality',
+    ],
+    fileTabs: [{ slug: 'treatment', label: 'Treatment', permission: 'ipd.view', order: 20 }],
+    printSheets: [{ id: 'treatment', label: 'Treatment card and MAR', permission: 'ipd.view', order: 20 }],
+    // Observe: a missing countersign, bedside proof or witness is flagged on the dose. Enforce: refused.
+    hasStages: true,
+    // Off until the owner switches it on, ward by ward (plan §11.3 rule 8, §12).
+    defaultState: 'off',
+  },
+  {
+    id: 'doctor_notes',
+    title: 'Doctor’s notes',
+    description:
+      'The case sheet at admission (Case of, C/O, H/O, P/H, O/E, S/E, Adv) and daily progress notes, typed by the doctor or transcribed by a nurse and countersigned. Vitals on the note go on the T.P.R. chart.',
+    tier: 'basic',
+    core: false,
+    dependsOn: ['patient_file'],
+    uses: ['charts'],
+    routes: ['/ipd/admissions/[id]/(file)/notes'],
+    fileTabs: [{ slug: 'notes', label: 'Doctor’s notes', permission: 'ipd.view', order: 8 }],
+    printSheets: [{ id: 'notes', label: 'Case sheet and progress notes', permission: 'ipd.view', order: 8 }],
+    hasStages: false,
+    defaultState: 'off',
+  },
+  {
+    id: 'discharge_summary',
+    title: 'Discharge summary',
+    description:
+      'Drafted from the record (case sheet, tests, treatment, discharge medicines), edited by the doctor, finalised and signed as numbered versions. Unsigned prints as DRAFT.',
+    tier: 'basic',
+    core: false,
+    dependsOn: ['patient_file'],
+    uses: ['doctor_notes', 'med_reconciliation', 'mar', 'test_follow_up'],
+    routes: ['/ipd/admissions/[id]/(file)/discharge-summary'],
+    fileTabs: [{ slug: 'discharge-summary', label: 'Discharge summary', permission: 'ipd.view', order: 90 }],
+    printSheets: [{ id: 'discharge_summary', label: 'Discharge summary', permission: 'ipd.view', order: 90 }],
+    hasStages: false,
+    defaultState: 'off',
+  },
+  {
+    id: 'allergy',
+    title: 'Allergies',
+    description:
+      'What each patient is allergic to, kept with the patient for every stay; a banner on the file; and a check when a medicine is written on the treatment card (by name and drug class) that asks the doctor why before going ahead.',
+    tier: 'basic',
+    core: false,
+    dependsOn: ['patient_file'],
+    uses: ['mar'],
+    routes: ['/ipd/admissions/[id]/(file)/allergies'],
+    fileTabs: [{ slug: 'allergies', label: 'Allergies', permission: 'ipd.view', order: 5 }],
+    printSheets: [],
+    hasStages: false,
+    defaultState: 'off',
+  },
+  {
+    id: 'med_reconciliation',
+    title: 'Medication reconciliation',
+    description:
+      'The patient’s home medicines at admission and what goes home at discharge, each decided by the doctor (continue, hold, stop, change), and signed off. The discharge list prints on the discharge summary.',
+    tier: 'basic',
+    core: false,
+    dependsOn: ['patient_file'],
+    uses: ['mar'],
+    routes: ['/ipd/admissions/[id]/(file)/medicines'],
+    fileTabs: [{ slug: 'medicines', label: 'Home medicines', permission: 'ipd.view', order: 15 }],
+    printSheets: [{ id: 'medicines', label: 'Medication reconciliation', permission: 'ipd.view', order: 15 }],
+    hasStages: false,
+    defaultState: 'off',
+  },
+  {
+    id: 'deposit_alert',
+    title: 'Deposit alerts',
+    description: 'Tells the desk when a patient’s charges have used up most of the deposit, or more than a set amount is owed (80% and ₹5,000 to start).',
+    tier: 'basic',
+    core: false,
+    dependsOn: ['core_ipd'],
+    uses: [],
+    routes: ['/ipd/deposits'],
+    fileTabs: [],
+    printSheets: [],
+    hasStages: false,
+    defaultState: 'off',
+  },
+  {
     id: 'stock',
     title: 'Risk-class stock',
     description:
@@ -120,6 +215,23 @@ export const MODULES = [
     printSheets: [],
     // Observe: a count by someone who moved the stock is flagged. Enforce: it is refused.
     hasStages: true,
+    defaultState: 'off',
+  },
+  {
+    id: 'test_follow_up',
+    title: 'Test follow-up',
+    description:
+      'The doctor sends a patient for a test; the lab or room’s own staff see who has not arrived in time, call them and guide them (floor and section in Marathi, Hindi and English), and the owner sees the day’s pending tests per lab and who followed up.',
+    tier: 'basic',
+    core: false,
+    // OPD orders need nothing else; ward orders use the IPD bedside entries when IPD is on.
+    dependsOn: [],
+    uses: ['core_ipd'],
+    routes: ['/tests', '/settings/tests'],
+    fileTabs: [],
+    printSheets: [],
+    hasStages: false,
+    // Off until the owner sets up the labs and switches it on (plan §11.3 rule 8).
     defaultState: 'off',
   },
   {
@@ -291,6 +403,15 @@ export function moduleAllows(
   const scope = def.rolloutScope;
   if (scope.all || wardId === null) return scope.all || scope.wardIds.length > 0;
   return scope.wardIds.includes(wardId);
+}
+
+/**
+ * B4b: a ward's risk-class doses and wastes post to the stock ledger from the
+ * treatment card when both the card and stock are in use there. Its store's
+ * counts then stop asking for the paper register's "used" figure.
+ */
+export function marPostsStock(states: ModuleStates, wardId: string | null): boolean {
+  return wardId !== null && moduleAllows(states, 'mar', 'write', wardId) && moduleAllows(states, 'stock', 'write', wardId);
 }
 
 /** The patient-file tabs this role sees, in paper order. */

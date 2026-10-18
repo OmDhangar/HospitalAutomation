@@ -80,13 +80,13 @@ export default async function RecordPage({ params }: PageProps<'/ipd/ward/[wardI
     typeof item === 'string'
       ? { substance: item }
       : {
-          substance: item.substance ?? String(item),
-          reaction: item.reaction,
-          severity:
-            item.severity === 'mild' || item.severity === 'moderate' || item.severity === 'severe'
-              ? item.severity
-              : undefined,
-        },
+        substance: item.substance ?? String(item),
+        reaction: item.reaction,
+        severity:
+          item.severity === 'mild' || item.severity === 'moderate' || item.severity === 'severe'
+            ? item.severity
+            : undefined,
+      },
   );
 
   const chartHref = moduleAllows(states, 'charts', 'read', ward.id)

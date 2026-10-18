@@ -1,6 +1,8 @@
 import { SaveButton, SaveForm } from '@/components/save-form';
 import { SavedNotice } from '@/components/saved-notice';
 import Link from 'next/link';
+import { getModuleStatesForRequest } from '@/lib/auth/modules';
+import { moduleAllows } from '@/lib/modules/registry';
 import { Alert, Button, Card, CardHeader, EmptyState, Field, Input, cn } from '@/components/ui';
 import { BedIcon, TagIcon } from '@/components/icons';
 import { BedCountField } from '@/components/ipd/bed-count-field';
@@ -84,6 +86,24 @@ export default async function IpdSettingsPage({ searchParams }: PageProps<'/sett
             <Link href="/settings/ipd/items" className="w-full sm:w-auto">
               <Button variant="secondary" className="w-full justify-center sm:w-auto">
                 Manage items and prices
+              </Button>
+            </Link>
+          </div>
+        </Card>
+      ) : null}
+
+      {can(session.role, 'ipd.bedCodes') && wardRows.length > 0 && moduleAllows(await getModuleStatesForRequest(session.hospitalId), 'mar', 'read') ? (
+        <Card>
+          <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+            <div className="min-w-0">
+              <h2 className="text-base font-bold text-ink-900">Bed codes</h2>
+              <p className="mt-0.5 text-xs text-ink-500">
+                A 6-character code for each bed, to stick on the bed head. A nurse giving a risk-class dose from her own phone types it to show she is at the bedside.
+              </p>
+            </div>
+            <Link href="/print/bed-codes" target="_blank" className="w-full sm:w-auto">
+              <Button variant="secondary" className="w-full justify-center sm:w-auto">
+                Print bed codes
               </Button>
             </Link>
           </div>

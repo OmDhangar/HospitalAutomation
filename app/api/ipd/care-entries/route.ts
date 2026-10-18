@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { canUndoEntry, parseCareEntryBatch } from '@/lib/domain/care-entry';
 import { serviceDateIn } from '@/lib/domain/time';
 import { listEntriesForAdmission, recordCareEntries } from '@/lib/services/care-entries';
+import { moduleAllows } from '@/lib/modules/registry';
+import { getModuleStates } from '@/lib/services/modules';
+import { noteUnlinkedRiskGives, riskClassMedicineIds } from '@/lib/services/mar';
 import { ipdCaller } from '../session';
 
 /**
@@ -30,11 +33,44 @@ export async function POST(request: Request) {
   const parsed = parseCareEntryBatch(body);
   if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
 
-  const results = await recordCareEntries({
-    hospitalId: caller.session.hospitalId,
-    entries: parsed.entries,
-    actorUserId: caller.session.userId,
+  // Treatment card on (B3-min, §7.2 "order-linked only"): a risk-class medicine is given from the card.
+  // In enforce it is refused here; before that it is recorded, and the evidence log notes it.
+  const { session } = caller;
+  const states = await getModuleStates(session.hospitalId);
+  const marOn = moduleAllows(states, 'mar', 'write');
+  const risky = marOn
+    ? await riskClassMedicineIds(
+        session.hospitalId,
+        parsed.entries.flatMap((entry) => (entry.item.type === 'medicine' ? [entry.item.id] : [])),
+      )
+    : new Set<string>();
+  const enforce = marOn && states.get('mar')?.stage === 'enforce';
+  const refusedHere = (entry: (typeof parsed.entries)[number]) => enforce && entry.item.type === 'medicine' && risky.has(entry.item.id);
+
+  const recorded = await recordCareEntries({
+    hospitalId: session.hospitalId,
+    entries: parsed.entries.filter((entry) => !refusedHere(entry)),
+    actorUserId: session.userId,
   });
+  const byClient = new Map(recorded.map((result) => [result.clientId, result]));
+  const results = parsed.entries.map(
+    (entry) =>
+      byClient.get(entry.clientId) ?? {
+        clientId: entry.clientId,
+        ok: false as const,
+        error: 'This is a risk-class medicine: give it from the patient’s treatment card.',
+      },
+  );
+  if (risky.size > 0 && !enforce) {
+    await noteUnlinkedRiskGives({
+      hospitalId: session.hospitalId,
+      actorUserId: session.userId,
+      entryIds: parsed.entries.flatMap((entry) => {
+        const result = byClient.get(entry.clientId);
+        return entry.item.type === 'medicine' && risky.has(entry.item.id) && result?.ok && !result.repeat ? [result.entryId] : [];
+      }),
+    });
+  }
   // `billed` is dropped: whether an item is priced is the owner's business.
   return NextResponse.json({
     results: results.map((result) =>
