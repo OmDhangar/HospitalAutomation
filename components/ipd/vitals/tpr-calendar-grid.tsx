@@ -33,6 +33,8 @@ export interface TprCalendarGridProps {
   fluids: IntakeOutputRow[];
   treatments?: TreatmentLogItem[];
   canRecord?: boolean;
+  canPrint?: boolean;
+  userRole?: string;
 }
 
 interface HourlySlotData {
@@ -65,6 +67,8 @@ export function TprCalendarGrid({
   fluids,
   treatments = [],
   canRecord = true,
+  canPrint = true,
+  userRole,
 }: TprCalendarGridProps) {
   const displayHospitalName = hospitalName || letterhead?.hospitalName || 'HOSPITAL';
   // Helper to format Date into YYYY-MM-DD
@@ -289,22 +293,23 @@ export function TprCalendarGrid({
           </div>
         </div>
 
-        {/* Action Buttons */}
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              if (typeof window !== 'undefined') {
-                window.print();
-              }
-            }}
-            className="inline-flex items-center gap-1 rounded-lg border border-ink-300 bg-white px-3 py-1.5 text-xs font-semibold text-ink-700 shadow-2xs hover:bg-ink-50 cursor-pointer"
-            title="Print Nursing TPR Chart"
-          >
-            <span>🖨️ Print Chart</span>
-          </button>
-
-        </div>
+        {/* Action Buttons (Hidden for nurses) */}
+        {userRole !== 'nurse' && canPrint && (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof window !== 'undefined') {
+                  window.print();
+                }
+              }}
+              className="inline-flex items-center gap-1 rounded-lg border border-ink-300 bg-white px-3 py-1.5 text-xs font-semibold text-ink-700 shadow-2xs hover:bg-ink-50 cursor-pointer"
+              title="Print Nursing TPR Chart"
+            >
+              <span>🖨️ Print Chart</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 2. Authentic Paper-Style Nursing T.P.R. Chart */}

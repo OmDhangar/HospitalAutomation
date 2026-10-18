@@ -218,4 +218,24 @@ describe('VitalsAndIoTab Component', () => {
     expect(html).toContain('Reg. No: REG/MH/2026/8941');
     expect(html).not.toContain('GURUVED');
   });
+
+  it('renders a distraction-free view for nurses without view toggle and hides Print Chart', () => {
+    const html = renderToString(
+      <VitalsAndIoTab
+        admissionId="adm-101"
+        vitals={dummyVitals as any}
+        fluids={dummyFluids as any}
+        userRole="nurse"
+      />,
+    );
+
+    // Streamlined title and action
+    expect(html).toContain('Nursing T.P.R. Chart');
+    expect(html).toContain('+ Record Vitals');
+
+    // Hides doctor view switcher and print chart button
+    expect(html).not.toContain('Sequential Log');
+    expect(html).not.toContain('Calendar Slots (Excel Grid)');
+    expect(html).not.toContain('Print Chart');
+  });
 });

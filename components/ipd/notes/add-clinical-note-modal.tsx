@@ -51,8 +51,8 @@ export function AddClinicalNoteModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/40 p-4 backdrop-blur-2xs">
-      <div className="w-full max-w-lg rounded-2xl border border-ink-200 bg-white p-5 shadow-xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
+      <div className="w-full max-w-lg rounded-2xl border border-slate-300 bg-white p-5 shadow-2xl">
         <div className="flex items-center justify-between border-b border-ink-100 pb-3">
           <div>
             <h3 className="text-sm font-bold text-ink-950">Add Clinical Progress Note</h3>

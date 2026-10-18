@@ -1,11 +1,11 @@
 import React from 'react';
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { requireSession } from '@/lib/auth/session';
 import { getDoctorSummaryCockpitData } from '@/lib/services/ipd-summary';
 import { getTestChips } from '@/lib/services/doctor-ipd';
 import { formatDoctor } from '@/lib/domain/doctor';
-import { can } from '@/lib/domain/permissions';
+import { can, homePathFor } from '@/lib/domain/permissions';
 import { DailyMedicationMatrix } from '@/components/ipd/summary/daily-medication-matrix';
 import { TprFlowsheet } from '@/components/ipd/summary/tpr-flowsheet';
 import { DoctorQuickActions } from '@/components/ipd/summary/doctor-quick-actions';
@@ -16,6 +16,13 @@ export default async function SummaryPage({ params }: { params: Promise<any> }) 
   const session = await requireSession();
   const resolvedParams = await params;
   const id = resolvedParams?.id as string;
+
+  if (session.role === 'nurse') {
+    redirect(`/ipd/patients/${id}/emar`);
+  }
+  if (!can(session.role, 'ipd.prescribe') && !can(session.role, 'ipd.dischargeReady')) {
+    redirect(homePathFor(session.role));
+  }
 
   const [cockpit, testChips] = await Promise.all([
     getDoctorSummaryCockpitData({

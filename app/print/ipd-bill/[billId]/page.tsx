@@ -26,8 +26,7 @@ export default async function IpdBillPrintPage({
   if (session.mustChangePassword) redirect('/change-password');
   if (
     !can(session.role, 'ipd.discharge') &&
-    !can(session.role, 'billing.collect') &&
-    !can(session.role, 'ipd.view')
+    !can(session.role, 'billing.collect')
   ) {
     notFound();
   }

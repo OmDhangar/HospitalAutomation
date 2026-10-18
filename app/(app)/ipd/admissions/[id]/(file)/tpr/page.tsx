@@ -1,9 +1,9 @@
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { PrinterIcon } from '@/components/icons';
 import { OutboxStatus } from '@/components/ipd/outbox-status';
 import { TprChart } from '@/components/ipd/tpr-chart';
-import { requireModule } from '@/lib/auth/modules';
+import { getModuleStatesForRequest, requireModule } from '@/lib/auth/modules';
 import { requireSession } from '@/lib/auth/session';
 import { can } from '@/lib/domain/permissions';
 import { addDays, chartDayOf, isChartDay, readingSummary } from '@/lib/domain/tpr';
@@ -21,8 +21,15 @@ export const metadata = { title: 'TPR chart · IPD' };
  */
 export default async function TprPage({ params, searchParams }: PageProps<'/ipd/admissions/[id]/tpr'>) {
   const session = await requireSession();
-  const states = await requireModule(session, 'charts');
   const { id } = await params;
+  const states = await getModuleStatesForRequest(session.hospitalId);
+
+  // If paper-like hourly charts module is not active, redirect to canonical Vitals & TPR Sheet tab
+  if (!moduleAllows(states, 'charts', 'read')) {
+    redirect(`/ipd/patients/${id}/vitals`);
+  }
+
+  await requireModule(session, 'charts');
   const query = await searchParams;
 
   const admission = await loadAdmission(session.hospitalId, id);

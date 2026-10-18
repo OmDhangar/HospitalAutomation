@@ -685,7 +685,7 @@ export async function recordVitalReadingAction(args: {
   abdGirthCm?: number | string | null;
   scheduledSlot?: string | null;
 }): Promise<{ ok: boolean; id: string }> {
-  const session = await authorize('ipd.view');
+  const session = await authorize('ipd.chart');
   const tempStr = args.temperatureF != null ? String(args.temperatureF) : null;
   const res = await withTenant(
     session.hospitalId,
@@ -742,7 +742,7 @@ export async function recordIntakeOutputAction(args: {
   recordedAt?: string | Date | null;
   notes?: string | null;
 }): Promise<{ ok: boolean; id: string }> {
-  const session = await authorize('ipd.view');
+  const session = await authorize('ipd.chart');
   const res = await withTenant(
     session.hospitalId,
     async (tx) => {
@@ -776,7 +776,8 @@ export async function recordClinicalNoteAction(args: {
   soapP?: string | null;
   body?: string | null;
 }): Promise<{ ok: boolean; id: string }> {
-  const session = await authorize('ipd.view');
+  const permission: Permission = args.noteType === 'SOAP' ? 'clinical.write' : 'ipd.chart';
+  const session = await authorize(permission);
   const res = await withTenant(
     session.hospitalId,
     async (tx) => {
@@ -977,7 +978,7 @@ export async function reconcileHomeMedicationAction(args: {
   reconciliationStatus?: 'continued' | 'stopped' | 'modified';
   reconciliationNotes?: string;
 }): Promise<{ ok: boolean; id: string }> {
-  const session = await authorize('ipd.view');
+  const session = await authorize('ipd.prescribe');
 
   const res = await reconcileHomeMedication({
     hospitalId: session.hospitalId,

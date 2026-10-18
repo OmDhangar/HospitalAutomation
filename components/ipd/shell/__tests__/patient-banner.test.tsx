@@ -3,7 +3,7 @@ import { renderToString } from 'react-dom/server';
 import { PatientBanner } from '../patient-banner';
 
 describe('PatientBanner Component', () => {
-  it('renders title-cased patient name, age/sex, UHID, IPD no, bed, consultant and allergy chip', () => {
+  it('renders essential patient demographics, consultant, diagnosis, history and print actions', () => {
     const html = renderToString(
       <PatientBanner
         admissionId="adm-101"
@@ -33,15 +33,19 @@ describe('PatientBanner Component', () => {
     expect(html).toContain('Day 4');
     expect(html).toContain('Dr. Anand Sharma');
     expect(html).not.toContain('Dr. Dr.');
-    expect(html).toContain('Allergies: Penicillin, Sulfa');
     expect(html).toContain('Acute Gastroenteritis');
     expect(html).toContain('Back');
     expect(html).toContain('href="/ipd/my-patients"');
     expect(html).toContain('History');
     expect(html).toContain('Print file');
+
+    // Asserts top banner omits allergy chips, weight chips, and redundant Record TPR button
+    expect(html).not.toContain('Allergies:');
+    expect(html).not.toContain('Weight:');
+    expect(html).not.toContain('+ Record TPR');
   });
 
-  it('renders clickable amber chips when allergies or diagnosis are not recorded', () => {
+  it('renders cleanly without clutter when allergies or measurements are present or absent', () => {
     const html = renderToString(
       <PatientBanner
         admissionId="adm-102"
@@ -63,42 +67,10 @@ describe('PatientBanner Component', () => {
       />,
     );
 
-    expect(html).toContain('Diagnosis not recorded');
-    expect(html).toContain('Allergies not recorded');
-    expect(html).toContain('Weight: Not recorded');
+    expect(html).toContain('Sunita Roy');
     expect(html).toContain('Dr. Ramesh Kulkarni');
-  });
-
-  it('renders structured Wt, Ht and BMI when patient measurements are present', () => {
-    const html = renderToString(
-      <PatientBanner
-        admissionId="adm-103"
-        patient={{
-          name: 'Pooja Patil',
-          age: 28,
-          gender: 'Female',
-          uhid: 'UHID-2024-0099',
-          ipdNumber: 1099,
-          wardName: 'Maternity Ward',
-          bedLabel: '4',
-          dayOfStay: 2,
-          doctorName: 'Dr. Anita Joshi',
-          diagnosis: 'Elective LSCS',
-          allergyStatus: 'nkda',
-          allergies: [],
-          weightKg: 65,
-          heightCm: 165,
-          bmi: 23.9,
-          status: 'Admitted',
-        }}
-      />,
-    );
-
-    expect(html).toContain('Wt:');
-    expect(html).toContain('65 kg');
-    expect(html).toContain('Ht:');
-    expect(html).toContain('165 cm');
-    expect(html).toContain('BMI: 23.9');
+    expect(html).not.toContain('Allergies not recorded');
+    expect(html).not.toContain('Weight: Not recorded');
   });
 
   it('renders critical NEWS2 escalation banner and chip when news2Score >= 5', () => {
@@ -132,4 +104,48 @@ describe('PatientBanner Component', () => {
     expect(html).toContain('Doctor bedside review required');
     expect(html).toContain('NEWS2: 6 (Escalated)');
   });
+
+  it('hides History and Print file buttons for nurses and points Back to medication chart', () => {
+    const html = renderToString(
+      <PatientBanner
+        admissionId="adm-101"
+        userRole="nurse"
+        patient={{
+          name: 'RAJ PATIL',
+          uhid: 'UHID-2024-0012',
+          ipdNumber: 1042,
+          wardName: 'General Ward A',
+          bedLabel: '12',
+          status: 'Admitted',
+        }}
+      />,
+    );
+
+    expect(html).not.toContain('History');
+    expect(html).not.toContain('Print file');
+    expect(html).toContain('href="/ipd/patients/adm-101/emar"');
+    expect(html).toContain('Back to Medication Chart');
+  });
+
+  it('renders Back to Ward link when backHref points to a ward path', () => {
+    const html = renderToString(
+      <PatientBanner
+        admissionId="adm-101"
+        userRole="nurse"
+        backHref="/ipd/ward/ward-icu/bed/b-1"
+        patient={{
+          name: 'RAJ PATIL',
+          uhid: 'UHID-2024-0012',
+          ipdNumber: 1042,
+          wardName: 'General Ward A',
+          bedLabel: '12',
+          status: 'Admitted',
+        }}
+      />,
+    );
+
+    expect(html).toContain('href="/ipd/ward/ward-icu/bed/b-1"');
+    expect(html).toContain('Back to Ward');
+  });
 });
+

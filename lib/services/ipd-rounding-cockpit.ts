@@ -8,6 +8,7 @@ import {
   ipdAllergyAssessments,
   ipdClinicalRounds,
   ipdMedicationAdministrations,
+  ipdMedicationOrders,
   medicines,
   patients,
   users,
@@ -65,6 +66,18 @@ export interface RoundingCockpitData {
     actualTime: Date | null;
     recordedAt: Date;
     outcome: string;
+    clinicalNote?: string | null;
+  }>;
+  urgentNurseAdministrations: Array<{
+    id: string;
+    orderId: string;
+    medicineName: string;
+    doseGiven: string | null;
+    routeGiven: string | null;
+    actualTime: Date | null;
+    recordedAt: Date;
+    clinicalNote: string | null;
+    nurseName: string | null;
   }>;
   draftRound: {
     id: string;
@@ -225,6 +238,7 @@ export async function getRoundingCockpitData(args: {
           actualTime: ipdMedicationAdministrations.actualTime,
           recordedAt: ipdMedicationAdministrations.recordedAt,
           outcome: ipdMedicationAdministrations.outcome,
+          clinicalNote: ipdMedicationAdministrations.clinicalNote,
         })
         .from(ipdMedicationAdministrations)
         .where(
@@ -233,6 +247,36 @@ export async function getRoundingCockpitData(args: {
             eq(ipdMedicationAdministrations.admissionId, args.admissionId),
             sql`${ipdMedicationAdministrations.recordedAt} >= now() - interval '24 hours'`,
             isNull(ipdMedicationAdministrations.voidedAt),
+          ),
+        )
+        .orderBy(desc(ipdMedicationAdministrations.recordedAt));
+
+      // 5b. Fetch nurse urgent administrations awaiting doctor review (in past 48 hours)
+      const urgentNurseAdmins = await tx
+        .select({
+          id: ipdMedicationAdministrations.id,
+          orderId: ipdMedicationAdministrations.orderId,
+          doseGiven: ipdMedicationAdministrations.doseGiven,
+          routeGiven: ipdMedicationAdministrations.routeGiven,
+          actualTime: ipdMedicationAdministrations.actualTime,
+          recordedAt: ipdMedicationAdministrations.recordedAt,
+          clinicalNote: ipdMedicationAdministrations.clinicalNote,
+          medicineName: ipdMedicationOrders.medicineName,
+          nurseName: users.name,
+        })
+        .from(ipdMedicationAdministrations)
+        .innerJoin(
+          ipdMedicationOrders,
+          eq(ipdMedicationOrders.id, ipdMedicationAdministrations.orderId),
+        )
+        .leftJoin(users, eq(users.id, ipdMedicationAdministrations.nurseUserId))
+        .where(
+          and(
+            eq(ipdMedicationAdministrations.hospitalId, args.hospitalId),
+            eq(ipdMedicationAdministrations.admissionId, args.admissionId),
+            isNull(ipdMedicationAdministrations.voidedAt),
+            sql`(${ipdMedicationOrders.specialInstructions} LIKE '%NURSE URGENT ADMIN%' OR ${ipdMedicationAdministrations.clinicalNote} LIKE '%URGENT NURSE ADMIN%')`,
+            sql`${ipdMedicationAdministrations.recordedAt} >= now() - interval '48 hours'`,
           ),
         )
         .orderBy(desc(ipdMedicationAdministrations.recordedAt));
@@ -298,6 +342,7 @@ export async function getRoundingCockpitData(args: {
         allergyAssessment,
         activeOrders,
         recentAdministrations: recentAdmins,
+        urgentNurseAdministrations: urgentNurseAdmins,
         draftRound: draftRoundRow ?? null,
         frequentMedicines,
       };

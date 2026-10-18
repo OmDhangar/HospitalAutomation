@@ -236,6 +236,11 @@ export function ActiveOrdersReview({
                         Currently On Hold
                       </span>
                     )}
+                    {order.specialInstructions?.includes('[Timing adjusted') && (
+                      <span className="rounded-full border border-violet-300 bg-violet-100 px-2 py-0.5 text-[10px] font-bold uppercase text-violet-900">
+                        🕒 Timing Adjusted by Nurse
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-600">

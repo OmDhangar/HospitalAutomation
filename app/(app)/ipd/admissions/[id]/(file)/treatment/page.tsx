@@ -70,10 +70,9 @@ export default async function BedsideTreatmentPage({
         },
   );
 
-  const chartHref =
-    can(session.role, 'ipd.chart') && moduleAllows(states, 'charts', 'read')
-      ? `/ipd/admissions/${id}/tpr`
-      : null;
+  const chartHref = moduleAllows(states, 'charts', 'read')
+    ? `/ipd/admissions/${id}/tpr`
+    : `/ipd/patients/${id}/vitals`;
 
   const ageSex = [
     admission.age !== null && admission.age !== undefined
@@ -108,6 +107,7 @@ export default async function BedsideTreatmentPage({
         recentSupplies={picks.recent as Pick[]}
         commonSupplies={picks.common as Pick[]}
         canAdminister={canAdminister}
+        userRole={session.role}
       />
     </div>
   );

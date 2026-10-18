@@ -17,6 +17,7 @@ export interface VitalsAndIoTabProps {
   treatments?: TreatmentLogItem[];
   vitalsFrequency?: string | null;
   canRecord?: boolean;
+  userRole?: string;
 }
 
 export function VitalsAndIoTab({
@@ -28,6 +29,7 @@ export function VitalsAndIoTab({
   fluids,
   treatments = [],
   canRecord = true,
+  userRole,
 }: VitalsAndIoTabProps) {
   const router = useRouter();
   const [viewMode, setViewMode] = useState<'calendar' | 'table'>('calendar');
@@ -92,54 +94,72 @@ export function VitalsAndIoTab({
         </div>
       )}
 
-      {/* Clean Unified Header: Title, View Switcher & Single Record Vitals Button */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-ink-200 pb-3">
-        <div>
-          <h2 className="text-sm font-bold text-ink-950">Vitals &amp; Fluid Balance (TPR &amp; I/O)</h2>
-          <p className="text-xs text-ink-500">
-            Temperature, Pulse, BP, Respiration, SpO2 flowsheet and 24-hour fluid intake vs output
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2.5">
-          {/* View Toggle */}
-          <div className="inline-flex rounded-lg border border-ink-200 bg-ink-50 p-0.5 text-xs">
-            <button
-              type="button"
-              onClick={() => setViewMode('calendar')}
-              className={`px-3 py-1 font-semibold rounded-md transition-colors cursor-pointer ${
-                viewMode === 'calendar'
-                  ? 'bg-white text-ink-900 shadow-2xs'
-                  : 'text-ink-600 hover:text-ink-900'
-              }`}
-            >
-              📅 Calendar Slots (Excel Grid)
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode('table')}
-              className={`px-3 py-1 font-semibold rounded-md transition-colors cursor-pointer ${
-                viewMode === 'table'
-                  ? 'bg-white text-ink-900 shadow-2xs'
-                  : 'text-ink-600 hover:text-ink-900'
-              }`}
-            >
-              📋 Sequential Log
-            </button>
+      {/* Header: streamlined for nurses without view switcher; full view switcher for doctors */}
+      {userRole === 'nurse' ? (
+        <div className="flex items-center justify-between gap-3 border-b border-ink-100 pb-2.5">
+          <div className="flex items-center gap-2">
+            <span className="size-2 rounded-full bg-emerald-600 animate-pulse" />
+            <h2 className="text-sm font-bold text-ink-950">Nursing T.P.R. Chart</h2>
           </div>
-
-          {/* Only One Primary Recording Button on the page */}
           {canRecord && (
             <button
               type="button"
               onClick={() => setIsVitalsModalOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-700 px-3.5 py-1.5 text-xs font-bold text-white shadow-2xs hover:bg-brand-800 cursor-pointer"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-2xs hover:bg-emerald-700 active:scale-95 transition cursor-pointer"
             >
               <span>+ Record Vitals</span>
             </button>
           )}
         </div>
-      </div>
+      ) : (
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-ink-200 pb-3">
+          <div>
+            <h2 className="text-sm font-bold text-ink-950">Vitals &amp; Fluid Balance (TPR &amp; I/O)</h2>
+            <p className="text-xs text-ink-500">
+              Temperature, Pulse, BP, Respiration, SpO2 flowsheet and 24-hour fluid intake vs output
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            {/* View Toggle */}
+            <div className="inline-flex rounded-lg border border-ink-200 bg-ink-50 p-0.5 text-xs">
+              <button
+                type="button"
+                onClick={() => setViewMode('calendar')}
+                className={`px-3 py-1 font-semibold rounded-md transition-colors cursor-pointer ${
+                  viewMode === 'calendar'
+                    ? 'bg-white text-ink-900 shadow-2xs'
+                    : 'text-ink-600 hover:text-ink-900'
+                }`}
+              >
+                📅 Calendar Slots (Excel Grid)
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('table')}
+                className={`px-3 py-1 font-semibold rounded-md transition-colors cursor-pointer ${
+                  viewMode === 'table'
+                    ? 'bg-white text-ink-900 shadow-2xs'
+                    : 'text-ink-600 hover:text-ink-900'
+                }`}
+              >
+                📋 Sequential Log
+              </button>
+            </div>
+
+            {/* Only One Primary Recording Button on the page */}
+            {canRecord && (
+              <button
+                type="button"
+                onClick={() => setIsVitalsModalOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-brand-700 px-3.5 py-1.5 text-xs font-bold text-white shadow-2xs hover:bg-brand-800 cursor-pointer"
+              >
+                <span>+ Record Vitals</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Main Flowsheet View */}
       {viewMode === 'calendar' ? (
@@ -152,6 +172,7 @@ export function VitalsAndIoTab({
           fluids={fluids}
           treatments={treatments}
           canRecord={canRecord}
+          userRole={userRole}
         />
         ) : (
           <div className="rounded-xl border border-ink-200/80 bg-white shadow-2xs overflow-hidden">

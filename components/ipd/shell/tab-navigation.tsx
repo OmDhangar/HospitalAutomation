@@ -21,6 +21,7 @@ export interface TabNavigationProps {
     criticalInvestigations?: number;
     isDischargeReady?: boolean;
   };
+  userRole?: string;
   className?: string;
 }
 
@@ -28,6 +29,7 @@ export function TabNavigation({
   admissionId,
   currentTab,
   counts,
+  userRole,
   className = '',
 }: TabNavigationProps) {
   const pathname = usePathname();
@@ -40,6 +42,11 @@ export function TabNavigation({
       ? pathname.split(`/ipd/patients/${admissionId}/`)[1]?.split('/')[0] ||
         'summary'
       : 'summary');
+
+  // Nurses should see NO tab bar at all on the TPR / vitals page
+  if (userRole === 'nurse' && (activeTabId === 'vitals' || activeTabId === 'tpr')) {
+    return null;
+  }
 
   const tabs: TabItem[] = [
     {
@@ -95,13 +102,18 @@ export function TabNavigation({
     },
   ];
 
+  const visibleTabs =
+    userRole === 'nurse'
+      ? tabs.filter((t) => ['emar', 'vitals'].includes(t.id))
+      : tabs;
+
   return (
     <nav
       aria-label="Patient Chart Navigation"
       className={`border-b border-ink-100 bg-surface px-3.5 sm:px-5 sticky top-[56px] z-20 overflow-x-auto no-scrollbar whitespace-nowrap ${className}`}
     >
       <ul className="flex items-center gap-1 sm:gap-1.5 -mb-px">
-        {tabs.map((tab) => {
+        {visibleTabs.map((tab) => {
           const isActive =
             activeTabId.toLowerCase() === tab.id.toLowerCase() ||
             activeTabId.toLowerCase() === tab.hrefSegment.toLowerCase() ||

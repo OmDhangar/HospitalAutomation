@@ -19,7 +19,7 @@ export const metadata = { title: 'Ward grid · IPD' };
 export default async function WardGridPage({ params }: PageProps<'/ipd/ward/[wardId]'>) {
   const session = await requireSession();
   const { wardId } = await params;
-  if (!can(session.role, 'ipd.record')) notFound();
+  if (!can(session.role, 'ipd.view')) notFound();
 
   const census = await getIpdCensus({ hospitalId: session.hospitalId, branchId: session.branchId });
   const ward = census.wards.find((w) => w.id === wardId);

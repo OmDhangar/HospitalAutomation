@@ -113,6 +113,7 @@ export default async function PatientVitalsPage({
       treatments={treatments}
       vitalsFrequency={admission.vitalsFrequency ?? 'q4h'}
       canRecord={!session.readOnly}
+      userRole={session.role}
     />
   );
 }

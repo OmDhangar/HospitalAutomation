@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import {
   CHART_COLORS,
   HourlyLoad,
@@ -9,6 +10,7 @@ import {
 import { Button, Card, CardHeader, EmptyState, cn } from '@/components/ui';
 import { TvIcon, StethoscopeIcon } from '@/components/icons';
 import { requireSession } from '@/lib/auth/session';
+import { can, homePathFor } from '@/lib/domain/permissions';
 import { serviceDateIn } from '@/lib/domain/time';
 import { listBranches } from '@/lib/services/auth';
 import { getHospital } from '@/lib/services/hospital';
@@ -27,6 +29,9 @@ const WINDOW_DAYS = 30;
 
 export default async function ReportsPage() {
   const session = await requireSession();
+  if (!can(session.role, 'reports.view')) {
+    redirect(homePathFor(session.role));
+  }
   const today = serviceDateIn(session.timezone);
 
   const [hospital, branches] = await Promise.all([

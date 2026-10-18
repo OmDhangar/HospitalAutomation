@@ -35,6 +35,12 @@ export function AdministerModal({
     dueItem ? dueItem.route : 'oral',
   );
   const [siteNote, setSiteNote] = useState<string>('');
+  const [actualTimeStr, setActualTimeStr] = useState<string>(() => {
+    const d = new Date();
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  });
+  const [timingReason, setTimingReason] = useState<string>('');
+  const [customTimingReason, setCustomTimingReason] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   if (!isOpen || !dueItem) return null;
@@ -46,6 +52,11 @@ export function AdministerModal({
     return medLower.includes(substanceLower) || substanceLower.includes(medLower);
   });
 
+  const formattedScheduled = new Date(dueItem.scheduledTime).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
   const handleConfirm = () => {
     setErrorMsg(null);
     if (!doseGiven.trim()) {
@@ -55,17 +66,34 @@ export function AdministerModal({
 
     startTransition(async () => {
       try {
+        // Construct actual administration Date based on actualTimeStr
+        let actualTime = new Date();
+        if (actualTimeStr) {
+          const [h, m] = actualTimeStr.split(':').map(Number);
+          if (!isNaN(h) && !isNaN(m)) {
+            actualTime = new Date();
+            actualTime.setHours(h, m, 0, 0);
+          }
+        }
+
+        const effectiveReason = timingReason === 'Other' ? customTimingReason.trim() : timingReason.trim();
+        let finalClinicalNote = siteNote.trim();
+        if (effectiveReason) {
+          const timingPrefix = `[Timing deviation: Scheduled ${formattedScheduled}, Given at ${actualTimeStr} — Reason: ${effectiveReason}]`;
+          finalClinicalNote = finalClinicalNote ? `${timingPrefix} ${finalClinicalNote}` : timingPrefix;
+        }
+
         const res = await recordAdministrationAction({
           admissionId,
           orderId: dueItem.orderId,
           input: {
             clientId: crypto.randomUUID(),
             scheduledTime: dueItem.scheduledTime,
-            actualTime: new Date(),
+            actualTime,
             doseAmount: dueItem.doseAmount,
             doseGiven: doseGiven.trim(),
             routeGiven: routeGiven,
-            clinicalNote: siteNote.trim() || undefined,
+            clinicalNote: finalClinicalNote || undefined,
             recordedChannel: 'ward_device',
           },
         });
@@ -77,11 +105,6 @@ export function AdministerModal({
       }
     });
   };
-
-  const formattedScheduled = new Date(dueItem.scheduledTime).toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 
   return (
     <div
@@ -197,6 +220,54 @@ export function AdministerModal({
               />
             </div>
           </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-ink-700">
+                Administration Time <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="time"
+                value={actualTimeStr}
+                onChange={(e) => setActualTimeStr(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-ink-300 bg-white px-3 py-2 text-xs text-ink-900 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-ink-700">
+                Timing Status / Deviation Reason
+              </label>
+              <select
+                value={timingReason}
+                onChange={(e) => setTimingReason(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-ink-300 bg-white px-3 py-2 text-xs text-ink-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                <option value="">Given on time / standard slot</option>
+                <option value="Patient away from ward (scan/X-ray/OT)">Patient away from ward (scan/X-ray/OT)</option>
+                <option value="Patient was sleeping / resting">Patient was sleeping / resting</option>
+                <option value="Delayed after meal / food timing requirement">Delayed after meal / food requirement</option>
+                <option value="Doctor verbal instruction to delay">Doctor verbal instruction to delay</option>
+                <option value="IV cannula re-siting in progress">IV cannula re-siting in progress</option>
+                <option value="Patient requested delay">Patient requested delay</option>
+                <option value="Other">Other clinical reason</option>
+              </select>
+            </div>
+          </div>
+
+          {timingReason === 'Other' && (
+            <div>
+              <label className="block text-xs font-medium text-amber-900">
+                Specify Reason for Timing Change <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="text"
+                placeholder="Document why timing was changed so doctor is informed..."
+                value={customTimingReason}
+                onChange={(e) => setCustomTimingReason(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-amber-300 bg-amber-50/50 px-3 py-2 text-xs text-ink-900 placeholder:text-ink-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-medium text-ink-700">

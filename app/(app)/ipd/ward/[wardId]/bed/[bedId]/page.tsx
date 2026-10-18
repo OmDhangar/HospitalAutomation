@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Button, Card, EmptyState } from '@/components/ui';
 import { OutboxStatus } from '@/components/ipd/outbox-status';
-import { BedsideTreatmentChart } from '@/components/ipd/bedside/bedside-treatment-chart';
+import { BedsideTreatmentWorkspace } from '@/components/ipd/bedside/bedside-treatment-workspace';
 import { getModuleStatesForRequest } from '@/lib/auth/modules';
 import { requireSession } from '@/lib/auth/session';
 import { dayOfStay } from '@/lib/domain/admission';
@@ -26,7 +26,7 @@ export const metadata = { title: 'Bedside Treatment Chart · IPD' };
 export default async function RecordPage({ params }: PageProps<'/ipd/ward/[wardId]/bed/[bedId]'>) {
   const session = await requireSession();
   const { wardId, bedId } = await params;
-  if (!can(session.role, 'ipd.record')) notFound();
+  if (!can(session.role, 'ipd.view')) notFound();
 
   const census = await getIpdCensus({ hospitalId: session.hospitalId, branchId: session.branchId });
   const ward = census.wards.find((w) => w.id === wardId);
@@ -89,10 +89,9 @@ export default async function RecordPage({ params }: PageProps<'/ipd/ward/[wardI
         },
   );
 
-  const chartHref =
-    can(session.role, 'ipd.chart') && moduleAllows(states, 'charts', 'read')
-      ? `/ipd/admissions/${occupant.admissionId}/tpr`
-      : null;
+  const chartHref = moduleAllows(states, 'charts', 'read', ward.id)
+    ? `/ipd/admissions/${occupant.admissionId}/tpr`
+    : `/ipd/patients/${occupant.admissionId}/vitals`;
 
   const ageSex = [occupant.age !== null ? String(occupant.age) : null, occupant.gender?.[0]?.toUpperCase() ?? null]
     .filter(Boolean)
@@ -105,7 +104,7 @@ export default async function RecordPage({ params }: PageProps<'/ipd/ward/[wardI
       <div className="mx-auto mb-4 max-w-xl">
         <OutboxStatus />
       </div>
-      <BedsideTreatmentChart
+      <BedsideTreatmentWorkspace
         admissionId={occupant.admissionId}
         patient={{
           name: occupant.patientName,
@@ -125,6 +124,7 @@ export default async function RecordPage({ params }: PageProps<'/ipd/ward/[wardI
         recentSupplies={picks.recent}
         commonSupplies={picks.common}
         canAdminister={canAdminister}
+        userRole={session.role}
       />
     </>
   );

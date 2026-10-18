@@ -127,13 +127,6 @@ export function MyPatientsTable({
                       Chart &rarr;
                     </Link>
 
-                    <Link
-                      href={`/ipd/admissions/${patient.admissionId}/rounds`}
-                      className="inline-flex items-center rounded-md border border-ink-300 bg-white px-2 py-1 text-xs font-semibold text-ink-700 shadow-2xs hover:bg-ink-50"
-                    >
-                      Rounds
-                    </Link>
-
                     {writable && (
                       <form action={setDischargeReadyAction} className="inline">
                         <input type="hidden" name="admissionId" value={patient.admissionId} />

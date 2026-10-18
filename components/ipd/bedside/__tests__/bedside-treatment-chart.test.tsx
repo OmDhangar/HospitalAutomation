@@ -125,4 +125,58 @@ describe('BedsideTreatmentChart Component', () => {
     expect(html).toContain('Change Time');
     expect(html).toContain('+ Give Extra Medicine');
   });
+
+  it('hides Patient File link for nurses but shows it for doctors', () => {
+    const nurseHtml = renderToString(
+      <BedsideTreatmentChart
+        admissionId="adm-101"
+        userRole="nurse"
+        chartHref="/ipd/admissions/adm-101/tpr"
+        patient={{
+          name: 'RAJ PATIL',
+          ageSex: '25 yrs · Male',
+          bedLabel: '2',
+          wardName: 'Ward B',
+          wardId: 'ward-b',
+          day: 4,
+          doctorName: 'Dr. Sharma',
+          diagnosis: 'Acute Gastroenteritis with dehydration',
+        }}
+        emarData={dummyEmarData}
+        allergyStatus="nkda"
+        recentSupplies={[]}
+        commonSupplies={[]}
+        canAdminister={true}
+      />,
+    );
+
+    expect(nurseHtml).not.toContain('Patient File');
+    expect(nurseHtml).toContain('href="/ipd/admissions/adm-101/tpr"');
+
+    const doctorHtml = renderToString(
+      <BedsideTreatmentChart
+        admissionId="adm-101"
+        userRole="doctor"
+        patient={{
+          name: 'RAJ PATIL',
+          ageSex: '25 yrs · Male',
+          bedLabel: '2',
+          wardName: 'Ward B',
+          wardId: 'ward-b',
+          day: 4,
+          doctorName: 'Dr. Sharma',
+          diagnosis: 'Acute Gastroenteritis with dehydration',
+        }}
+        emarData={dummyEmarData}
+        allergyStatus="nkda"
+        recentSupplies={[]}
+        commonSupplies={[]}
+        canAdminister={true}
+      />,
+    );
+
+    expect(doctorHtml).toContain('Patient File');
+    expect(doctorHtml).toContain('href="/ipd/patients/adm-101/summary"');
+  });
 });
+

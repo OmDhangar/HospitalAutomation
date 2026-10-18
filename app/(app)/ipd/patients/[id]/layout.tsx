@@ -153,10 +153,14 @@ export default async function PatientChartLayout({
     status: displayStatus,
   };
 
+  const isNurse = session.role === 'nurse';
+  const wardPath = admission.bed?.wardId ? `/ipd/ward/${admission.bed.wardId}` : '/ipd/ward';
+  const backHref = isNurse ? wardPath : (session.role === 'doctor' ? '/ipd/my-patients' : '/ipd');
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
-      <PatientBanner admissionId={id} patient={bannerPatient} />
-      <TabNavigation admissionId={id} />
+      <PatientBanner admissionId={id} patient={bannerPatient} userRole={session.role} backHref={backHref} />
+      <TabNavigation admissionId={id} userRole={session.role} />
       <div className="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto">{children}</div>
     </div>
   );

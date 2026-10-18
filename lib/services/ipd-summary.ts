@@ -33,6 +33,7 @@ export interface DoctorSummaryCockpitData {
     actionText?: string;
     actionHref?: string;
   }[];
+  recentHistory: any[];
 }
 
 export async function getDoctorSummaryCockpitData(args: {
@@ -95,7 +96,7 @@ export async function getDoctorSummaryCockpitData(args: {
       const recStr = `${String(rec.getHours()).padStart(2, '0')}:${String(rec.getMinutes()).padStart(2, '0')}`;
       administeredOrderSlotMap.set(`${item.orderId}:${timeStr}`, {
         givenAt: recStr,
-        nurse: item.administeredByUserName ?? undefined,
+        nurse: item.nurseUserId ? 'Staff Nurse' : undefined,
       });
     }
   }
@@ -227,5 +228,6 @@ export async function getDoctorSummaryCockpitData(args: {
       breakdown: { oralMl, ivMl, urineMl, drainMl },
     },
     attentionItems,
+    recentHistory: emarData.recentHistory,
   };
 }

@@ -1,7 +1,6 @@
-import React from 'react';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { requireSession } from '@/lib/auth/session';
-import { can } from '@/lib/domain/permissions';
+import { can, homePathFor } from '@/lib/domain/permissions';
 import { getAdmissionSummary } from '@/lib/services/ipd-census';
 import { listActiveOrders } from '@/lib/services/ipd-medication-orders';
 import { MinimalOrdersTab } from '@/components/ipd/orders/minimal-orders-tab';
@@ -12,6 +11,13 @@ export default async function OrdersPage({ params }: { params: Promise<any> }) {
   const session = await requireSession();
   const resolvedParams = await params;
   const id = resolvedParams?.id as string;
+
+  if (session.role === 'nurse') {
+    redirect(`/ipd/patients/${id}/emar`);
+  }
+  if (!can(session.role, 'clinical.read')) {
+    redirect(homePathFor(session.role));
+  }
 
   const [admission, orders] = await Promise.all([
     getAdmissionSummary(session.hospitalId, id),

@@ -25,5 +25,10 @@ export function BedsideTreatmentWorkspace(props: BedsideTreatmentWorkspaceProps)
   return <BedsideTreatmentChart {...props} />;
 }
 
-export { BedsideTreatmentChart, formatRoutePlain, formatSlotTime };
+export {
+  BedsideTreatmentChart,
+  BedsideTreatmentChart as MedicationChart,
+  formatRoutePlain,
+  formatSlotTime,
+};
 export type { Pick };

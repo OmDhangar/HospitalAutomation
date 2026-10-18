@@ -1,9 +1,9 @@
 import React from 'react';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { eq, and } from 'drizzle-orm';
 import { requireSession } from '@/lib/auth/session';
 import { getAdmissionSummary } from '@/lib/services/ipd-census';
-import { can } from '@/lib/domain/permissions';
+import { can, homePathFor } from '@/lib/domain/permissions';
 import { DischargeTab } from '@/components/ipd/discharge/discharge-tab';
 import { toggleDischargeReadyClientAction } from '@/app/(app)/ipd/actions';
 import {
@@ -17,6 +17,13 @@ export default async function DischargePage({ params }: { params: Promise<any> }
   const session = await requireSession();
   const resolvedParams = await params;
   const id = resolvedParams?.id as string;
+
+  if (session.role === 'nurse') {
+    redirect(`/ipd/patients/${id}/emar`);
+  }
+  if (!can(session.role, 'ipd.dischargeReady') && !can(session.role, 'ipd.discharge')) {
+    redirect(homePathFor(session.role));
+  }
 
   const admission = await getAdmissionSummary(session.hospitalId, id);
   if (!admission) notFound();

@@ -4,7 +4,14 @@ import { fileURLToPath } from 'node:url';
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['lib/**/*.test.ts', 'components/**/*.test.tsx', 'components/**/*.test.ts'],
+    include: [
+      'lib/**/*.test.ts',
+      'components/**/*.test.tsx',
+      'components/**/*.test.ts',
+      'app/**/*.test.ts',
+      'app/**/*.test.tsx',
+      'constants/**/*.test.ts',
+    ],
     setupFiles: ['dotenv/config'],
     // Integration tests round-trip to a managed Postgres in another region;
     // 5s is not enough for a test that performs a dozen sequential queries.

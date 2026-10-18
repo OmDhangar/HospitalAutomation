@@ -1,8 +1,15 @@
 import React from 'react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { DailyMedicationMatrix } from '@/components/ipd/summary/daily-medication-matrix';
 import { TprFlowsheet } from '@/components/ipd/summary/tpr-flowsheet';
+import { SummaryAdministeredCard } from '@/components/ipd/summary/summary-administered-card';
+import { DoctorQuickActions } from '@/components/ipd/summary/doctor-quick-actions';
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  usePathname: () => '/',
+}));
 
 describe('Doctor Summary Cockpit Components', () => {
   it('renders medication schedule with checkmark for given dose and pending box for due dose', () => {
@@ -57,5 +64,39 @@ describe('Doctor Summary Cockpit Components', () => {
 
     const htmlVitals = renderToString(<TprFlowsheet readings={[]} />);
     expect(htmlVitals).toContain('No vital readings recorded yet');
+  });
+
+  it('renders summary administered card with doses given today', () => {
+    const mockDoses = [
+      {
+        id: 'dose-1',
+        doseGiven: 'Paracetamol 650mg',
+        routeGiven: 'oral',
+        actualTime: new Date('2026-10-15T08:00:00Z'),
+        outcome: 'administered',
+      },
+    ];
+
+    const html = renderToString(
+      <SummaryAdministeredCard admissionId="adm-101" doses={mockDoses} />,
+    );
+    expect(html).toContain('Given Medicines Today');
+    expect(html).toContain('1 given');
+    expect(html).toContain('Paracetamol 650mg');
+    expect(html).toContain('By Mouth (Oral)');
+  });
+
+  it('renders doctor quick actions buttons for note, prescribe, and order tests', () => {
+    const html = renderToString(
+      <DoctorQuickActions
+        admissionId="adm-101"
+        patientName="Kavita Shinde"
+        canPrescribe={true}
+        testChips={[{ id: 'test-1', name: 'Complete Blood Count (CBC)' }]}
+      />,
+    );
+    expect(html).toContain('+ Progress Note');
+    expect(html).toContain('+ Prescribe Medicine');
+    expect(html).toContain('+ Order Test');
   });
 });
