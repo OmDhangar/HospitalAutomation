@@ -125,17 +125,19 @@ export function IntakeSmartSearch({ onSelectPatient, selectedPatientId }: Intake
           </div>
         </div>
 
-        {/* Live Results Dropdown */}
+        {/* Live Results Dropdown - In-flow and fully visible */}
         {query.trim().length > 0 && (
-          <div className="absolute inset-x-0 top-full z-30 mt-1 max-h-72 overflow-y-auto rounded-xl border border-ink-200 bg-white p-1 shadow-xl">
+          <div className="mt-2 max-h-72 overflow-y-auto rounded-lg border border-ink-200 bg-ink-50/40 p-2 shadow-2xs space-y-1.5">
             {isSearching && (
-              <div className="p-3 text-center text-xs text-ink-500">Searching directory...</div>
+              <div className="p-3 text-center text-xs text-ink-500 font-medium animate-pulse">
+                Searching directory for "{query}"...
+              </div>
             )}
 
             {!isSearching && results.length === 0 && hasSearched && (
               <div className="p-3 text-center">
-                <p className="text-xs font-semibold text-ink-700">No registered patient found</p>
-                <p className="text-[11px] text-ink-500">Enter details below to register a new walk-in patient.</p>
+                <p className="text-xs font-semibold text-ink-800">No registered patient found matching "{query}"</p>
+                <p className="text-[11px] text-ink-500 mt-0.5">Use the "Enter New Walk-in Patient" tab above to register.</p>
               </div>
             )}
 
@@ -152,39 +154,40 @@ export function IntakeSmartSearch({ onSelectPatient, selectedPatientId }: Intake
                     setQuery('');
                   }}
                   className={cn(
-                    'flex w-full items-start justify-between rounded-lg p-2 text-left transition-colors',
+                    'flex w-full items-center justify-between rounded-lg p-2.5 text-left transition-all border',
                     isSelected
-                      ? 'bg-brand-50 text-brand-900'
-                      : 'hover:bg-ink-50 text-ink-900',
+                      ? 'bg-brand-50 text-brand-900 border-brand-300 ring-1 ring-brand-400'
+                      : 'bg-white hover:bg-brand-50/60 hover:border-brand-300 text-ink-900 border-ink-200/80 shadow-2xs',
                   )}
                 >
-                  <div className="space-y-0.5">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-bold text-xs text-ink-900">{patient.name}</span>
-                      <span className="text-[11px] text-ink-500">
+                  <div className="space-y-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-bold text-sm text-ink-900">{patient.name}</span>
+                      <span className="text-xs text-ink-600 font-medium">
                         {[patient.age ? `${patient.age}y` : null, patient.gender?.[0]?.toUpperCase()]
                           .filter(Boolean)
                           .join(' ')}
                       </span>
                       {patient.qid ? (
-                        <span className="rounded bg-purple-50 px-1 py-0.2 text-[9px] font-mono font-semibold text-purple-700 border border-purple-200/60">
+                        <span className="rounded bg-purple-50 px-1.5 py-0.2 text-[10px] font-mono font-semibold text-purple-700 border border-purple-200">
                           {patient.qid}
                         </span>
                       ) : null}
                       {patient.mrn ? (
-                        <span className="rounded bg-ink-100 px-1 py-0.2 text-[9px] font-mono text-ink-600">
+                        <span className="rounded bg-ink-100 px-1.5 py-0.2 text-[10px] font-mono font-semibold text-ink-700">
                           MRN: {patient.mrn}
                         </span>
                       ) : null}
                     </div>
 
-                    <p className="text-[11px] text-ink-600">
-                      📞 {patient.phoneE164} {patient.address ? `· 📍 ${patient.address}` : ''}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-ink-600">
+                      <span>📞 {patient.phoneE164}</span>
+                      {patient.address && <span>📍 {patient.address}</span>}
+                    </div>
 
                     {/* Active Stay Duplicate Warning */}
                     {hasActiveStay && (
-                      <div className="mt-1 flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 border border-amber-200">
+                      <div className="mt-1 inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800 border border-amber-200">
                         <AlertCircleIcon className="size-3 text-amber-600" />
                         <span>
                           Warning: Active IPD stay in {patient.activeStay?.wardName ?? 'Ward'}, Bed {patient.activeStay?.bedLabel ?? '?'}
@@ -193,11 +196,11 @@ export function IntakeSmartSearch({ onSelectPatient, selectedPatientId }: Intake
                     )}
                   </div>
 
-                  {isSelected && (
-                    <div className="flex size-4 items-center justify-center rounded-full bg-brand-600 text-white">
-                      <CheckIcon className="size-2.5" />
-                    </div>
-                  )}
+                  <div className="shrink-0 pl-3">
+                    <span className="inline-flex items-center gap-1 rounded-md bg-brand-600 px-2.5 py-1 text-xs font-semibold text-white shadow-2xs hover:bg-brand-700">
+                      Select Patient →
+                    </span>
+                  </div>
                 </button>
               );
             })}

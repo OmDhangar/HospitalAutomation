@@ -305,7 +305,7 @@ export function UnifiedIntakeForm({
       )}
 
       {/* SECTION 1: TOP PATIENT IDENTITY STRIP */}
-      <Card className="mb-3 overflow-hidden border-ink-200 shadow-2xs">
+      <Card className="mb-3 border-ink-200 shadow-2xs">
         <div className="flex items-center justify-between border-b border-ink-100 bg-ink-50/50 px-3.5 py-2">
           <div className="flex items-center gap-2">
             <span className="flex size-5 shrink-0 items-center justify-center rounded bg-brand-50 text-[11px] font-bold text-brand-700 border border-brand-200/60">
