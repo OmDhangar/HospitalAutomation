@@ -351,6 +351,13 @@
       "when": 1790700000000,
       "tag": "0050_global_medicines",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1791100000000,
+      "tag": "0054_ipd_admission_and_consents",
+      "breakpoints": true
     }
   ]
 }
