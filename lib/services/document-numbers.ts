@@ -4,15 +4,16 @@ import { documentSequences } from '@/lib/db/schema';
 import { serviceDateIn } from '@/lib/domain/time';
 
 /**
- * Returns Indian Financial Year string (e.g. "26-27" for date between 1 Apr 2026 and 31 Mar 2027).
+ * Returns Indian Financial Year string (e.g. "2026-27" for date between 1 Apr 2026 and 31 Mar 2027),
+ * satisfying database constraint ^\d{4}-\d{2}$.
  */
 export function currentFiscalYear(date: Date = new Date(), timezone: string = 'Asia/Kolkata'): string {
   const ymd = serviceDateIn(timezone, date); // "YYYY-MM-DD"
   const year = parseInt(ymd.slice(0, 4), 10);
   const month = parseInt(ymd.slice(5, 7), 10);
   const startYear = month >= 4 ? year : year - 1;
-  const endYear = startYear + 1;
-  return `${String(startYear).slice(-2)}-${String(endYear).slice(-2)}`;
+  const endYear = (startYear + 1) % 100;
+  return `${startYear}-${String(endYear).padStart(2, '0')}`;
 }
 
 export type NextNumberResult = {

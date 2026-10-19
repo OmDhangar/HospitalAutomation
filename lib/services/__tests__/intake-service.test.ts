@@ -41,17 +41,17 @@ describe('Inpatient Intake Service & Consent Engine', () => {
   it('determines Indian financial year correctly across April 1 boundary', async () => {
     const { currentFiscalYear } = await import('@/lib/services/document-numbers');
     
-    // October 2026 -> FY 26-27
+    // October 2026 -> FY 2026-27
     const octDate = new Date('2026-10-19T10:00:00Z');
-    expect(currentFiscalYear(octDate)).toBe('26-27');
+    expect(currentFiscalYear(octDate)).toBe('2026-27');
 
-    // March 2027 -> FY 26-27 (before April)
+    // March 2027 -> FY 2026-27 (before April)
     const marDate = new Date('2027-03-31T10:00:00Z');
-    expect(currentFiscalYear(marDate)).toBe('26-27');
+    expect(currentFiscalYear(marDate)).toBe('2026-27');
 
-    // April 1, 2027 -> FY 27-28
+    // April 1, 2027 -> FY 2027-28
     const aprDate = new Date('2027-04-01T10:00:00Z');
-    expect(currentFiscalYear(aprDate)).toBe('27-28');
+    expect(currentFiscalYear(aprDate)).toBe('2027-28');
   });
 
   it('safely handles missing variables in formatConsentText', () => {

@@ -257,8 +257,8 @@ export function UnifiedIntakeForm({
         },
       });
 
-      if (!res.ok || !res.data) {
-        setErrorMessage(res.error || 'Failed to complete admission intake');
+      if (!res || !res.ok) {
+        setErrorMessage(res?.error || 'Failed to complete admission intake');
         window.scrollTo({ top: 0, behavior: 'smooth' });
         return;
       }

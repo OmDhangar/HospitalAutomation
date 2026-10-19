@@ -1069,9 +1069,27 @@ export async function executePatientIntakeAction(payload: Omit<PatientIntakePayl
     });
     revalidatePath('/ipd');
     revalidatePath(`/ipd/admissions/${result.admissionId}`);
-    return { ok: true, data: result };
+    return { ok: true as const, data: result };
   } catch (err: any) {
-    return { ok: false, error: err.message || 'Failed to complete patient intake' };
+    console.error('[executePatientIntakeAction:error]', err);
+    let cleanMessage = 'Failed to complete patient intake. Please check the form and try again.';
+    const raw = String(err?.message ?? '');
+
+    if (err instanceof AdmissionError || err?.name === 'AdmissionError') {
+      cleanMessage = err.message;
+    } else if (raw.includes('Choose an active doctor')) {
+      cleanMessage = 'Please select an active attending consultant.';
+    } else if (raw.includes('already occupied') || raw.includes('Every bed is taken')) {
+      cleanMessage = 'Selected bed is no longer available. Please pick another bed.';
+    } else if (raw.includes('backdate') || raw.includes('backdating')) {
+      cleanMessage = 'Arrival time was over 15 minutes in the past. Please enter a brief backdate reason.';
+    } else if (raw.includes('document_sequences') || raw.includes('Failed query')) {
+      cleanMessage = 'System could not assign admission document number. Please try again.';
+    } else if (err?.message && !raw.includes('insert into') && !raw.includes('select ') && !raw.includes('Failed query')) {
+      cleanMessage = err.message;
+    }
+
+    return { ok: false as const, error: cleanMessage };
   }
 }
 
