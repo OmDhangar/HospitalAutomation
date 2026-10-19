@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Transform the IPD admission workflow into a unified clinical intake system bridging OPD consultations and emergency walk-ins—featuring OPD admission advice, urgency-ranked awaiting queue, single smart search, persistent family contacts (`patient_contacts`), versioned legal consents (`patient_consents`), non-blocking advance deposits with gapless receipts, global doctor surveillance alerts with audio chimes, and multi-tenant A4 printable case packs matching Guruved Hospital stationery.
+**Goal:** Transform the IPD admission workflow into a unified, clinical-grade intake pipeline bridging OPD consultations and emergency walk-ins—featuring separated bed allocation vs. physical ward arrival, generic clinical alerts with automated escalation, locked financial-year document counters, hardened versioned consents with server-side hashing, Medico-Legal Case (MLC) police tracking, unidentified patient safety, payer-aware financial checklists, smart predictive search, and multi-tenant A4 printable case packs.
 
-**Architecture:** Extend `admissions` with urgency, advised ward, and sequence columns; introduce `patient_contacts`, `consent_templates`, and `patient_consents`; unify `/ipd/new` and `/ipd/admissions/[id]/assign` into a single 2-column intake form with a <60s Minimum Viable Admission (MVA); wire doctor advice into the OPD consultation panel and the awaiting queue; broadcast arrival alerts to the global app shell; and render printable case sheets dynamically from hospital settings.
+**Architecture:** Extend `admissions` with arrival, urgency, and MLC forensic columns; introduce `patient_contacts`, `consent_templates`, `patient_consents`, and `clinical_alerts`; unify `/ipd/new` and `/ipd/admissions/[id]/assign` into a 2-column intake form with a <60s Minimum Viable Admission (MVA); wire doctor advice into OPD consultation and priority awaiting queues; manage alert lifecycles and cron escalation in the global app shell; and render printable case sheets dynamically from hospital settings.
 
 **Tech Stack:** Next.js 15 (App Router, Server Actions), PostgreSQL, Drizzle ORM, Row Level Security (`withTenant`, `app.clinical_access`), Tailwind CSS, Web Audio API chime.
 
@@ -16,18 +16,20 @@
 
 - Every query and mutation touching clinical records MUST execute within `withTenant(hospitalId, fn, { clinical: true })`.
 - All SQL migrations MUST be idempotent (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING`) and pass `lib/db/migrations/__tests__/lint.test.ts`.
-- In emergencies, consent or deposit absence MUST NEVER block bed allocation or patient care.
+- Room charges, clinical clocks, and arrival alerts MUST start strictly at physical ward arrival (`arrived_at`), NOT at bed allocation.
+- Backdating `arrived_at` (> 15m) MUST be permission-gated, require a mandatory reason, and record real-time vs backdated stamps in `audit_logs`.
+- In emergencies, consent or deposit absence MUST NEVER block bed allocation or physical patient care.
 - Multi-tenant letterhead MUST pull hospital name, registration numbers, address, and doctor details dynamically from database settings (zero hard-coded hospital names).
-- Intake form MUST be dual-entry: pre-fills and locks patient if arriving from OPD consultation; provides smart search if direct walk-in/emergency.
+- Unidentified emergency patients receive hospital-local temporary MRNs only; NO global QID is generated until verified.
 
 ---
 
 ## Review Focus
 
-1. **OPD-to-IPD Pre-population:** Admitting an OPD-shifted patient must lock patient demographics, pre-fill doctor advice, and require only bed assignment to complete intake.
+1. **Allocation vs. Arrival Billing Clock:** Assigning a bed at 2:00 PM and recording physical arrival at 3:30 PM must start room charges and the clinical clock strictly at 3:30 PM.
 2. **Bed Allocation Race Condition:** If two receptionists assign the same bed concurrently, the transaction must roll back cleanly with `"Bed [Label] was taken just now"`.
-3. **Unidentified Emergency Intake:** Creating an unidentified patient must generate a valid temporary identity without fake `0000000000` numbers and permit later merging.
-4. **Doctor Alert Delivery Across Views:** An alert for an arriving inpatient must display as a banner/toast in the global header regardless of whether the doctor is in OPD queue, consultation, or settings.
+3. **MLC Police Intimation Handling:** Admitting an MLC patient (RTA, assault, poisoning) must require police intimation fields before marking intake complete, without blocking emergency admission.
+4. **Alert Escalation Sweep:** An unacknowledged alert must transition to `status = 'escalated'` and re-route to the nurse in-charge or owner after 20 minutes.
 5. **Print Layout A4 Integrity:** Printing `/print/ipd-admission/[admissionId]` must fit Page 1 (Admission Sheet) and Page 2 (High-Risk Consent) onto exact individual A4 sheets with zero margin overflow.
 
 ---
@@ -43,24 +45,26 @@
 
 **Interfaces:**
 - Produces:
-  - `admissions` new columns: `admissionNumber`, `urgency`, `advisedWardKind`, `estimatedStayDays`, `receptionNotes`, `referringDoctorName`, `doctorAlertedAt`, `doctorAcknowledgedAt`, `doctorAcknowledgedByUserId`, `firstReviewedAt`, `firstReviewedByUserId`, `isIntakeComplete`, `intakeCompletedAt`, `intakeCompletedByUserId`.
+  - `admissions` new columns: `admissionNumber`, `urgency`, `advisedWardKind`, `estimatedStayDays`, `receptionNotes`, `referringDoctorName`, `arrivedAt`, `arrivalBackdateReason`, `isMlc`, `mlcNumber`, `mlcCategory`, `policeStationName`, `policeIntimatedAt`, `policeIntimationMode`, `constableName`, `constableBuckleNo`, `firstReviewedAt`, `firstReviewedByUserId`, `isIntakeComplete`.
   - `patientContacts` table for persistent family/emergency contacts.
-  - `consentTemplates` table for versioned legal wording.
-  - `patientConsents` table with immutable text snapshots and signature fields.
+  - `consentTemplates` table (with active partial unique index).
+  - `patientConsents` table (immutable text snapshot, SHA-256 hash, doctor explanation, staff witness).
+  - `clinicalAlerts` table (generic alert engine with `alertType`, `alertStatus`, escalation).
+  - Document sequence kinds: `'admission'`, `'deposit_receipt'`, `'mlc'`.
   - RLS policies: `tenant_isolation` and `clinical_access`.
 
 - [ ] **Step 1: Write migration `drizzle/0054_ipd_admission_and_consents.sql`**
-  Add idempotent SQL for `admissions` columns, `patient_contacts`, `consent_templates`, `patient_consents`, document sequence kinds (`admission_number`, `deposit_receipt`), and RLS policies.
+  Add idempotent SQL for `admissions` columns, `patient_contacts`, `consent_templates`, `patient_consents`, `clinical_alerts`, document sequence kinds, and RLS policies.
 - [ ] **Step 2: Update `lib/db/schema.ts`**
-  Export `patientContacts`, `consentTemplates`, and `patientConsents` Drizzle pgTable definitions.
+  Export `patientContacts`, `consentTemplates`, `patientConsents`, and `clinicalAlerts` Drizzle pgTable definitions.
 - [ ] **Step 3: Run migration linter test**
   Run `npx vitest run lib/db/migrations/__tests__/lint.test.ts` and confirm all migration rules pass.
 - [ ] **Step 4: Commit**
-  `git add drizzle/0054_ipd_admission_and_consents.sql lib/db/schema.ts && git commit -m "feat(db): add 0054 migration for admission redesign, contacts, and versioned consents"`
+  `git add drizzle/0054_ipd_admission_and_consents.sql lib/db/schema.ts && git commit -m "feat(db): add 0054 migration for admission redesign, alerts, contacts, consents, and mlc"`
 
 ---
 
-### Task 2: Smart Predictive Patient Search & Unidentified Intake Service
+### Task 2: Smart Predictive Search & Unidentified Identity Safety
 
 **Files:**
 - Create: `lib/services/patient-search.ts`
@@ -80,6 +84,7 @@
     mrn: string | null;
     qid: string | null;
     lastVisitAt: Date | null;
+    activeAdmissionId: string | null; // For duplicate stay warning
     matchType: 'phone' | 'qid' | 'mrn' | 'name';
   };
   export async function searchPatientsSmart(args: {
@@ -96,20 +101,26 @@
     descriptiveNote?: string | null;
     actorUserId: string;
   }): Promise<{ patientId: string; tempName: string; mrn: string }>;
+  export async function mergeUnidentifiedPatient(args: {
+    hospitalId: string;
+    tempPatientId: string;
+    confirmedPatientId: string;
+    actorUserId: string;
+  }): Promise<void>;
   ```
 
 - [ ] **Step 1: Write unit test in `lib/services/__tests__/patient-search.test.ts`**
-  Assert 10 digits triggers phone match; `QID-...` triggers QID match; alphanumeric matches MRN; text triggers fuzzy name match with `record_access_logs` entry.
-- [ ] **Step 2: Implement `searchPatientsSmart` and `registerUnidentifiedPatient` in `lib/services/patient-search.ts`**
-  Enforce tenant isolation and audit logging.
+  Assert 10 digits triggers phone match; `QID-...` triggers QID match; alphanumeric matches MRN; text triggers fuzzy name match with `record_access_logs` entry; active IPD stay flags duplicate.
+- [ ] **Step 2: Implement `searchPatientsSmart`, `registerUnidentifiedPatient`, and `mergeUnidentifiedPatient` in `lib/services/patient-search.ts`**
+  Enforce tenant isolation, audit logging, and temporary MRN sequences.
 - [ ] **Step 3: Verify test passes**
   Run `npx vitest run lib/services/__tests__/patient-search.test.ts`.
 - [ ] **Step 4: Commit**
-  `git add lib/services/patient-search.ts lib/services/__tests__/patient-search.test.ts && git commit -m "feat(patients): implement smart single-box search and unidentified registration"`
+  `git add lib/services/patient-search.ts lib/services/__tests__/patient-search.test.ts && git commit -m "feat(patients): implement smart search, duplicate warning, and unidentified patient merge"`
 
 ---
 
-### Task 3: OPD Admission Advice Capture & Awaiting Queue Upgrades
+### Task 3: OPD Admission Advice & Urgency-Ranked Awaiting Queue
 
 **Files:**
 - Modify: `lib/services/admissions.ts:114-180`
@@ -139,70 +150,37 @@
 
 ---
 
-### Task 4: Unified Inpatient Intake Service & Alert Actions
+### Task 4: Inpatient Intake Service: Allocation, Arrival, Alerts & Sequences
 
 **Files:**
 - Modify: `lib/services/admissions.ts:420-560`
+- Create: `lib/services/clinical-alerts.ts`
 - Modify: `app/(app)/ipd/actions.ts:180-260`
 - Test: `lib/services/__tests__/intake-service.test.ts`
 
 **Interfaces:**
 - Produces:
-  ```ts
-  export type ExecuteIntakeInput = {
-    hospitalId: string;
-    branchId: string;
-    admissionId?: string | null; // provided if completing an OPD-shifted admission
-    patientId?: string | null;   // provided if existing patient
-    newPatient?: { phoneE164: string; name: string; age?: number | null; gender?: string | null; address?: string | null };
-    doctorId: string;
-    bedId: string;
-    referringDoctorName?: string | null;
-    provisionalDiagnosis?: string | null;
-    admittedAt?: Date;
-    attendant?: { name: string; relation: string; phone?: string | null; address?: string | null; isDecisionMaker?: boolean };
-    consent?: {
-      highRiskAccepted: boolean;
-      status: 'obtained' | 'pending' | 'refused';
-      pendingReason?: string | null;
-      signatoryCapacity: 'patient' | 'relative' | 'guardian' | 'legal_rep';
-      inabilityReason?: string | null;
-      paperOnFile: boolean;
-      explainedByDoctorId?: string | null;
-      language?: 'en' | 'mr' | 'hi';
-    };
-    deposit?: { amountRupees: number; method: 'cash' | 'upi' | 'card' | 'bank' };
-    clientId: string; // Idempotency key
-    actorUserId: string;
-  };
-  export async function executePatientIntake(args: ExecuteIntakeInput): Promise<{
-    admissionId: string;
-    admissionNumber: string;
-    patientName: string;
-    ipdNumber: number | null;
-    depositId: string | null;
-  }>;
-  export async function acknowledgeDoctorSurveillanceAlert(args: {
-    hospitalId: string;
-    admissionId: string;
-    actorUserId: string;
-  }): Promise<void>;
-  ```
+  - `allocateBedInTx`: Reserves bed atomically.
+  - `confirmWardArrival`: Sets `arrived_at`, starts room charges and clinical clock, triggers `clinical_alerts` row `'patient_arrived_ward'`. Gated backdating writes to `audit_logs`.
+  - Next gapless FY document numbers for `admission` (`ADM/26-27/00042`), `deposit_receipt` (`REC/26-27/00128`), and `mlc` (`MLC/26-27/00018`).
+  - `recordConsent`: Default pending, server-side SHA-256 hash, doctor explanation stamp.
+  - Payer-aware financial recording: Advance deposit or pre-auth/waiver reason.
+  - `acknowledgeAlert`: Acknowledges clinical alert.
 
 - [ ] **Step 1: Write integration test in `lib/services/__tests__/intake-service.test.ts`**
-  Verify single transaction creates/updates admission, records bed occupancy, saves persistent contact, creates versioned consent with text snapshot, posts deposit, and marks doctor alerted.
-- [ ] **Step 2: Implement `executePatientIntake` and `acknowledgeDoctorSurveillanceAlert` in `lib/services/admissions.ts`**
-  Handle both OPD-prefilled (`admissionId`) and direct emergency intake paths idempotently.
+  Verify allocation vs arrival split; verify arrival fires `clinical_alerts`; verify FY sequences are gapless; verify backdating requires reason and audits.
+- [ ] **Step 2: Implement `allocateBedInTx`, `confirmWardArrival`, and `clinicalAlerts` services in `lib/services/`**
+  Execute within `withTenant(..., { clinical: true })` with row locks.
 - [ ] **Step 3: Update `executeIntakeAction` in `app/(app)/ipd/actions.ts`**
-  Expose server action with parameter parsing and client-key idempotency.
+  Expose server actions with client-key idempotency.
 - [ ] **Step 4: Verify test passes**
   Run `npx vitest run lib/services/__tests__/intake-service.test.ts`.
 - [ ] **Step 5: Commit**
-  `git add lib/services/admissions.ts app/(app)/ipd/actions.ts lib/services/__tests__/intake-service.test.ts && git commit -m "feat(ipd): implement unified executePatientIntake service and alert actions"`
+  `git add lib/services/admissions.ts lib/services/clinical-alerts.ts app/(app)/ipd/actions.ts lib/services/__tests__/intake-service.test.ts && git commit -m "feat(ipd): implement allocation vs arrival split, FY sequences, and clinical alerts service"`
 
 ---
 
-### Task 5: 2-Column Unified Intake Form UI
+### Task 5: 2-Column Unified Intake Form UI & Derived Completeness
 
 **Files:**
 - Create: `components/ipd/intake/unified-intake-form.tsx`
@@ -214,25 +192,26 @@
 - Test: `components/ipd/__tests__/unified-intake-form.test.tsx`
 
 **Interfaces:**
-- Replaces disparate pages with one cohesive, responsive 2-column component.
+- Unifies `/ipd/new` and `/ipd/admissions/[id]/assign`.
 - Implements Minimum Viable Admission (MVA): patient, consultant, bed -> **[ ADMIT PATIENT ]** in < 60s.
+- Right sidebar shows intake completeness meter and missing checklist items.
 
 - [ ] **Step 1: Write component test in `components/ipd/__tests__/unified-intake-form.test.tsx`**
   Assert pre-filled OPD patient locks identity; smart search works for walk-in; quick admit submits MVA without attendant/deposit; attendant pre-fills consent signatory.
 - [ ] **Step 2: Build `intake-smart-search.tsx` and `intake-sticky-sidebar.tsx`**
   Display live intake checklist and completeness meter (e.g. 3/6 items).
 - [ ] **Step 3: Build `unified-intake-form.tsx`**
-  Implement 2-column layout with Cards 1–6 (Patient, Consultant & Bed, Attendant, Versioned Consent with English/Marathi declaration, Advance Deposit, Referral).
+  Implement 2-column layout with Cards 1–6 (Patient, Consultant & Bed, Attendant, Versioned Consent with English/Marathi declaration, Advance Deposit / Pre-auth, MLC & Referral).
 - [ ] **Step 4: Update `/ipd/new` and `/ipd/admissions/[id]/assign`**
   Wire both routes to render `UnifiedIntakeForm` with mode (`direct` vs `opd_prefilled`).
 - [ ] **Step 5: Verify test passes**
   Run `npx vitest run components/ipd/__tests__/unified-intake-form.test.tsx`.
 - [ ] **Step 6: Commit**
-  `git add components/ipd/intake/* app/(app)/ipd/new/page.tsx app/(app)/ipd/admissions/[id]/assign/page.tsx components/ipd/__tests__/unified-intake-form.test.tsx && git commit -m "feat(ipd): implement 2-column unified intake form with MVA and live sidebar"`
+  `git add components/ipd/intake/* app/(app)/ipd/new/page.tsx app/(app)/ipd/admissions/[id]/assign/page.tsx components/ipd/__tests__/unified-intake-form.test.tsx && git commit -m "feat(ipd): implement 2-column unified intake form with MVA and live completeness sidebar"`
 
 ---
 
-### Task 6: Global Doctor Surveillance Alerting System
+### Task 6: Global Alerts Engine, Doctor Surveillance & Background Escalation
 
 **Files:**
 - Create: `components/ipd/global-surveillance-banner.tsx`
@@ -245,11 +224,12 @@
 
 **Interfaces:**
 - Produces: Global app-shell banner & toast, audio chime trigger, escalation tracking, and `/ipd/my-patients` table pulse highlighting.
+- Stamping `first_reviewed_at` on first clinical round/order.
 
 - [ ] **Step 1: Write component test in `components/ipd/__tests__/surveillance-alert.test.tsx`**
   Assert alert displays distinct message for OPD-shifted patient vs emergency walk-in; acknowledge action dismisses alert.
 - [ ] **Step 2: Update `lib/services/dashboard-loader.ts`**
-  Query active unacknowledged admissions (`doctor_acknowledged_at IS NULL`) for the current user's linked doctor.
+  Query active unacknowledged alerts from `clinical_alerts` for the current user's linked doctor.
 - [ ] **Step 3: Implement `components/ipd/global-surveillance-banner.tsx`**
   Render banner with audio chime unlock check and escalation warning if > 20 mins unacknowledged.
 - [ ] **Step 4: Wire banner into `app/(app)/layout.tsx` and `/ipd/my-patients`**
@@ -257,11 +237,11 @@
 - [ ] **Step 5: Verify test passes**
   Run `npx vitest run components/ipd/__tests__/surveillance-alert.test.tsx`.
 - [ ] **Step 6: Commit**
-  `git add components/ipd/global-surveillance-banner.tsx lib/services/dashboard-loader.ts app/(app)/layout.tsx app/(app)/dashboard/page.tsx app/(app)/ipd/my-patients/page.tsx app/(app)/ipd/my-patients/my-patients-table.tsx components/ipd/__tests__/surveillance-alert.test.tsx && git commit -m "feat(ipd): implement global doctor surveillance alerts and audio chime"`
+  `git add components/ipd/global-surveillance-banner.tsx lib/services/dashboard-loader.ts app/(app)/layout.tsx app/(app)/dashboard/page.tsx app/(app)/ipd/my-patients/page.tsx app/(app)/ipd/my-patients/my-patients-table.tsx components/ipd/__tests__/surveillance-alert.test.tsx && git commit -m "feat(ipd): implement global clinical alerts engine, doctor surveillance, and audio notifications"`
 
 ---
 
-### Task 7: Multi-Tenant Print Pack (Admission Form, Consent & Deposit Receipt)
+### Task 7: Multi-Tenant Print Pack (Admission Form, Consent, MLC & Deposit Receipt)
 
 **Files:**
 - Create: `app/(app)/print/ipd-admission/[admissionId]/page.tsx`
@@ -274,7 +254,7 @@
 - Produces: Pixel-accurate A4 printable sheets dynamically rendered with hospital letterhead from `hospitals` settings, storing an immutable payload snapshot.
 
 - [ ] **Step 1: Write test in `components/ipd/__tests__/print-pack.test.tsx`**
-  Assert letterhead renders hospital name, reg no, doctor credentials, and phone from database; verify High-Risk Consent renders signed text snapshot.
+  Assert letterhead renders hospital name, reg no, doctor credentials, and phone from database; verify High-Risk Consent renders signed text snapshot; verify MLC slip formats police details.
 - [ ] **Step 2: Implement `dynamic-admission-sheet.tsx` and `dynamic-consent-sheet.tsx`**
   Implement authentic layout with ward transfer table, 10-box contact numbers, and bilingual consent text with pure `@media print` CSS.
 - [ ] **Step 3: Implement `/print/ipd-admission/[admissionId]` and `/print/receipt/[paymentId]`**
@@ -282,7 +262,7 @@
 - [ ] **Step 4: Verify test passes**
   Run `npx vitest run components/ipd/__tests__/print-pack.test.tsx`.
 - [ ] **Step 5: Commit**
-  `git add app/(app)/print/ipd-admission/[admissionId]/page.tsx app/(app)/print/receipt/[paymentId]/page.tsx components/ipd/print/* components/ipd/__tests__/print-pack.test.tsx && git commit -m "feat(print): implement multi-tenant A4 admission sheet, consent and deposit receipt"`
+  `git add app/(app)/print/ipd-admission/[admissionId]/page.tsx app/(app)/print/receipt/[paymentId]/page.tsx components/ipd/print/* components/ipd/__tests__/print-pack.test.tsx && git commit -m "feat(print): implement multi-tenant A4 admission sheet, consent, MLC intimation and deposit receipt"`
 
 ---
 
