@@ -82,19 +82,19 @@ export function IntakeSmartSearch({ onSelectPatient, selectedPatientId }: Intake
   };
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2.5">
       {/* Search Input Box */}
       <div className="relative">
         <div className="relative flex items-center">
-          <div className="pointer-events-none absolute left-3.5 flex items-center text-ink-400">
-            <SearchIcon className="size-5" />
+          <div className="pointer-events-none absolute left-3 flex items-center text-ink-400">
+            <SearchIcon className="size-4" />
           </div>
           <input
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search by Mobile, Patient Name, UHID/QID, or MRN..."
-            className="w-full rounded-xl border border-ink-300 bg-white py-3 pl-11 pr-28 text-base text-ink-900 shadow-xs placeholder:text-ink-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-100"
+            className="w-full rounded-lg border border-ink-300 bg-white py-2 pl-9 pr-24 text-sm text-ink-900 shadow-xs placeholder:text-ink-400 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
             aria-label="Patient smart search"
           />
           {query ? (
@@ -105,20 +105,20 @@ export function IntakeSmartSearch({ onSelectPatient, selectedPatientId }: Intake
                 setResults([]);
                 setHasSearched(false);
               }}
-              className="absolute right-20 text-ink-400 hover:text-ink-600"
+              className="absolute right-18 text-ink-400 hover:text-ink-600"
             >
-              <XIcon className="size-4" />
+              <XIcon className="size-3.5" />
             </button>
           ) : null}
 
           {/* Search Type Badge */}
-          <div className="absolute right-3">
+          <div className="absolute right-2.5">
             <span className={cn(
-              'inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider',
-              searchType === 'phone' && 'bg-blue-50 text-blue-700 ring-1 ring-blue-200 dark:bg-blue-950/40 dark:text-blue-300',
-              searchType === 'qid' && 'bg-purple-50 text-purple-700 ring-1 ring-purple-200 dark:bg-purple-950/40 dark:text-purple-300',
-              searchType === 'mrn' && 'bg-teal-50 text-teal-700 ring-1 ring-teal-200 dark:bg-teal-950/40 dark:text-teal-300',
-              searchType === 'name' && 'bg-amber-50 text-amber-700 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-300',
+              'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider',
+              searchType === 'phone' && 'bg-blue-50 text-blue-700 border border-blue-200',
+              searchType === 'qid' && 'bg-purple-50 text-purple-700 border border-purple-200',
+              searchType === 'mrn' && 'bg-teal-50 text-teal-700 border border-teal-200',
+              searchType === 'name' && 'bg-amber-50 text-amber-700 border border-amber-200',
             )}>
               {searchType}
             </span>
@@ -127,15 +127,15 @@ export function IntakeSmartSearch({ onSelectPatient, selectedPatientId }: Intake
 
         {/* Live Results Dropdown */}
         {query.trim().length > 0 && (
-          <div className="absolute inset-x-0 top-full z-30 mt-1 max-h-72 overflow-y-auto rounded-xl border border-ink-200 bg-white p-1.5 shadow-xl dark:border-ink-700 dark:bg-ink-900">
+          <div className="absolute inset-x-0 top-full z-30 mt-1 max-h-72 overflow-y-auto rounded-xl border border-ink-200 bg-white p-1 shadow-xl">
             {isSearching && (
               <div className="p-3 text-center text-xs text-ink-500">Searching directory...</div>
             )}
 
             {!isSearching && results.length === 0 && hasSearched && (
-              <div className="p-4 text-center">
-                <p className="text-sm font-medium text-ink-700 dark:text-ink-300">No registered patient found</p>
-                <p className="text-xs text-ink-500">You can enter details below to register a new patient.</p>
+              <div className="p-3 text-center">
+                <p className="text-xs font-semibold text-ink-700">No registered patient found</p>
+                <p className="text-[11px] text-ink-500">Enter details below to register a new walk-in patient.</p>
               </div>
             )}
 
@@ -152,40 +152,40 @@ export function IntakeSmartSearch({ onSelectPatient, selectedPatientId }: Intake
                     setQuery('');
                   }}
                   className={cn(
-                    'flex w-full items-start justify-between rounded-lg p-2.5 text-left transition-colors',
+                    'flex w-full items-start justify-between rounded-lg p-2 text-left transition-colors',
                     isSelected
-                      ? 'bg-brand-50 text-brand-900 dark:bg-brand-950/50 dark:text-brand-200'
-                      : 'hover:bg-ink-50 dark:hover:bg-ink-800 text-ink-900 dark:text-ink-100',
+                      ? 'bg-brand-50 text-brand-900'
+                      : 'hover:bg-ink-50 text-ink-900',
                   )}
                 >
                   <div className="space-y-0.5">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-sm text-ink-900 dark:text-ink-50">{patient.name}</span>
-                      <span className="text-xs text-ink-500">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-bold text-xs text-ink-900">{patient.name}</span>
+                      <span className="text-[11px] text-ink-500">
                         {[patient.age ? `${patient.age}y` : null, patient.gender?.[0]?.toUpperCase()]
                           .filter(Boolean)
                           .join(' ')}
                       </span>
                       {patient.qid ? (
-                        <span className="rounded bg-purple-50 px-1.5 py-0.2 text-[10px] font-mono text-purple-700">
+                        <span className="rounded bg-purple-50 px-1 py-0.2 text-[9px] font-mono font-semibold text-purple-700 border border-purple-200/60">
                           {patient.qid}
                         </span>
                       ) : null}
                       {patient.mrn ? (
-                        <span className="rounded bg-ink-100 px-1.5 py-0.2 text-[10px] font-mono text-ink-600">
+                        <span className="rounded bg-ink-100 px-1 py-0.2 text-[9px] font-mono text-ink-600">
                           MRN: {patient.mrn}
                         </span>
                       ) : null}
                     </div>
 
-                    <p className="text-xs text-ink-600 dark:text-ink-400">
+                    <p className="text-[11px] text-ink-600">
                       📞 {patient.phoneE164} {patient.address ? `· 📍 ${patient.address}` : ''}
                     </p>
 
                     {/* Active Stay Duplicate Warning */}
                     {hasActiveStay && (
-                      <div className="mt-1 flex items-center gap-1.5 rounded-md bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-200">
-                        <AlertCircleIcon className="size-3.5 text-amber-600" />
+                      <div className="mt-1 flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 border border-amber-200">
+                        <AlertCircleIcon className="size-3 text-amber-600" />
                         <span>
                           Warning: Active IPD stay in {patient.activeStay?.wardName ?? 'Ward'}, Bed {patient.activeStay?.bedLabel ?? '?'}
                         </span>
@@ -194,8 +194,8 @@ export function IntakeSmartSearch({ onSelectPatient, selectedPatientId }: Intake
                   </div>
 
                   {isSelected && (
-                    <div className="flex size-5 items-center justify-center rounded-full bg-brand-600 text-white">
-                      <CheckIcon className="size-3" />
+                    <div className="flex size-4 items-center justify-center rounded-full bg-brand-600 text-white">
+                      <CheckIcon className="size-2.5" />
                     </div>
                   )}
                 </button>
@@ -220,10 +220,10 @@ export function IntakeSmartSearch({ onSelectPatient, selectedPatientId }: Intake
       {/* Unidentified Patient Modal */}
       {showUnidentifiedModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/40 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl ring-1 ring-ink-950/10 dark:bg-ink-900">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl ring-1 ring-ink-950/10">
             <div className="flex items-start justify-between border-b border-ink-100 pb-3">
               <div>
-                <h3 className="text-base font-bold text-ink-900 dark:text-ink-50">
+                <h3 className="text-sm font-bold text-ink-900">
                   Register Unidentified Patient
                 </h3>
                 <p className="text-xs text-ink-500">
@@ -235,7 +235,7 @@ export function IntakeSmartSearch({ onSelectPatient, selectedPatientId }: Intake
                 onClick={() => setShowUnidentifiedModal(false)}
                 className="rounded-lg p-1 text-ink-400 hover:bg-ink-100"
               >
-                <XIcon className="size-5" />
+                <XIcon className="size-4" />
               </button>
             </div>
 

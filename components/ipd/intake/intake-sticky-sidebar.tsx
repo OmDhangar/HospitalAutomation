@@ -56,18 +56,18 @@ export function IntakeStickySidebar({
   const isFullyComplete = completedCount === totalCount;
 
   return (
-    <div className="sticky top-6 space-y-4">
-      <Card className="overflow-hidden border-ink-200 shadow-md dark:border-ink-800">
-        <div className="border-b border-ink-100 bg-ink-50/50 p-4 dark:border-ink-800 dark:bg-ink-900/50">
+    <div className="sticky top-4 space-y-3">
+      <Card className="overflow-hidden border-ink-200 shadow-sm">
+        <div className="border-b border-ink-100 bg-ink-50/60 px-4 py-3">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-ink-900 dark:text-ink-50">Intake Checklist</h3>
-            <span className="text-xs font-semibold text-brand-700 dark:text-brand-300">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-ink-900">Intake Checklist</h3>
+            <span className="text-xs font-bold text-brand-700">
               {`${completedCount} of ${totalCount} ready`}
             </span>
           </div>
 
           {/* Progress bar */}
-          <div className="mt-2.5 h-2 w-full overflow-hidden rounded-full bg-ink-200 dark:bg-ink-700">
+          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-ink-200">
             <div
               className={cn(
                 'h-full transition-all duration-300',
@@ -79,24 +79,24 @@ export function IntakeStickySidebar({
         </div>
 
         {/* Checklist items */}
-        <div className="p-4">
-          <ul className="space-y-2.5">
+        <div className="p-3.5">
+          <ul className="space-y-2">
             {items.map((item, idx) => (
               <li key={idx} className="flex items-center justify-between text-xs">
                 <span
                   className={cn(
                     'flex items-center gap-2',
                     item.ready
-                      ? 'font-medium text-ink-900 dark:text-ink-100'
-                      : 'text-ink-500 dark:text-ink-400',
+                      ? 'font-medium text-ink-900'
+                      : 'text-ink-500',
                   )}
                 >
                   <span
                     className={cn(
                       'flex size-4 shrink-0 items-center justify-center rounded-full text-[10px]',
                       item.ready
-                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
-                        : 'bg-ink-100 text-ink-400 dark:bg-ink-800',
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-ink-100 text-ink-400',
                     )}
                   >
                     {item.ready ? <CheckIcon className="size-2.5" /> : '○'}
@@ -105,7 +105,7 @@ export function IntakeStickySidebar({
                 </span>
 
                 {item.required && !item.ready ? (
-                  <span className="text-[10px] font-semibold text-rose-600 uppercase">Required</span>
+                  <span className="text-[10px] font-bold text-rose-600 uppercase">Required</span>
                 ) : item.ready ? (
                   <span className="text-[10px] text-emerald-600 font-semibold">Done</span>
                 ) : (
@@ -116,21 +116,21 @@ export function IntakeStickySidebar({
           </ul>
 
           {/* MVA Ready Indicator */}
-          <div className="mt-5 pt-4 border-t border-ink-100 dark:border-ink-800">
+          <div className="mt-3.5 pt-3 border-t border-ink-100">
             {isMvaReady ? (
-              <div className="mb-3 rounded-lg bg-brand-50 p-2.5 text-xs text-brand-900 dark:bg-brand-950/40 dark:text-brand-200">
+              <div className="mb-3 rounded-lg border border-brand-200 bg-brand-50/70 p-2 text-xs text-brand-900">
                 <p className="font-semibold flex items-center gap-1.5">
                   <CheckIcon className="size-3.5 text-brand-600" />
                   Ready for Minimum Viable Admission
                 </p>
                 {!isFullyComplete && (
-                  <p className="mt-1 text-[11px] text-brand-700/90 dark:text-brand-300">
+                  <p className="mt-0.5 text-[11px] text-brand-700/90 leading-tight">
                     Missing consent or deposit can be completed after admission without delaying clinical care.
                   </p>
                 )}
               </div>
             ) : (
-              <div className="mb-3 rounded-lg bg-amber-50 p-2.5 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+              <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50/70 p-2 text-xs text-amber-900">
                 <p className="font-semibold flex items-center gap-1.5">
                   <AlertCircleIcon className="size-3.5 text-amber-600" />
                   Select Patient, Doctor & Bed
@@ -142,13 +142,13 @@ export function IntakeStickySidebar({
             <Button
               type="button"
               variant="primary"
-              size="xl"
+              size="lg"
               onClick={onSubmit}
               disabled={!isMvaReady || isSubmitting}
               isLoading={isSubmitting}
-              className="w-full gap-2 shadow-lg"
+              className="w-full h-11 gap-2 shadow-xs font-semibold text-sm"
             >
-              <BedIcon className="size-5" />
+              <BedIcon className="size-4" />
               {submitLabel}
             </Button>
           </div>
