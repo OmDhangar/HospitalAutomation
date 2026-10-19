@@ -17,13 +17,21 @@ import { normalizeIndianPhone } from '@/lib/domain/phone';
 import { isValidQid, normalizeQid } from '@/lib/domain/uhid';
 import { nextDocumentNumberInTx } from '@/lib/services/document-numbers';
 
-export {
+import {
   detectSearchType,
   formatTempName,
   type ActiveStayInfo,
   type SearchMatchType,
   type SmartSearchResult,
 } from '@/lib/domain/patient-search';
+
+export {
+  detectSearchType,
+  formatTempName,
+  type ActiveStayInfo,
+  type SearchMatchType,
+  type SmartSearchResult,
+};
 
 export async function searchPatientsSmart(args: {
   hospitalId: string;
