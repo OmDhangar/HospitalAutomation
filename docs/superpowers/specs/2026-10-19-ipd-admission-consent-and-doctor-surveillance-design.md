@@ -1,145 +1,202 @@
-# Design Spec: IPD Admission Redesign, 3-Way Search, Consent Engine & Doctor Surveillance Alerting
+# Design Spec: Comprehensive IPD Admission, Consent Engine, Doctor Surveillance & Intake Workflow
 
 **Date:** 2026-10-19  
-**Status:** Approved for Implementation Planning  
-**Target Module:** Inpatient Department (`/ipd`, `/ipd/new`, `/ipd/my-patients`, `/dashboard`, `/print`)  
-**Reference Hospital Stationery:** Guruved Hospital & Criticare Center (Dr. Vinod Rajesh Pawara, MD Medicine)
+**Status:** Approved for Implementation (Revision 2 — Fully Grounded in Clinical Practice & OPD-to-IPD Continuity)  
+**Target Modules:** OPD Consultation (`/dashboard`), IPD Intake (`/ipd/new`, `/ipd/admissions/[id]/assign`), Patient Chart (`/ipd/admissions/[id]`), Global App Shell, Print System (`/print`)  
+**Multi-Tenant Design:** Fully dynamic letterhead & configuration driven by `hospitals` settings (zero hard-coded hospital names)
 
 ---
 
-## 1. Executive Summary & Problem Statement
+## 1. Executive Summary & Clinical Architecture
 
-The current `/ipd/new` admission page in the Qurio Hospital Automation platform was built as a minimal 3-step proof-of-concept. It collects only basic demographic fields (Name, Phone, Age, Gender) and collapses billing into an optional `<details>` tag. 
-
-In clinical hospital reality—demonstrated by the physical stationery used by Guruved Hospital & Criticare Center—admitting an inpatient requires:
-1. **Emergency Contact / Attendant Details ("Brought By"):** Legally binding relative name, relation to patient, contact number, and signature.
-2. **Clinical Referral Context:** Attending consultant (Consultant In-Charge), referring doctor, specific admission time, and provisional diagnosis.
-3. **Formal Consent Tracking:** General admission consent and mandatory **High-Risk Consent** for critical, emergency, and ICU/HDU admissions with legally sound bilingual wording (English / Marathi).
-4. **Advance Payment (Deposit) Capturing:** Prominent advance billing at the desk with immediate printable deposit receipts crediting the running patient ledger.
-5. **3-Way Patient Search:** In emergencies, desk staff cannot always ask for a phone number; they need instant search by **Mobile Number**, **Patient Name**, or **UHID / QID** (the unique global identifier issued in OPD).
-6. **Doctor Surveillance Alerting:** Attending physicians consulting in OPD or rounding in the ward must be alerted immediately via visual banners and audio chimes when a new patient is admitted under their clinical surveillance.
-7. **Printable Stationery Matching Physical Case Files:** Immediate 1-click A4 printout matching the hospital's official admission form and high-risk consent sheet for physical case folder filing.
-
----
-
-## 2. System Architecture & Workflows
+Inpatient admission is not a standalone desk form; it is a clinical transition with **two distinct entry points into one unified intake engine**:
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        DESK ADMISSION WORKFLOW                         │
-│                                                                        │
-│   1. 3-Way Patient Search (Mobile / Name / UHID)                       │
-│      ├── Found: Auto-populate demographics & medical history           │
-│      └── Not Found: Fast new patient registration                      │
-│                                                                        │
-│   2. Clinical & Attendant Information                                  │
-│      ├── Consultant In-charge + Referring Doctor + Reason              │
-│      ├── Admission Date & Time (defaults to now, editable)             │
-│      ├── Ward & Bed Allocation (ICU, HDU, General, Special)           │
-│      └── Attendant ("Brought By"): Name, Relation, Phone, Address      │
-│                                                                        │
-│   3. Consent Engine                                                    │
-│      ├── General Admission Consent                                     │
-│      ├── High-Risk Consent (auto-prompted for ICU / HDU / Emergency)  │
-│      └── Signing Mode: "Signed on Paper" toggle (future digital canvas)│
-│                                                                        │
-│   4. Advance Billing (Deposit)                                         │
-│      ├── Amount (₹) + Payment Mode (Cash, UPI, Card, Bank)            │
-│      └── Posts to Ledger + triggers Receipt sequence                   │
-└──────────────────────────────────┬─────────────────────────────────────┘
-                                   │
-                   Atomic DB Transaction Commit
-                                   │
-         ┌─────────────────────────┴─────────────────────────┐
-         ▼                                                   ▼
-┌──────────────────────────────────┐        ┌──────────────────────────────────┐
-│      PRINT & FILE ENGINE         │        │    DOCTOR SURVEILLANCE ENGINE    │
-│                                  │        │                                  │
-│ 1. Printable Admission Sheet     │        │ 1. Real-time Doctor Banner       │
-│    (matches Guruved A4 format)   │        │    (/dashboard & /ipd/my-patients)
-│ 2. Printable High-Risk Consent   │        │ 2. Audio Chime Notification      │
-│ 3. Printable Deposit Receipt     │        │ 3. Status: "Awaiting Review"     │
-│                                  │        │ 4. 1-Click Acknowledge / Round   │
-└──────────────────────────────────┘        └──────────────────────────────────┘
+[ ENTRY POINT A: OPD Consultation ]          [ ENTRY POINT B: Walk-In / Emergency ]
+Doctor clicks "Admit to IPD"                   Desk opens /ipd/new
+Captures Doctor's Admission Advice:            Single Smart Search (detects Phone/Name/QID)
+- Advised ward category & urgency              Or "Register Unidentified Emergency Patient"
+- Provisional diagnosis & stay estimate        
+               │                                                 │
+               ▼                                                 │
+Reception: "To Admit" Queue (/ipd?tab=awaiting)                  │
+Ordered by urgency (Emergency > Same-Day > Planned)              │
+Shows doctor note, wait time, advised ward                       │
+               │                                                 │
+               └───────────────────────┬─────────────────────────┘
+                                       ▼
+                       ONE UNIFIED ADMISSION FORM
+        ┌──────────────────────────────────────────────────────────────┐
+        │  Left Column: Form Sections      │ Right Column: Sticky Live │
+        │  1. Patient Identity (locked     │ Summary & Intake Progress │
+        │     if from OPD; search if direct│                           │
+        │  2. Consultant In-charge         │ • Patient Card & Identifiers
+        │  3. Bed & Ward Allocation        │ • Advised vs Assigned Bed │
+        │  ------------------------------- │ • Intake Checklist (MVA)  │
+        │  [ QUICK ADMIT BUTTON (< 60s) ]  │ • Deposit Ledger Summary  │
+        │  ------------------------------- │                           │
+        │  4. Related Persons (Attendant)  │                           │
+        │  5. Versioned Consent Engine     │                           │
+        │  6. Advance Deposit Ledger       │                           │
+        │  7. Clinical Referral Source     │                           │
+        └──────────────────────────────┬───────────────────────────────┘
+                                       │
+                      Atomic DB Transaction Commit
+                                       │
+         ┌─────────────────────────────┴─────────────────────────────┐
+         ▼                                                           ▼
+┌─────────────────────────────────┐         ┌─────────────────────────────────┐
+│     GLOBAL DOCTOR SURVEILLANCE  │         │       MULTI-TENANT PRINT PACK   │
+│                                 │         │                                 │
+│ 1. App-Shell Banner & Toast     │         │ 1. Admission Sheet A4           │
+│    "Patient in Ward, Bed X"     │         │    (dynamic hospital letterhead)│
+│    (or "New Inpatient Under     │         │ 2. Bilingual Consent Sheet      │
+│     Your Surveillance")         │         │    (exact snapshot of wording)  │
+│ 2. Configurable Audio Chime     │         │ 3. Gapless Deposit Receipt      │
+│ 3. Escalation if unacknowledged │         │ 4. Historical Snapshot stored   │
+│ 4. "First Clinical Review" metric│        └─────────────────────────────────┘
+└─────────────────────────────────┘
 ```
 
 ---
 
-## 3. Data Model & Database Schema
+## 2. The Admission Pipeline: Two Entry Points, One Form
+
+### 2.1 Entry Point A: OPD Consultation Admission Advice
+When an OPD doctor decides an outpatient needs admission (via the consultation action panel on `/dashboard`):
+1. The modal captures the **Doctor's Admission Advice**:
+   - `advised_ward_kind`: `'general' | 'special' | 'hdu' | 'icu'`
+   - `urgency`: `'emergency' | 'same_day' | 'planned'`
+   - `provisional_diagnosis`: text (pre-filled from active consultation notes)
+   - `estimated_stay_days`: integer (e.g., 3 days)
+   - `reception_notes`: text (e.g., *"Requires immediate oxygen support, cardiac monitor on standby"*)
+2. The encounter transitions to stage `'ipd'`, creating an `admissions` row in status `'awaiting_bed'`.
+
+### 2.2 Reception "To Admit" Queue (`/ipd?tab=awaiting`)
+The awaiting queue displays:
+- **Urgency Indicator:** `EMERGENCY` (red pill, animated pulse) | `SAME DAY` (amber) | `PLANNED` (blue).
+- **Waiting Clock:** Time elapsed since doctor ordered admission (e.g., *"Waiting 14 min"*).
+- **Doctor's Advice Ribbon:** Advised ward category, provisional diagnosis, and reception notes.
+- **Sorting:** Strict priority queue: `emergency` first, then `same_day`, then `planned`; sub-sorted by longest wait time.
+- Clicking **"Assign Bed & Intake"** opens the unified admission form with patient, doctor, diagnosis, and advised ward **pre-filled and locked**.
+
+### 2.3 Entry Point B: Walk-In / Direct Emergency (`/ipd/new`)
+For direct emergencies arriving straight to the casualty/desk:
+- Staff uses the **Single Smart Search Box** or clicks **"Register Unidentified Patient"**.
+- Fills consultant, selects bed, and executes intake immediately.
+
+---
+
+## 3. Data Model & Database Architecture
 
 ### 3.1 Extensions to `admissions` Table ([`lib/db/schema.ts`](file:///d:/Projects/HospitalAutomation/lib/db/schema.ts#L1985))
 
-We add the following fields to the `admissions` table:
-
-```ts
-// In lib/db/schema.ts inside admissions pgTable:
-admissionFormNo: text('admission_form_no'),
-admissionTime: text('admission_time'), // e.g. "03:30 PM"
-referringDoctorName: text('referring_doctor_name'),
-
-// Attendant / Brought By details (Emergency Contact)
-broughtByName: text('brought_by_name'),
-broughtByRelation: text('brought_by_relation'), // 'father' | 'mother' | 'spouse' | 'son' | 'daughter' | 'brother' | 'sister' | 'relative' | 'friend' | 'other'
-broughtByPhone: text('brought_by_phone'),
-broughtByAddress: text('brought_by_address'),
-
-// Doctor surveillance & alert lifecycle
-doctorAlertedAt: timestamp('doctor_alerted_at', { withTimezone: true }),
-doctorAcknowledgedAt: timestamp('doctor_acknowledged_at', { withTimezone: true }),
-doctorAcknowledgedByUserId: uuid('doctor_acknowledged_by_user_id').references(() => users.id, { onDelete: 'set null' }),
-```
-
-**Indexes:**
 ```sql
-CREATE INDEX admissions_doctor_alert_idx ON admissions (hospital_id, admitting_doctor_id, status)
-  WHERE doctor_acknowledged_at IS NULL AND status = 'admitted';
+-- Admission Sequence & Timing
+ALTER TABLE admissions ADD COLUMN IF NOT EXISTS admission_number text; -- Gapless per-hospital document sequence (e.g. ADM-2026-0042)
+ALTER TABLE admissions ADD COLUMN IF NOT EXISTS urgency text DEFAULT 'same_day'; -- 'emergency' | 'same_day' | 'planned'
+ALTER TABLE admissions ADD COLUMN IF NOT EXISTS advised_ward_kind text; -- 'general' | 'special' | 'hdu' | 'icu'
+ALTER TABLE admissions ADD COLUMN IF NOT EXISTS estimated_stay_days smallint;
+ALTER TABLE admissions ADD COLUMN IF NOT EXISTS reception_notes text;
+ALTER TABLE admissions ADD COLUMN IF NOT EXISTS referring_doctor_name text;
+
+-- Doctor Surveillance Lifecycle
+ALTER TABLE admissions ADD COLUMN IF NOT EXISTS doctor_alerted_at timestamptz;
+ALTER TABLE admissions ADD COLUMN IF NOT EXISTS doctor_acknowledged_at timestamptz;
+ALTER TABLE admissions ADD COLUMN IF NOT EXISTS doctor_acknowledged_by_user_id uuid REFERENCES users(id);
+ALTER TABLE admissions ADD COLUMN IF NOT EXISTS first_reviewed_at timestamptz; -- Clinical quality metric
+ALTER TABLE admissions ADD COLUMN IF NOT EXISTS first_reviewed_by_user_id uuid REFERENCES users(id);
+
+-- Intake Completeness Flags
+ALTER TABLE admissions ADD COLUMN IF NOT EXISTS is_intake_complete boolean NOT NULL DEFAULT false;
+ALTER TABLE admissions ADD COLUMN IF NOT EXISTS intake_completed_at timestamptz;
+ALTER TABLE admissions ADD COLUMN IF NOT EXISTS intake_completed_by_user_id uuid REFERENCES users(id);
 ```
 
 ---
 
-### 3.2 New `patient_consents` Table
-
-Stores patient and relative consents with complete separation of concerns and future-proofing for tablet digital signature capture:
+### 3.2 Persistent Related Persons (`patient_contacts`) Table
+Family contacts outlive a single admission. A dedicated table preserves emergency contacts across hospital visits:
 
 ```ts
-export const consentType = pgEnum('consent_type', [
-  'general_admission',
-  'high_risk',
-  'surgical',
-  'anaesthesia',
-  'blood_transfusion',
+export const patientContacts = pgTable('patient_contacts', {
+  id: id(),
+  hospitalId: hospitalFk(),
+  patientId: uuid('patient_id').notNull().references(() => patients.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  relation: text('relation').notNull(), // 'father' | 'mother' | 'spouse' | 'son' | 'daughter' | 'brother' | 'sister' | 'guardian' | 'other'
+  phoneE164: text('phone_e164'),
+  address: text('address'),
+  isEmergencyContact: boolean('is_emergency_contact').notNull().default(true),
+  isDecisionMaker: boolean('is_decision_maker').notNull().default(true),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+}, (t) => [
+  uniqueIndex('patient_contacts_tenant_key').on(t.hospitalId, t.id),
+  index('patient_contacts_patient_idx').on(t.hospitalId, t.patientId),
+]);
+```
+
+---
+
+### 3.3 Versioned Consent Engine (`consent_templates` & `patient_consents`)
+
+To prevent hard-coded liability text and guarantee legal reproducibility:
+
+```ts
+/** Hospital-configurable versioned consent templates */
+export const consentTemplates = pgTable('consent_templates', {
+  id: id(),
+  hospitalId: hospitalFk(),
+  code: text('code').notNull(), // 'general_admission' | 'high_risk' | 'surgery' | 'anaesthesia'
+  version: smallint('version').notNull().default(1),
+  titleEn: text('title_en').notNull(),
+  titleMr: text('title_mr'),
+  titleHi: text('title_hi'),
+  bodyEn: text('body_en').notNull(),
+  bodyMr: text('body_mr'),
+  bodyHi: text('body_hi'),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: createdAt(),
+}, (t) => [
+  uniqueIndex('consent_templates_code_ver').on(t.hospitalId, t.code, t.version),
 ]);
 
-export const consentMethod = pgEnum('consent_method', [
-  'paper',    // Signed on physical printed sheet, witnessed by staff
-  'digital',  // Future tablet touch signature
-]);
-
+/** Immutable record of patient/relative consent */
 export const patientConsents = pgTable('patient_consents', {
   id: id(),
-  hospitalId: uuid('hospital_id').notNull().references(() => hospitals.id, { onDelete: 'cascade' }),
-  encounterId: uuid('encounter_id').notNull(),
+  hospitalId: hospitalFk(),
   admissionId: uuid('admission_id').notNull().references(() => admissions.id, { onDelete: 'cascade' }),
   patientId: uuid('patient_id').notNull().references(() => patients.id, { onDelete: 'cascade' }),
-  type: consentType('type').notNull().default('general_admission'),
-  method: consentMethod('method').notNull().default('paper'),
+  templateId: uuid('template_id').references(() => consentTemplates.id),
+  templateVersion: smallint('template_version').notNull(),
   
-  // Attendant / Signatory Details
-  signatoryName: text('signatory_name').notNull(),
-  signatoryRelation: text('signatory_relation').notNull(),
-  signatoryPhone: text('signatory_phone'),
+  // Immutable snapshot of exact wording signed
+  textSnapshot: text('text_snapshot').notNull(),
+  textHashSha256: text('text_hash_sha256').notNull(),
+  language: text('language').$type<'en' | 'mr' | 'hi'>().notNull().default('mr'),
   
-  // Paper signature verification
-  signedOnPaper: boolean('signed_on_paper').notNull().default(true),
-  paperDocumentRef: text('paper_document_ref'), // optional scan/photo attachment reference
+  // Status & Emergency non-blocking
+  status: text('status').$type<'obtained' | 'pending' | 'refused' | 'revoked'>().notNull().default('obtained'),
+  pendingReason: text('pending_reason'), // e.g. "Unconscious patient, relative arriving"
   
-  // Future digital signature payload (strokes / vector JSON / base64 image data)
-  digitalSignatureData: text('digital_signature_data'),
+  // Signatory capacity
+  signatoryCapacity: text('signatory_capacity').$type<'patient' | 'relative' | 'guardian' | 'legal_rep'>().notNull(),
+  inabilityReason: text('inability_reason'), // 'unconscious' | 'minor' | 'altered_sensorium' | 'emergency_incapacitated'
+  signatoryContactId: uuid('signatory_contact_id').references(() => patientContacts.id),
+  signatoryNameSnapshot: text('signatory_name_snapshot').notNull(),
+  signatoryRelationSnapshot: text('signatory_relation_snapshot').notNull(),
+  signatoryPhoneSnapshot: text('signatory_phone_snapshot'),
   
-  // Clinical explanation & witness
-  explainedInLanguage: text('explained_in_language').default('mr'), // 'mr' (Marathi), 'hi' (Hindi), 'en' (English)
-  witnessStaffUserId: uuid('witness_staff_user_id').references(() => users.id, { onDelete: 'set null' }),
-  attendingDoctorId: uuid('attending_doctor_id').references(() => doctors.id, { onDelete: 'set null' }),
+  // Attestation & Signatures
+  method: text('method').$type<'paper' | 'digital'>().notNull().default('paper'),
+  paperOnFile: boolean('paper_on_file').notNull().default(true),
+  paperDocumentScanUrl: text('paper_document_scan_url'),
+  digitalSignatureVector: text('digital_signature_vector'),
+  
+  // Clinical explanation (doctor accountability)
+  explainedByDoctorId: uuid('explained_by_doctor_id').references(() => doctors.id),
+  witnessStaffUserId: uuid('witness_staff_user_id').references(() => users.id),
   signedAt: timestamp('signed_at', { withTimezone: true }).notNull().defaultNow(),
   createdAt: createdAt(),
 }, (t) => [
@@ -148,155 +205,159 @@ export const patientConsents = pgTable('patient_consents', {
 ]);
 ```
 
-**Row-Level Security & Policies:**
-`patient_consents` receives standard tenant isolation policies plus the `clinical_access` restrictive policy:
-```sql
-CREATE POLICY tenant_isolation ON patient_consents
-  USING (hospital_id = nullif(current_setting('app.hospital_id', true), '')::uuid)
-  WITH CHECK (hospital_id = nullif(current_setting('app.hospital_id', true), '')::uuid);
+---
 
-CREATE POLICY clinical_access ON patient_consents AS RESTRICTIVE
-  USING (public.app_clinical_access()) WITH CHECK (public.app_clinical_access());
+### 3.4 Unidentified / Emergency Patient Identity Safety
+To stop dirty `0000000000` records:
+- When an unknown/unconscious patient arrives, the desk clicks **"Unidentified Emergency Patient"**.
+- System generates a structured temporary identity:
+  - Name: `"Unknown Male (~40y), Trauma 02/10"`
+  - Flag: `is_unidentified: true`
+  - Emergency MRN / QID generated.
+- A permanent **"Resolve Unidentified Patient"** banner remains on the chart, allowing one-click merge into an existing or newly verified record via [`patients.merge`](file:///d:/Projects/HospitalAutomation/lib/domain/permissions.ts#L207) when family arrives.
+
+---
+
+## 4. Front-End Architecture & User Experience
+
+### 4.1 Single Smart Search Box
+Instead of a slow 3-way toggle, a single predictive search field automatically categorizes user input:
+- **10 digits:** Treated as Indian Mobile number (normalizes to E.164). Lists all family members sharing that phone.
+- **Matches `QID-[0-9A-Z]{4}-[0-9A-Z]{4}` or Crockford 32:** Queries platform QID.
+- **Alphanumeric string without dashes:** Matches hospital-local MRN / UHID.
+- **Text:** Triggers prefix/fuzzy name match.
+- **Audit Logging:** Every patient search logs to `record_access_logs` for DPDP compliance.
+- **Safety Confirmation:** Search results display Name, Age, Sex, Locality, and Last Visit. Desk must confirm 2 identifiers before locking.
+
+---
+
+### 4.2 Fast 2-Column Intake Form Layout
+
+Designed to ensure **Minimum Viable Admission (MVA) is completed in under 60 seconds**:
+
+```
+┌──────────────────────────────────────────────────┬─────────────────────────────┐
+│  FORM COLUMN (Left, 65%)                         │ STICKY SIDEBAR (Right, 35%) │
+├──────────────────────────────────────────────────┼─────────────────────────────┤
+│  1. PATIENT IDENTIFICATION                       │ INTAKE CHECKLIST & SUMMARY  │
+│  [ Smart Search: Phone, Name, MRN, QID       ]   │                             │
+│  Selected: Bhayaram Kalya Pawara (25y / Male)    │ Patient: Bhayaram Pawara    │
+│  Locality: Mogrikheda · MRN: H-1042 · QID: 8K4M  │ UHID: QID-8K4M-2P7R         │
+│  ----------------------------------------------  │ Status: Direct Emergency    │
+│  2. CONSULTANT & BED (Minimum Viable Set)        │ ─────────────────────────── │
+│  Consultant: Dr. Vinod Rajesh Pawara (MD)     ▼  │ Assigned Bed: HDU - Bed 02  │
+│  Ward: HDU / Emergency ▼   Bed: [ Bed 02 (Free)] │ Room Charge: ₹ 2,500 / day  │
+│  Provisional Diagnosis: Acute Gastroenteritis    │ ─────────────────────────── │
+│  Admitted At: [ 02/10/2026, 03:30 PM ] (now)     │ Completeness: 3 / 6         │
+│                                                  │ ☑ Patient Identifiers       │
+│  ┌────────────────────────────────────────────┐  │ ☑ Consultant Assigned       │
+│  │  ⚡ ADMIT PATIENT NOW (Hold Bed & Open File)│  │ ☑ Bed Allocated             │
+│  └────────────────────────────────────────────┘  │ ☒ Attendant Contact (Draft) │
+│  ----------------------------------------------  │ ☒ Consent (Pending)         │
+│  3. ATTENDANT / RELATED PERSON                   │ ☒ Advance Deposit (₹0)      │
+│  Name: Dilip Dudwe    Relation: Brother ▼        │ ─────────────────────────── │
+│  Phone: 7806042541    [x] Decision Maker         │ Doctor's Advice (if OPD):   │
+│  ----------------------------------------------  │ "Oxygen support needed"     │
+│  4. CONSENT CAPTURING                            │                             │
+│  [x] General Admission Consent                   │ [ 🖨️ Print Admission Pack ]│
+│  [!] High-Risk Consent Suggested for HDU:        │ [ 🧾 Print Deposit Receipt ]│
+│      [x] High-Risk Consent Obtained              │                             │
+│      Explained By: Dr. Vinod Pawara              │                             │
+│      Mode: [x] Signed on Paper on File           │                             │
+│  ----------------------------------------------  │                             │
+│  5. ADVANCE DEPOSIT (Optional, Non-blocking)     │                             │
+│  Amount: ₹ 5,000      Mode: UPI ▼                │                             │
+│  Receipt No: REC-2026-0842 (Auto-generated)      │                             │
+│  ----------------------------------------------  │                             │
+│  6. REFERRAL SOURCE: Dr. R. K. Patil (GP)        │                             │
+└──────────────────────────────────────────────────┴─────────────────────────────┘
 ```
 
----
-
-## 4. Feature Specifications
-
-### 4.1 3-Way Patient Search
-
-Located at Section 1 of `/ipd/new`:
-- **Segmented Control:**
-  1. `[ 📱 Mobile Number ]`: Accepts 10 digits. Validates format. Supports `0000000000` for unknown/unconscious emergencies.
-  2. `[ 👤 Patient Name ]`: Text search running fuzzy prefix matching across `patients.name` and `patients.name_key`. Shows name, age, gender, mobile, and town/village for disambiguation.
-  3. `[ 🆔 UHID / QID ]`: Formatted input for `QID-XXXX-XXXX` (using `normalizeQid()`). Supports scanning standard barcode or QR code from physical OPD slips.
-- **Selection Behavior:** Selecting any match autofills patient demographics (Name, Age, Gender, Address, Mobile, QID/UHID) and locks the patient ID. Staff can edit address/age if updated.
-- **Registration Fallback:** If search yields no results, a 1-click button *"Register New Patient with this [Phone/Name/QID]"* unlocks the demographic input fields.
+#### The MVA Rule (Minimum Viable Admission):
+In critical trauma or shock, clicking **"ADMIT PATIENT NOW"** immediately:
+1. Reserves the bed atomically (handling bed races).
+2. Generates the gapless Admission Number.
+3. Opens the inpatient encounter and alerts the doctor.
+4. If Attendant, Consent, or Deposit are skipped, the admission status is set to `is_intake_complete = false`. A prominent **"⚠️ Incomplete Intake"** banner persists on the patient chart with 1-click links to finish paperwork as soon as the patient is stabilized.
 
 ---
 
-### 4.2 Comprehensive Admission Sheet (`/ipd/new`)
+## 5. Doctor Surveillance Alerting Architecture
 
-The page layout consists of six distinct, high-clarity cards:
+### 5.1 Dual-Context Alert Messaging
+The alert adapts based on clinical origin:
+- **Case 1 (OPD-Shifted Patient):** Doctor already knows the patient.  
+  Alert Message: *"Your patient [Name] has reached the ward and is in Bed [X]."*
+- **Case 2 (Emergency / Direct Intake):** Doctor did not see them in OPD.  
+  Alert Message: *"🚨 New Inpatient under your surveillance: [Name] (25y/M) in Bed [X]."*
 
-1. **Card 1: Patient Identity & Demographics**
-   - 3-Way Search bar + matched candidate list.
-   - Patient Name, Age, Sex (Male / Female / Other), Phone Number, Full Address.
-2. **Card 2: Consultant & Clinical Referral**
-   - **Consultant In-Charge:** Dropdown of hospital doctors (required).
-   - **Referring Doctor:** Free text input (e.g. "Dr. R. K. Patil, Dhule" or "Self / Walk-in").
-   - **Admission Date & Time:** Defaults to `now()`, with standard date picker and time input.
-   - **Provisional Diagnosis / Reason:** Free-text input with quick-pick chips (e.g. *Fever with Dehydration*, *Acute Gastroenteritis*, *COPD Exacerbation*, *RTA / Trauma*, *Snake Bite*).
-3. **Card 3: Ward & Bed Allocation**
-   - **Ward Selector:** Groups beds by ward classification (General Ward, Special Room, HDU / Emergency, ICU).
-   - **Bed Picker:** Displays live free beds with bed label, ward name, and per-day room charge.
-4. **Card 4: Attendant Details ("Brought By")**
-   - **Attendant Name:** Full name of relative or accompanying person.
-   - **Relationship:** Select box (`Father`, `Mother`, `Spouse`, `Son`, `Daughter`, `Brother`, `Sister`, `Relative`, `Friend`, `Other`).
-   - **Contact Number:** 10-digit mobile number with a quick checkbox: `[ ] Same as patient phone`.
-   - **Attendant Address:** Optional text field.
-5. **Card 5: Consent Engine**
-   - **General Admission Consent:** Default checked.
-   - **High-Risk Consent:** Auto-checks when ward category is ICU, HDU, or Emergency. Can also be manually toggled for critical ward cases.
-   - **Consent Text Card:** Full legal text displayed in English and Marathi:
-     > *"WE THE RELATIVES OF THE PATIENT HAVE BEEN EXPLAINED ABOUT THE CRITICAL CONDITION AND POOR PROGNOSIS OF MY PATIENT IN THE LANGUAGE WE UNDERSTAND THE BEST. WE KNOW THAT OUR PATIENT IS VERY CRITICAL AND NEEDS CRITICAL CARE MONITORING... WE WILL NOT HOLD DOCTORS AND HOSPITAL STAFF RESPONSIBLE... GIVING VALID CONSENT IN FULL SOUND STATE OF MIND WITHOUT ANY EXTERNAL FORCES ON US."*
-   - **Signatory Confirmation:** Autofilled from Attendant details.
-   - **Paper Signature Toggle:** `[x] Consent Form Signed on Physical Paper (On File)`.
-6. **Card 6: Advance Billing (Deposit)**
-   - **Deposit Amount (₹):** Numeric currency field (e.g., ₹5,000).
-   - **Payment Method:** `Cash` | `UPI` | `Card` | `Bank transfer`.
-   - **Transaction Ref:** Optional UPI/UTR/Card reference number.
-   - Creates a linked `patient_payments` record tagged `is_deposit: true`.
+### 5.2 Global App-Shell Visibility
+Doctors are not always looking at `/dashboard` or `/ipd/my-patients`. The alert sits in the **Global App Header Shell** ([`app/(app)/layout.tsx`](file:///d:/Projects/HospitalAutomation/app/(app)/layout.tsx)):
+- **App-Wide Notification Toast / Banner:** Visible across OPD queue, consultation panels, settings, and rounding views.
+- **Configurable Sound:** Chime triggers only after user interaction has unlocked the browser Web Audio context; accompanied by a persistent pulsing visual indicator.
+- **Escalation Protocol:** If `doctor_acknowledged_at` is null for > 20 minutes, a high-priority flag notifies the Nursing In-Charge and Hospital Owner.
+- **Clinical Review Metric:**
+  - `doctor_acknowledged_at`: When the doctor clicks "Acknowledge" (operational acknowledgement).
+  - `first_reviewed_at`: When the doctor signs the first clinical round note or inpatient prescription on [`/ipd/admissions/[id]/rounds`](file:///d:/Projects/HospitalAutomation/app/(app)/ipd/admissions/[id]/(file)/rounds/page.tsx) (clinical quality & NABH metric).
 
 ---
 
-### 4.3 Doctor Surveillance Alerting System
+## 6. Multi-Tenant Print System
 
-#### Visual & Audio Alerts
-- **OPD Consultation Dashboard ([`/dashboard`](file:///d:/Projects/HospitalAutomation/app/(app)/dashboard/page.tsx)):**
-  - Rendered at the top of the doctor view below the doctor header bar.
-  - Alert Card Style: Amber/brand border, subtle pulse animation, stethoscope/bed icon.
-  - Text:  
-    **"🚨 New Inpatient Admission Under Your Surveillance"**  
-    `Bhayaram Kalya Pawara (25y M) · IPD #1042 · HDU Bed 02 · Today at 03:30 PM`  
-    `Provisional Diagnosis: Fever with moderate dehydration`  
-    `Badges: [⚠️ High-Risk Consent On File] [₹5,000 Advance Paid]`
-  - Action 1: **`[ ✓ Acknowledge ]`** — Marks alert acknowledged, dismisses banner.
-  - Action 2: **`[ 📋 Open Rounding Cockpit ]`** — Deep-links directly to `/ipd/admissions/[id]/rounds`.
-- **IPD Doctor Roster ([`/ipd/my-patients`](file:///d:/Projects/HospitalAutomation/app/(app)/ipd/my-patients/page.tsx)):**
-  - Identical alert banner at the top.
-  - The patient's row in the table is highlighted with a pulse badge: `🚨 New Admission · Awaiting Round`.
-- **Audible Notification:**
-  - Auto-refresh (every 10s on dashboard, 15s on IPD) detects `doctor_acknowledged_at IS NULL`.
-  - Triggers the existing web audio call chime (`/sounds/call-chime.mp3`) once per new admission event.
+### 6.1 Dynamic Letterhead & Branding
+Zero hard-coded hospital names. The print engine extracts letterhead parameters dynamically from `hospitals` and `hospital_settings`:
+- Hospital Name (e.g. *Guruved Hospital & Criticare Center*).
+- Tagline (e.g. *Devotion to Healing*).
+- Attending Doctor Name & Qualifications (from `doctors` table).
+- Registration Numbers (Hospital Establishment Reg No., Doctor MMC/NMC Reg No.).
+- Physical Address, Telephone, Emergency Helpline.
+- Hospital Logo (if uploaded in settings).
 
----
-
-### 4.4 Printable Forms & Receipts Engine
-
-#### Printable Admission Form (`/print/ipd-admission/[admissionId]`)
-- Formatted specifically for standard A4 portrait printing with zero overflow.
-- **Page 1: Admission Sheet**
-  - Hospital Letterhead: Guruved Hospital & Criticare Center, Dr. Vinod Rajesh Pawara, Reg No., Address, Phone numbers.
-  - Grid Table: Admission Form No, Date, IPD No., UHID.
-  - Patient demographics (Name, Age, Sex, Address).
-  - Consultant In-charge, Referring Doctor, Admission Date & Time.
-  - Ward Transfer Log (General Ward, Special Room, HDU/Emergency, ICU) with Date & Time entries.
-  - Deposit amount and payment mode.
-  - Attendant ("Brought By") block with 10-box contact number styling and signature lines for Relative and Doctor.
-- **Page 2: High-Risk Consent Sheet** (Included when High-Risk Consent is flagged)
-  - Hospital letterhead.
-  - Patient demographics header.
-  - Complete verbatim High-Risk Consent declaration text in English and Marathi.
-  - Relative signature block with Name, Relationship, and Attending Doctor signature line.
-
-#### Printable Deposit Receipt (`/print/receipt/[paymentId]`)
-- Clean A5 / 80mm thermal receipt format.
-- Receipt Number, Date & Time, Patient Name, IPD No., UHID.
-- Amount in numbers (₹5,000.00) and words (*"Rupees Five Thousand Only"*).
-- Payment Mode & Reference, Received By staff name, Hospital authorization stamp.
+### 6.2 Printable Pack Routes
+1. **`/print/ipd-admission/[admissionId]`**:
+   - **Page 1 (Admission Sheet):** Exactly replicates the physical layout from the reference stationery: Admission No., IPD No., UHID, Patient Demographics, Consultant, Referral, Ward Movement Table, Deposit details, and Attendant signature block with 10-box contact numbers.
+   - **Page 2 (High-Risk Consent):** Included if High-Risk Consent was flagged. Renders exact legal text in the relative's selected language with witness and physician signature lines.
+   - **Historical Immutability:** Stores a SHA-256 hash and JSON snapshot of the print payload at generation time, guaranteeing reprints years later are historically identical.
+2. **`/print/receipt/[paymentId]`**:
+   - Gapless sequential receipt for advance deposits with amount in figures and words (*"Rupees Five Thousand Only"*).
 
 ---
 
-## 5. Security, Permissions & Compliance
+## 7. Edge Cases & Safety Hardening
 
-1. **Role-Based Access Control ([`lib/domain/permissions.ts`](file:///d:/Projects/HospitalAutomation/lib/domain/permissions.ts)):**
-   - Creating Admissions: `can(role, 'ipd.admit')` (`owner`, `receptionist`).
-   - Taking Advance Deposits: `can(role, 'billing.collect')` (`owner`, `receptionist`).
-   - Acknowledging Doctor Alerts: Clinicians linked to the attending doctor (`doctors.user_id`) or `owner`.
-2. **Clinical Privacy Key & Tenant Isolation:**
-   - All admission queries and consent mutations run within `withTenant(hospitalId, fn, { clinical: true })`.
-   - Restrictive RLS on `admissions` and `patient_consents` ensures records fail closed and are never leaked to non-clinical or support sessions.
-3. **Indian Healthcare Regulations:**
-   - **Clinical Establishments Act:** Preserves permanent record of admitting consultant, referring medical practitioner, and physical signature logs.
-   - **NABH Patient Rights & Education (PRE):** Verifiable consent records with documented patient/relative explanation in local language.
+| Failure Mode / Edge Case | Mitigation & System Behavior |
+|---|---|
+| **Bed taken concurrently by another user** | Atomic transaction detects `bed_assignments_bed_occupied` constraint; rolls back gracefully with user-friendly alert: *"Bed [Label] was taken just now. Please choose another bed."* |
+| **Emergency patient with no relatives** | Intake permits checking *"Emergency: Consent Pending (Patient Incapacitated)"*; logs reason, allocates bed, and raises a visible task on ward due board. |
+| **Unidentified unconscious patient** | One-tap creates `"Unknown Male (~40y)"` with temporary identifier; unlocks full emergency medical care without fake phone numbers; merges cleanly later. |
+| **Double submission / network retry** | Client generates unique `client_id` (UUIDv4) passed in form; database enforces idempotency index, preventing duplicate admissions or double deposit receipts. |
+| **Deposit transaction failure** | Deposit payment errors do NOT roll back emergency admission; admission completes and marks deposit as failed/uncollected for desk follow-up. |
+| **Consultant reassignment** | If the patient is clinically transferred to another doctor, alert status resets and re-routes to the new consultant. |
+| **Existing admissions backward compatibility** | Old admissions render cleanly with fallback defaults (`admission_number` displays IPD number, missing attendant displays *"Not recorded"*). |
 
 ---
 
-## 6. Implementation Stages & Verification Plan
+## 8. Implementation Stages
 
-### Stage 1: Database Migration
-- Add `admission_form_no`, `admission_time`, `referring_doctor_name`, `brought_by_*`, `doctor_*` columns to `admissions`.
-- Create `patient_consents` table, enums (`consent_type`, `consent_method`), and RLS policies.
-- Run migration linter: `npx vitest run lib/db/migrations/__tests__/lint.test.ts`.
-
-### Stage 2: Backend Domain & Services
-- Update `lib/services/admissions.ts` to support 3-way patient resolution, attendant details, consent generation, and deposit processing.
-- Add `searchPatients({ hospitalId, query, mode })` supporting phone, name, and QID/UHID.
-- Add `acknowledgeDoctorAdmissionAlert({ hospitalId, admissionId, actorUserId })`.
-- Write unit & integration tests in `lib/services/__tests__/admissions.integration.test.ts`.
-
-### Stage 3: UI Redesign of `/ipd/new`
-- Implement 3-Way Search tab component with live results.
-- Implement Cards 1 through 6 with clean typography and auto-population.
-- Implement post-admission dialog with instant 1-click Print actions.
-
-### Stage 4: Doctor Surveillance Alerting
-- Update [`loadDashboardData`](file:///d:/Projects/HospitalAutomation/lib/services/dashboard-loader.ts) to query unacknowledged inpatient admissions.
-- Render alert banner and audio chime on [`app/(app)/dashboard/page.tsx`](file:///d:/Projects/HospitalAutomation/app/(app)/dashboard/page.tsx).
-- Add alert strip and highlight styling on [`app/(app)/ipd/my-patients/page.tsx`](file:///d:/Projects/HospitalAutomation/app/(app)/ipd/my-patients/page.tsx).
-
-### Stage 5: A4 Print Pages
-- Create `/print/ipd-admission/[admissionId]` matching Guruved Hospital stationery.
-- Create `/print/receipt/[paymentId]` for deposit receipts.
-- Verify print layouts using browser test runner.
+1. **Stage 1: Database Migration (0054):**
+   - Add columns to `admissions`.
+   - Create `patient_contacts`, `consent_templates`, `patient_consents`, and document sequence for `admission_number`.
+   - Apply tenant isolation and `clinical_access` RLS policies.
+2. **Stage 2: Core Domain Services & Smart Search:**
+   - Single smart search (`searchPatientsSmart`).
+   - Doctor OPD Admission Advice service (`requestIpdAdmissionFromOpd`).
+   - Unified intake service (`executePatientIntake`).
+   - Doctor surveillance alert query & acknowledgement service.
+3. **Stage 3: OPD "To Admit" & Reception Queue Upgrades:**
+   - Update OPD "Shift to IPD" modal on `/dashboard` to capture advice.
+   - Update `/ipd?tab=awaiting` queue with urgency sorting and advice ribbons.
+4. **Stage 4: Unified Intake Form UI:**
+   - Refactor `/ipd/new` and `/ipd/admissions/[id]/assign` into one shared component.
+   - Implement 2-column MVA layout with sticky progress sidebar.
+5. **Stage 5: Global Doctor Surveillance Alerting:**
+   - Integrate alert banner in global layout shell and doctor dashboard.
+   - Implement audio chime with user interaction gate.
+6. **Stage 6: Multi-Tenant Print Engine:**
+   - Build `/print/ipd-admission/[admissionId]` and `/print/receipt/[paymentId]` with dynamic letterhead.
+7. **Stage 7: End-to-End Verification:**
+   - Run migration linter, RLS tests, bed-race tests, and complete admission lifecycle suite.
