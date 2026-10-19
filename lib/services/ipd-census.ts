@@ -64,8 +64,27 @@ export type CensusPatient = {
   admittedAt: Date | null;
   dischargeReadyAt: Date | null;
   reason: string | null;
+  urgency?: 'emergency' | 'same_day' | 'planned' | null;
+  advisedWardKind?: 'general' | 'special' | 'hdu' | 'icu' | null;
+  estimatedStayDays?: number | null;
+  receptionNotes?: string | null;
   bed: { id: string; label: string; wardId: string; wardName: string } | null;
 };
+
+const urgencyRank: Record<string, number> = {
+  emergency: 0,
+  same_day: 1,
+  planned: 2,
+};
+
+export function sortAwaitingBedByUrgency(patients: CensusPatient[]): CensusPatient[] {
+  return [...patients].sort((a, b) => {
+    const rankA = urgencyRank[a.urgency ?? 'same_day'] ?? 1;
+    const rankB = urgencyRank[b.urgency ?? 'same_day'] ?? 1;
+    if (rankA !== rankB) return rankA - rankB;
+    return new Date(a.requestedAt).getTime() - new Date(b.requestedAt).getTime();
+  });
+}
 
 export type CensusBed = {
   id: string;
@@ -179,6 +198,10 @@ export async function getIpdCensus(args: {
             admittedAt: admissions.admittedAt,
             dischargeReadyAt: admissions.dischargeReadyAt,
             reason: admissions.reason,
+            urgency: admissions.urgency,
+            advisedWardKind: admissions.advisedWardKind,
+            estimatedStayDays: admissions.estimatedStayDays,
+            receptionNotes: admissions.receptionNotes,
           })
           .from(admissions)
           .innerJoin(patients, eq(patients.id, admissions.patientId))
@@ -259,7 +282,7 @@ export async function getIpdCensus(args: {
       });
 
       return {
-        awaitingBed: patientsList.filter((p) => p.status === 'awaiting_bed'),
+        awaitingBed: sortAwaitingBedByUrgency(patientsList.filter((p) => p.status === 'awaiting_bed')),
         dischargeReady: patientsList.filter((p) => p.status === 'discharge_ready'),
         inBed: patientsList.filter((p) => p.status !== 'awaiting_bed'),
         wards: wardsList,

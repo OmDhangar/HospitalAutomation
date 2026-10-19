@@ -111,12 +111,18 @@ export type ShiftResult = {
  * second. Completing the OPD token is the caller's job, through the queue's
  * own applyQueueAction, so the queue state machine is never bypassed.
  */
-export async function shiftToIpd(args: {
+export type ShiftToIpdArgs = {
   hospitalId: string;
   appointmentId: string;
   actorUserId: string;
   reason?: string | null;
-}): Promise<ShiftResult> {
+  urgency?: 'emergency' | 'same_day' | 'planned' | null;
+  advisedWardKind?: 'general' | 'special' | 'hdu' | 'icu' | null;
+  estimatedStayDays?: number | null;
+  receptionNotes?: string | null;
+};
+
+export async function shiftToIpd(args: ShiftToIpdArgs): Promise<ShiftResult> {
   return withTenant(
     args.hospitalId,
     async (tx) => {
@@ -135,6 +141,10 @@ export async function shiftToIpd(args: {
           branchId: encounter.branchId,
           admittingDoctorId: encounter.attendingDoctorId,
           reason: tidyReason(args.reason),
+          urgency: args.urgency ?? 'same_day',
+          advisedWardKind: args.advisedWardKind ?? null,
+          estimatedStayDays: args.estimatedStayDays ?? null,
+          receptionNotes: args.receptionNotes?.trim() || null,
           requestedByUserId: args.actorUserId,
         })
         .onConflictDoNothing({
