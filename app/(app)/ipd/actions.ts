@@ -2,7 +2,8 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { requireWritableSession } from '@/lib/auth/session';
+import { requireSession, requireWritableSession } from '@/lib/auth/session';
+import { searchPatientsSmart, registerUnidentifiedPatient } from '@/lib/services/patient-search';
 import { parseDepositRupees, parsePayerInput } from '@/lib/domain/payer';
 import { can, type Permission } from '@/lib/domain/permissions';
 import { normalizeStaffPhone } from '@/lib/domain/phone';
@@ -1110,6 +1111,46 @@ export async function acknowledgeClinicalAlertAction(alertId: string) {
     return { ok: true };
   } catch (err: any) {
     return { ok: false, error: err.message || 'Failed to acknowledge alert' };
+  }
+}
+
+/** Predictive smart search across phone, QID, MRN, and patient name. */
+export async function searchPatientsSmartAction(query: string) {
+  const session = await requireSession();
+  try {
+    const results = await searchPatientsSmart({
+      hospitalId: session.hospitalId,
+      query,
+      actorUserId: session.userId,
+    });
+    return { ok: true, data: results };
+  } catch (err: any) {
+    return { ok: false, error: err.message || 'Search failed' };
+  }
+}
+
+/** Registers an unidentified patient in casualty/emergency with a temporary hospital MRN. */
+export async function registerUnidentifiedAction(args: {
+  gender?: string | null;
+  approxAge?: number | null;
+  descriptiveNote?: string | null;
+}) {
+  const session = await requireWritableSession();
+  if (!can(session.role, 'ipd.admit')) {
+    return { ok: false, error: 'Only authorized staff can register emergency patients' };
+  }
+  try {
+    const result = await registerUnidentifiedPatient({
+      hospitalId: session.hospitalId,
+      branchId: session.branchId || '',
+      gender: args.gender,
+      approxAge: args.approxAge,
+      descriptiveNote: args.descriptiveNote,
+      actorUserId: session.userId,
+    });
+    return { ok: true, data: result };
+  } catch (err: any) {
+    return { ok: false, error: err.message || 'Registration failed' };
   }
 }
 

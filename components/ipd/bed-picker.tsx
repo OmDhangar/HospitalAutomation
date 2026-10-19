@@ -12,12 +12,14 @@ export function BedPicker({
   selectedBedId,
   name = 'bedId',
   optional = false,
+  onChange,
 }: {
   wards: readonly FreeWard[];
   selectedBedId?: string | null;
   name?: string;
   /** Offers "Assign later": the patient joins Awaiting bed instead. */
   optional?: boolean;
+  onChange?: (bedId: string) => void;
 }) {
   if (wards.length === 0) {
     return (
@@ -50,8 +52,11 @@ export function BedPicker({
                   type="radio"
                   name={name}
                   value={bed.id}
-                  required={!optional}
-                  defaultChecked={bed.id === selectedBedId}
+                  checked={selectedBedId !== undefined ? bed.id === selectedBedId : undefined}
+                  defaultChecked={selectedBedId === undefined ? false : undefined}
+                  onChange={(e) => {
+                    if (e.target.checked && onChange) onChange(bed.id);
+                  }}
                   className="peer sr-only"
                 />
                 <span

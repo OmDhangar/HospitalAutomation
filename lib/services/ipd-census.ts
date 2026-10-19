@@ -341,6 +341,11 @@ export type AdmissionSummary = {
     preauthAmountPaise: number | null;
     approvedAmountPaise: number | null;
   } | null;
+  urgency?: 'emergency' | 'same_day' | 'planned' | null;
+  advisedWardKind?: 'general' | 'special' | 'hdu' | 'icu' | null;
+  estimatedStayDays?: number | null;
+  receptionNotes?: string | null;
+  qid?: string | null;
 };
 
 /**
@@ -365,6 +370,7 @@ export async function getAdmissionSummary(
           ipdNumber: admissions.ipdNumber,
           patientName: patients.name,
           mrn: patients.mrn,
+          qid: patients.qid,
           age: patients.age,
           gender: patients.gender,
           phoneE164: patients.phoneE164,
@@ -373,6 +379,10 @@ export async function getAdmissionSummary(
           doctorName: doctors.name,
           doctorUserId: doctors.userId,
           reason: admissions.reason,
+          urgency: admissions.urgency,
+          advisedWardKind: admissions.advisedWardKind,
+          estimatedStayDays: admissions.estimatedStayDays,
+          receptionNotes: admissions.receptionNotes,
           requestedAt: admissions.requestedAt,
           admittedAt: admissions.admittedAt,
           dischargeReadyAt: admissions.dischargeReadyAt,
