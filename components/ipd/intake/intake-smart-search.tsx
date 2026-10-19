@@ -3,7 +3,7 @@
 import { useEffect, useState, useTransition } from 'react';
 import { AlertCircleIcon, CheckIcon, SearchIcon, XIcon } from '@/components/icons';
 import { Button, cn } from '@/components/ui';
-import { detectSearchType, type SearchMatchType, type SmartSearchResult } from '@/lib/services/patient-search';
+import { detectSearchType, type SearchMatchType, type SmartSearchResult } from '@/lib/domain/patient-search';
 import { registerUnidentifiedAction, searchPatientsSmartAction } from '@/app/(app)/ipd/actions';
 
 export interface IntakeSmartSearchProps {
