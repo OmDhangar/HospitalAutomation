@@ -252,6 +252,7 @@ export type AdmissionExtras = {
   /** In paise; the caller must have checked `billing.collect`. */
   depositPaise?: number | null;
   depositMethod?: 'cash' | 'upi' | 'card' | 'bank' | 'other';
+  reference?: string | null;
 };
 
 /** A bed the patient may be put in: active, in an active ward, in their branch, free. */
@@ -297,6 +298,7 @@ async function writeExtrasInTx(
     encounter: args.encounter,
     amountPaise: args.extras.depositPaise,
     method: args.extras.depositMethod,
+    reference: args.extras.reference,
     actorUserId: args.actorUserId,
   });
   return deposit.id;
@@ -930,6 +932,7 @@ export async function executePatientIntake(args: PatientIntakePayload): Promise<
                 : args.financial.depositPaymentMode === 'cheque'
                   ? 'other'
                   : (args.financial.depositPaymentMode ?? 'cash'),
+            reference: receiptNumber,
           },
           actorUserId: args.actorUserId,
         });
