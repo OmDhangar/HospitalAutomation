@@ -19,7 +19,11 @@ import {
   type AdmissionExtras,
   type PatientIntakePayload,
 } from '@/lib/services/admissions';
-import { acknowledgeClinicalAlert } from '@/lib/services/clinical-alerts';
+import {
+  acknowledgeClinicalAlert,
+  getActiveAlertsForUser,
+  sweepPendingAlerts,
+} from '@/lib/services/clinical-alerts';
 import { CareEntryError, undoCareEntry, voidCareEntry } from '@/lib/services/care-entries';
 import {
   UndoError,
@@ -1111,6 +1115,32 @@ export async function acknowledgeClinicalAlertAction(alertId: string) {
     return { ok: true };
   } catch (err: any) {
     return { ok: false, error: err.message || 'Failed to acknowledge alert' };
+  }
+}
+
+/** Fetches active/escalated clinical alerts for current user/role surveillance. */
+export async function getActiveClinicalAlertsAction() {
+  const session = await requireSession();
+  try {
+    const alerts = await getActiveAlertsForUser({
+      hospitalId: session.hospitalId,
+      userId: session.userId,
+      role: session.role,
+    });
+    return { ok: true, data: alerts };
+  } catch (err: any) {
+    return { ok: false, error: err.message || 'Failed to fetch clinical alerts' };
+  }
+}
+
+/** Sweeps pending clinical alerts and escalates those exceeding escalation window. */
+export async function sweepClinicalAlertsAction() {
+  const session = await requireWritableSession();
+  try {
+    const result = await sweepPendingAlerts(session.hospitalId);
+    return { ok: true, data: result };
+  } catch (err: any) {
+    return { ok: false, error: err.message || 'Failed to sweep clinical alerts' };
   }
 }
 

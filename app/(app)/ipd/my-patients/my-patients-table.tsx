@@ -74,12 +74,37 @@ export function MyPatientsTable({
 
                 {/* Patient Name */}
                 <td className="px-3.5 py-2.5">
-                  <Link
-                    href={`/ipd/patients/${patient.admissionId}/summary`}
-                    className="font-bold text-ink-950 hover:text-brand-700 hover:underline inline-flex items-center gap-1"
-                  >
-                    <span>{formattedName}</span>
-                  </Link>
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <Link
+                        href={`/ipd/patients/${patient.admissionId}/summary`}
+                        className="font-bold text-ink-950 hover:text-brand-700 hover:underline inline-flex items-center gap-1"
+                      >
+                        <span>{formattedName}</span>
+                      </Link>
+                      {patient.urgency === 'emergency' ? (
+                        <span className="rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-extrabold uppercase text-white shadow-2xs">
+                          Emergency
+                        </span>
+                      ) : null}
+                      {patient.isMlc ? (
+                        <span className="rounded bg-purple-700 px-1.5 py-0.5 text-[10px] font-extrabold uppercase text-white shadow-2xs">
+                          MLC
+                        </span>
+                      ) : null}
+                      {patient.arrivedAt && (now.getTime() - new Date(patient.arrivedAt).getTime() < 4 * 3600 * 1000) ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
+                          <span className="size-1.5 rounded-full bg-emerald-600 animate-pulse" />
+                          New Ward Arrival
+                        </span>
+                      ) : null}
+                    </div>
+                    {patient.admissionNumber ? (
+                      <span className="font-mono text-[10px] text-ink-500">
+                        {patient.admissionNumber}
+                      </span>
+                    ) : null}
+                  </div>
                 </td>
 
                 {/* Age / Sex */}

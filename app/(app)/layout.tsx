@@ -12,6 +12,7 @@ import { moduleAllows } from '@/lib/modules/registry';
 import { countEscalatedTests, myServicePoints } from '@/lib/services/test-orders';
 import { switchUserAction } from '../ward-device/actions';
 import { signOutAction } from './dashboard/actions';
+import { GlobalSurveillanceBanner } from '@/components/ipd/global-surveillance-banner';
 
 /**
  * The header reads the session cookie to display user info and role-based
@@ -220,6 +221,8 @@ export default function AppLayout({ children }: LayoutProps<'/'>) {
         <Suspense fallback={null}>
           <SupportNotice />
         </Suspense>
+
+        <GlobalSurveillanceBanner />
 
         {/**
          * Responsive main container with tight padding on mobile (px-3.5 py-3.5)
