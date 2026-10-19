@@ -22,7 +22,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { STAFF_ROLES } from '@/lib/domain/permissions';
+import { STAFF_ROLES, type StaffRole } from '@/lib/domain/permissions';
 import type { CallOutcome, ClockFrom, ClosingOutcome, ServicePointKind, TestOrderStatus } from '@/lib/domain/test-orders';
 import type { ControlFlag, DoseState, ReasonCode, Route, WasteReason } from '@/lib/domain/mar';
 import type { TaskKind, TimingMode } from '@/lib/domain/due';
@@ -2025,6 +2025,36 @@ export const admissions = pgTable(
     billLinkCreatedAt: timestamp('bill_link_created_at', { withTimezone: true }),
     billLinkExpiresAt: timestamp('bill_link_expires_at', { withTimezone: true }),
     billLinkRevokedAt: timestamp('bill_link_revoked_at', { withTimezone: true }),
+    /** Gapless admission number per FY (0054). */
+    admissionNumber: text('admission_number'),
+    urgency: text('urgency').$type<'emergency' | 'same_day' | 'planned'>().default('same_day'),
+    advisedWardKind: text('advised_ward_kind').$type<'general' | 'special' | 'hdu' | 'icu'>(),
+    estimatedStayDays: smallint('estimated_stay_days'),
+    receptionNotes: text('reception_notes'),
+    referringDoctorName: text('referring_doctor_name'),
+    arrivedAt: timestamp('arrived_at', { withTimezone: true }),
+    arrivalBackdateReason: text('arrival_backdate_reason'),
+    isMlc: boolean('is_mlc').notNull().default(false),
+    mlcNumber: text('mlc_number'),
+    mlcCategory: text('mlc_category').$type<
+      'rta' | 'assault' | 'poisoning' | 'snake_bite' | 'burns' | 'industrial' | 'hanging' | 'unnatural' | 'other'
+    >(),
+    mlcNarrative: text('mlc_narrative'),
+    policeStationName: text('police_station_name'),
+    policeIntimatedAt: timestamp('police_intimated_at', { withTimezone: true }),
+    policeIntimationMode: text('police_intimation_mode').$type<'written_slip' | 'phone_call' | 'in_person_constable'>(),
+    constableName: text('constable_name'),
+    constableBuckleNo: text('constable_buckle_no'),
+    mlcIntimationCopyUrl: text('mlc_intimation_copy_url'),
+    firstReviewedAt: timestamp('first_reviewed_at', { withTimezone: true }),
+    firstReviewedByUserId: uuid('first_reviewed_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    isIntakeComplete: boolean('is_intake_complete').notNull().default(false),
+    intakeCompletedAt: timestamp('intake_completed_at', { withTimezone: true }),
+    intakeCompletedByUserId: uuid('intake_completed_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -2045,6 +2075,9 @@ export const admissions = pgTable(
     index('admissions_census_idx')
       .on(t.hospitalId, t.branchId, t.status)
       .where(sql`status in ('awaiting_bed', 'admitted', 'discharge_ready')`),
+    index('admissions_arrived_idx')
+      .on(t.hospitalId, t.arrivedAt)
+      .where(sql`arrived_at is not null`),
     foreignKey({
       name: 'admissions_encounter_fk',
       columns: [t.hospitalId, t.encounterId, t.patientId],
@@ -4024,3 +4057,152 @@ export const alertRatings = pgTable('alert_ratings', {
   rating: text('rating').$type<'too_many' | 'about_right' | 'too_few'>().notNull(),
   createdAt: createdAt(),
 });
+
+/* ------------------------------------------- IPD intake, consents & alerts (0054) */
+
+/** Persistent emergency and family contacts for a patient. */
+export const patientContacts = pgTable(
+  'patient_contacts',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    relation: text('relation').notNull(),
+    phoneE164: text('phone_e164'),
+    address: text('address'),
+    isEmergencyContact: boolean('is_emergency_contact').notNull().default(true),
+    isDecisionMaker: boolean('is_decision_maker').notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('patient_contacts_tenant_key').on(t.hospitalId, t.id),
+    index('patient_contacts_patient_idx').on(t.hospitalId, t.patientId),
+  ],
+);
+
+/** Configurable legal and medical consent templates per hospital. */
+export const consentTemplates = pgTable(
+  'consent_templates',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    code: text('code').notNull(),
+    version: smallint('version').notNull().default(1),
+    titleEn: text('title_en').notNull(),
+    titleMr: text('title_mr'),
+    titleHi: text('title_hi'),
+    bodyEn: text('body_en').notNull(),
+    bodyMr: text('body_mr'),
+    bodyHi: text('body_hi'),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('consent_templates_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('consent_templates_active_key')
+      .on(t.hospitalId, t.code)
+      .where(sql`is_active = true`),
+  ],
+);
+
+/** Immutable patient consent records with server-side text snapshot and SHA-256 hash. */
+export const patientConsents = pgTable(
+  'patient_consents',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id')
+      .notNull()
+      .references(() => admissions.id, { onDelete: 'cascade' }),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id, { onDelete: 'cascade' }),
+    templateId: uuid('template_id').references(() => consentTemplates.id, { onDelete: 'set null' }),
+    templateVersion: smallint('template_version').notNull().default(1),
+    textSnapshot: text('text_snapshot').notNull(),
+    textHashSha256: text('text_hash_sha256').notNull(),
+    language: text('language').$type<'en' | 'mr' | 'hi'>().notNull().default('mr'),
+    status: text('status').$type<'obtained' | 'pending' | 'refused' | 'revoked'>().notNull().default('pending'),
+    pendingReason: text('pending_reason'),
+    signatoryCapacity: text('signatory_capacity')
+      .$type<'patient' | 'relative' | 'guardian' | 'legal_rep'>()
+      .notNull()
+      .default('patient'),
+    inabilityReason: text('inability_reason'),
+    signatoryContactId: uuid('signatory_contact_id').references(() => patientContacts.id, {
+      onDelete: 'set null',
+    }),
+    signatoryNameSnapshot: text('signatory_name_snapshot').notNull(),
+    signatoryRelationSnapshot: text('signatory_relation_snapshot').notNull(),
+    signatoryPhoneSnapshot: text('signatory_phone_snapshot'),
+    method: text('method').$type<'paper' | 'digital'>().notNull().default('paper'),
+    paperOnFile: boolean('paper_on_file').notNull().default(false),
+    paperDocumentScanUrl: text('paper_document_scan_url'),
+    digitalSignatureVector: text('digital_signature_vector'),
+    explainedByDoctorId: uuid('explained_by_doctor_id').references(() => doctors.id, {
+      onDelete: 'set null',
+    }),
+    witnessStaffUserId: uuid('witness_staff_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    signedAt: timestamp('signed_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('patient_consents_tenant_key').on(t.hospitalId, t.id),
+    index('patient_consents_admission_idx').on(t.hospitalId, t.admissionId),
+  ],
+);
+
+/** Generic clinical and operational alerts with escalation. */
+export const clinicalAlerts = pgTable(
+  'clinical_alerts',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull(),
+    type: text('type').$type<
+      'patient_arrived_ward' | 'new_emergency_admission' | 'intake_incomplete_warn' | 'consent_pending_escalated' | 'alert_unacknowledged_esc' | 'critical_lab_value'
+    >().notNull(),
+    subjectType: text('subject_type').notNull(),
+    subjectId: uuid('subject_id').notNull(),
+    recipientUserId: uuid('recipient_user_id').references(() => users.id, { onDelete: 'set null' }),
+    recipientRole: text('recipient_role').$type<StaffRole>(),
+    title: text('title').notNull(),
+    message: text('message').notNull(),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    status: text('status').$type<'pending' | 'acknowledged' | 'escalated' | 'resolved' | 'dismissed'>().notNull().default('pending'),
+    acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true }),
+    acknowledgedByUserId: uuid('acknowledged_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    escalateAfterMinutes: smallint('escalate_after_minutes').notNull().default(20),
+    escalatedAt: timestamp('escalated_at', { withTimezone: true }),
+    escalatedToUserId: uuid('escalated_to_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    escalatedToRole: text('escalated_to_role').$type<StaffRole>().default('nurse'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('clinical_alerts_tenant_key').on(t.hospitalId, t.id),
+    index('clinical_alerts_recipient_idx')
+      .on(t.hospitalId, t.recipientUserId, t.status)
+      .where(sql`status in ('pending', 'escalated')`),
+    index('clinical_alerts_sweep_idx')
+      .on(t.hospitalId, t.status, t.createdAt)
+      .where(sql`status = 'pending'`),
+  ],
+);
