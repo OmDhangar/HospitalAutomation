@@ -10,11 +10,15 @@ import {
   AdmissionError,
   assignBed,
   cancelAdmission,
+  confirmWardArrival,
   createDirectAdmission,
+  executePatientIntake,
   setDischargeReady,
   transferBed,
   type AdmissionExtras,
+  type PatientIntakePayload,
 } from '@/lib/services/admissions';
+import { acknowledgeClinicalAlert } from '@/lib/services/clinical-alerts';
 import { CareEntryError, undoCareEntry, voidCareEntry } from '@/lib/services/care-entries';
 import {
   UndoError,
@@ -1044,6 +1048,71 @@ export async function orderVitalsFrequencyAction(args: {
   revalidatePath(`/ipd/patients/${args.admissionId}`);
   return { ok: true };
 }
+
+/** Executes full unified intake (OPD prefilled or direct walkin) with bed, contacts, consent, MLC and deposit. */
+export async function executePatientIntakeAction(payload: Omit<PatientIntakePayload, 'hospitalId' | 'actorUserId'>) {
+  const session = await requireWritableSession();
+  if (!can(session.role, 'ipd.admit')) {
+    return { ok: false, error: 'Only authorized staff can admit patients' };
+  }
+  try {
+    const result = await executePatientIntake({
+      ...payload,
+      hospitalId: session.hospitalId,
+      branchId: payload.branchId || session.branchId || '',
+      actorUserId: session.userId,
+    });
+    revalidatePath('/ipd');
+    revalidatePath(`/ipd/admissions/${result.admissionId}`);
+    return { ok: true, data: result };
+  } catch (err: any) {
+    return { ok: false, error: err.message || 'Failed to complete patient intake' };
+  }
+}
+
+/** Confirms physical ward arrival, starts the clinical clock and notifies the doctor. */
+export async function confirmWardArrivalAction(args: {
+  admissionId: string;
+  arrivedAt?: string | null;
+  backdateReason?: string | null;
+}) {
+  const session = await requireWritableSession();
+  if (!can(session.role, 'ipd.admit') && !can(session.role, 'queue.mutate')) {
+    return { ok: false, error: 'Not authorized to confirm ward arrival' };
+  }
+  try {
+    const result = await confirmWardArrival({
+      hospitalId: session.hospitalId,
+      admissionId: args.admissionId,
+      actorUserId: session.userId,
+      arrivedAt: args.arrivedAt ? new Date(args.arrivedAt) : null,
+      backdateReason: args.backdateReason,
+    });
+    revalidatePath('/ipd');
+    revalidatePath(`/ipd/admissions/${args.admissionId}`);
+    return { ok: true, data: result };
+  } catch (err: any) {
+    return { ok: false, error: err.message || 'Failed to confirm ward arrival' };
+  }
+}
+
+/** Acknowledges a clinical alert for surveillance. */
+export async function acknowledgeClinicalAlertAction(alertId: string) {
+  const session = await requireWritableSession();
+  try {
+    await acknowledgeClinicalAlert({
+      hospitalId: session.hospitalId,
+      alertId,
+      actorUserId: session.userId,
+    });
+    revalidatePath('/ipd');
+    revalidatePath('/dashboard');
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err.message || 'Failed to acknowledge alert' };
+  }
+}
+
 
 
 
