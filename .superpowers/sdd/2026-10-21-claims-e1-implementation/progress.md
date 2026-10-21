@@ -20,4 +20,6 @@ Task 5: complete (commit 0741e7d, tests: npx vitest run lib/services/__tests__/c
 Task 6: complete (commit 6782aea, tests: npx vitest run lib/services/__tests__/claims-sweeps.integration.test.ts → 2/2 passed; full suite: 67 files, 887 tests passed)
 Task 7: complete (commit 0164dc3, tests: npx vitest run lib/services/__tests__/claims-import.test.ts → 4/4 passed)
 Task 8: complete (commit ebd42f7, tests: npx vitest run lib/modules/__tests__/ → 19/19 passed, coverage verified)
-
+Task 9: complete (commit 16292de, tests: 69 test files passed, 893 tests passed; tsc --noEmit 0 errors)
+Task 10: complete (components/ipd/claims/claim-custody-checklist.tsx, components/ipd/claims/claim-details-view.tsx, app/(app)/ipd/admissions/[id]/(file)/claims/page.tsx; tests: 68/68 files passed, 889 tests, tsc 0 errors)
+All 10 Tasks Complete!

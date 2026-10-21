@@ -3,6 +3,7 @@ import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import type { Tx } from '@/lib/db';
 import {
   claimCases,
+  claimDocumentRecords,
   claimEvents,
   claimQueries,
   recordAccessLogs,
@@ -441,4 +442,151 @@ export async function listClaimCasesForHospital(
     .orderBy(desc(claimCases.createdAt));
 
   return args.role ? rows.map((r) => maskClaimFinancialsForRole(r, args.role!)) : rows;
+}
+
+/**
+ * Retrieves the active claim case associated with an admission, if any.
+ */
+export async function getClaimCaseByAdmissionId(
+  tx: Tx,
+  args: {
+    hospitalId: string;
+    admissionId: string;
+    role?: StaffRole;
+  }
+): Promise<ClaimCaseRow | null> {
+  const [row] = await tx
+    .select()
+    .from(claimCases)
+    .where(
+      and(
+        eq(claimCases.hospitalId, args.hospitalId),
+        eq(claimCases.admissionId, args.admissionId),
+        isNull(claimCases.voidedAt)
+      )
+    )
+    .orderBy(desc(claimCases.createdAt))
+    .limit(1);
+
+  if (!row) return null;
+  return args.role ? maskClaimFinancialsForRole(row, args.role) : row;
+}
+
+/**
+ * Lists chronological forensic events for a claim case.
+ */
+export async function listClaimEventsForCase(
+  tx: Tx,
+  args: {
+    hospitalId: string;
+    claimCaseId: string;
+  }
+) {
+  return tx
+    .select()
+    .from(claimEvents)
+    .where(and(eq(claimEvents.hospitalId, args.hospitalId), eq(claimEvents.claimCaseId, args.claimCaseId)))
+    .orderBy(desc(claimEvents.createdAt));
+}
+
+/**
+ * Lists queries raised by insurer/TPA for a claim case.
+ */
+export async function listClaimQueriesForCase(
+  tx: Tx,
+  args: {
+    hospitalId: string;
+    claimCaseId: string;
+  }
+) {
+  return tx
+    .select()
+    .from(claimQueries)
+    .where(and(eq(claimQueries.hospitalId, args.hospitalId), eq(claimQueries.claimCaseId, args.claimCaseId), isNull(claimQueries.voidedAt)))
+    .orderBy(desc(claimQueries.receivedAt));
+}
+
+/**
+ * Lists document custody records for a claim case.
+ */
+export async function listClaimDocumentsForCase(
+  tx: Tx,
+  args: {
+    hospitalId: string;
+    claimCaseId: string;
+  }
+) {
+  return tx
+    .select()
+    .from(claimDocumentRecords)
+    .where(
+      and(
+        eq(claimDocumentRecords.hospitalId, args.hospitalId),
+        eq(claimDocumentRecords.claimCaseId, args.claimCaseId),
+        isNull(claimDocumentRecords.voidedAt)
+      )
+    )
+    .orderBy(claimDocumentRecords.createdAt);
+}
+
+/**
+ * Upserts a document custody record (marking paper filed, physical box/file location).
+ */
+export async function upsertClaimDocumentRecordInTx(
+  tx: Tx,
+  args: {
+    hospitalId: string;
+    claimCaseId: string;
+    docCategory: string;
+    isPaperFiled: boolean;
+    physicalBoxOrFileNo?: string | null;
+    notes?: string | null;
+    actorUserId: string;
+    clientId: string;
+  }
+) {
+  const existing = await tx
+    .select()
+    .from(claimDocumentRecords)
+    .where(
+      and(
+        eq(claimDocumentRecords.hospitalId, args.hospitalId),
+        eq(claimDocumentRecords.claimCaseId, args.claimCaseId),
+        eq(claimDocumentRecords.docCategory, args.docCategory),
+        isNull(claimDocumentRecords.voidedAt)
+      )
+    )
+    .limit(1);
+
+  if (existing.length > 0) {
+    const [updated] = await tx
+      .update(claimDocumentRecords)
+      .set({
+        isPaperFiled: args.isPaperFiled,
+        paperFiledAt: args.isPaperFiled ? new Date() : null,
+        paperFiledByUserId: args.isPaperFiled ? args.actorUserId : null,
+        physicalBoxOrFileNo: args.physicalBoxOrFileNo ?? existing[0].physicalBoxOrFileNo,
+        notes: args.notes !== undefined ? args.notes : existing[0].notes,
+        updatedAt: new Date(),
+      })
+      .where(eq(claimDocumentRecords.id, existing[0].id))
+      .returning();
+    return updated;
+  } else {
+    const [inserted] = await tx
+      .insert(claimDocumentRecords)
+      .values({
+        hospitalId: args.hospitalId,
+        claimCaseId: args.claimCaseId,
+        docCategory: args.docCategory,
+        isPaperFiled: args.isPaperFiled,
+        paperFiledAt: args.isPaperFiled ? new Date() : null,
+        paperFiledByUserId: args.isPaperFiled ? args.actorUserId : null,
+        physicalBoxOrFileNo: args.physicalBoxOrFileNo ?? null,
+        notes: args.notes ?? null,
+        clientId: args.clientId,
+      })
+      .returning();
+    return inserted;
+  }
 }

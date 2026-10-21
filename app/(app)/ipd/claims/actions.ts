@@ -5,7 +5,12 @@ import { assertModule } from '@/lib/auth/modules';
 import { requireWritableSession } from '@/lib/auth/session';
 import { can } from '@/lib/domain/permissions';
 import { withTenant } from '@/lib/db';
-import { recordClaimQueryInTx, transitionClaimStatusInTx } from '@/lib/services/claims';
+import {
+  recordClaimQueryInTx,
+  replyClaimQueryInTx,
+  transitionClaimStatusInTx,
+  upsertClaimDocumentRecordInTx,
+} from '@/lib/services/claims';
 import { randomUUID } from 'node:crypto';
 
 export async function claimActionHandler(action: string, payload: Record<string, any>) {
@@ -37,8 +42,31 @@ export async function claimActionHandler(action: string, payload: Record<string,
         actorUserId: session.userId,
         clientId: randomUUID(),
       });
+    } else if (action === 'replyQuery') {
+      await replyClaimQueryInTx(tx, {
+        queryId: payload.queryId,
+        hospitalId: session.hospitalId,
+        replyNotes: payload.replyNotes,
+        replyChannel: payload.replyChannel ?? 'portal',
+        replyReference: payload.replyReference ?? null,
+        actorUserId: session.userId,
+      });
+    } else if (action === 'updateCustodyRecord') {
+      await upsertClaimDocumentRecordInTx(tx, {
+        hospitalId: session.hospitalId,
+        claimCaseId: payload.claimCaseId,
+        docCategory: payload.docCategory,
+        isPaperFiled: payload.isPaperFiled,
+        physicalBoxOrFileNo: payload.physicalBoxOrFileNo ?? null,
+        notes: payload.notes ?? null,
+        actorUserId: session.userId,
+        clientId: randomUUID(),
+      });
     }
   });
 
   revalidatePath('/ipd/claims');
+  if (payload.admissionId) {
+    revalidatePath(`/ipd/admissions/${payload.admissionId}/claims`);
+  }
 }

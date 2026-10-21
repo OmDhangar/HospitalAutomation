@@ -286,7 +286,7 @@ export const MODULES = [
     core: false,
     dependsOn: ['core_ipd'],
     uses: ['consents'],
-    routes: ['/ipd/claims'],
+    routes: ['/ipd/claims', '/ipd/admissions/[id]/(file)/claims'],
     fileTabs: [
       { slug: 'claims', label: 'Insurance & Claims', permission: 'claims.view', order: 7 },
     ],
