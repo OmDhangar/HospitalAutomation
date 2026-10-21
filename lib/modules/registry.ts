@@ -278,6 +278,24 @@ export const MODULES = [
     hasStages: false,
     defaultState: 'on',
   },
+  {
+    id: 'claims_tracker',
+    title: 'Claims & TPA Desk',
+    description: 'Pre-auth tracking, query deadlines, document checklists, and insurer settlement workflow.',
+    tier: 'standard',
+    core: false,
+    dependsOn: ['core_ipd'],
+    uses: ['consents'],
+    routes: ['/ipd/claims'],
+    fileTabs: [
+      { slug: 'claims', label: 'Insurance & Claims', permission: 'claims.view', order: 7 },
+    ],
+    printSheets: [
+      { id: 'claim_dossier', label: 'Claim Dossier & Checklist', permission: 'claims.packet', order: 10 },
+    ],
+    hasStages: true,
+    defaultState: 'off',
+  },
 ] as const satisfies readonly ModuleDefinition[];
 
 export type ModuleId = (typeof MODULES)[number]['id'];
