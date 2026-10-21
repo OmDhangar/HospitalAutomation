@@ -1854,6 +1854,8 @@ export const recordAccessLogs = pgTable(
         | 'print_ipd_file'
         | 'view_file_upload'
         | 'family_unlock'
+        | 'view_claim'
+        | 'decrypt_claim_identifier'
       >()
       .notNull(),
     /** The browser or ward device, and the login session (0041; filled from phase A5). */
