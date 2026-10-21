@@ -28,6 +28,18 @@ async function main() {
     await sql`ALTER TYPE bill_item_type ADD VALUE IF NOT EXISTS 'room'`;
   }
 
+  const tableExists = async (name: string) => {
+    const rows = await sql`select 1 from information_schema.tables where table_name = ${name}`;
+    return rows.length > 0;
+  };
+
+  if (await tableExists('medicines')) {
+    await sql`ALTER TABLE medicines ADD COLUMN IF NOT EXISTS time_critical BOOLEAN NOT NULL DEFAULT false`;
+    await sql`ALTER TABLE medicines ADD COLUMN IF NOT EXISTS tc_window_before_min SMALLINT`;
+    await sql`ALTER TABLE medicines ADD COLUMN IF NOT EXISTS tc_window_after_min SMALLINT`;
+    await sql`ALTER TABLE medicines ADD COLUMN IF NOT EXISTS tc_changed_at TIMESTAMPTZ`;
+  }
+
   // 0039 grants the identity functions to the application role by name; the name is configurable.
   await sql`select set_config('qurio.app_role', ${process.env.APP_DB_ROLE ?? 'opd_app'}, false)`;
 
