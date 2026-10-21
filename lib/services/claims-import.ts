@@ -270,9 +270,9 @@ export async function executeClaimsCsvImport(
     hospitalId: args.hospitalId,
     actorUserId: args.actorUserId,
     action: 'claims_csv_import',
-    entityType: 'claim_cases',
-    entityId: args.hospitalId,
-    meta: {
+    objectType: 'claim_cases',
+    objectId: args.hospitalId,
+    metadata: {
       totalRows: validation.totalRows,
       importedCount,
       updatedCount,
