@@ -320,6 +320,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                 doctorId={currentDoctor.id}
                 status={opdStopStatus[currentDoctor.id]}
                 timezone={session.timezone}
+                sessionStarted={sessionStarted}
               />
               <SessionControl
                 doctorId={selectedId!}
@@ -701,6 +702,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                           doctorId={currentDoctor.id}
                           status={opdStopStatus[currentDoctor.id]}
                           timezone={session.timezone}
+                          sessionStarted={sessionStarted}
                         />
                         <SessionControl
                           doctorId={selectedId ?? ''}
