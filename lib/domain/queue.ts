@@ -24,12 +24,57 @@ export class QueueTransitionError extends Error {
  * were already issued tokens or booked before the stop continue to move
  * through the queue normally until completion.
  */
+export interface OpdClosureInfo {
+  stoppedAt?: Date | null;
+  closureType?: 'stop_today' | 'blackout';
+  isMultiDay?: boolean;
+  serviceDate?: string | null;
+  reopenDate?: string | null;
+  endDate?: string | null;
+  reason?: string | null;
+  publicReason?: string | null;
+}
+
 export class OpdClosedError extends Error {
-  constructor(public readonly stoppedAt: Date, message?: string) {
-    super(message ?? 'OPD has been closed for today');
+  readonly stoppedAt: Date | null;
+  readonly closureType: 'stop_today' | 'blackout';
+  readonly isMultiDay: boolean;
+  readonly serviceDate: string | null;
+  readonly reopenDate: string | null;
+  readonly endDate: string | null;
+  readonly reason: string | null;
+  readonly publicReason: string | null;
+
+  constructor(arg: OpdClosureInfo | Date, message?: string) {
+    if (arg instanceof Date) {
+      super(message ?? 'OPD is closed for today');
+      this.stoppedAt = arg;
+      this.closureType = 'stop_today';
+      this.isMultiDay = false;
+      this.serviceDate = null;
+      this.reopenDate = null;
+      this.endDate = null;
+      this.reason = null;
+      this.publicReason = null;
+    } else {
+      const defaultMsg =
+        arg.closureType === 'blackout'
+          ? `OPD is closed on ${arg.serviceDate ?? 'the requested date'}`
+          : 'OPD is closed for today';
+      super(message ?? defaultMsg);
+      this.stoppedAt = arg.stoppedAt ?? null;
+      this.closureType = arg.closureType ?? 'stop_today';
+      this.isMultiDay = Boolean(arg.isMultiDay);
+      this.serviceDate = arg.serviceDate ?? null;
+      this.reopenDate = arg.reopenDate ?? null;
+      this.endDate = arg.endDate ?? null;
+      this.reason = arg.reason ?? null;
+      this.publicReason = arg.publicReason ?? arg.reason ?? null;
+    }
     this.name = 'OpdClosedError';
   }
 }
+
 
 /**
  * The full appointment state machine.
