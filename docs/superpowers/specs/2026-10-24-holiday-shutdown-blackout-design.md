@@ -2,29 +2,35 @@
 
 **Date:** 2026-10-24  
 **Author:** OmDhangar / Antigravity Pair  
-**Status:** Revised Design Specification (Post Architectural Review)  
-**Tracking Migration:** `0071_blackout_periods.sql`  
+**Status:** Approved Architectural Specification (Post-Review Final)  
+**Tracking Migration:** `0071_blackout_periods.sql` (`idx: 56`, `when: 1792250000000`)  
 **Architecture Decision Record:** ADR-040  
 
 ---
 
 ## 1. Executive Summary & Review Resolutions
 
-This specification defines the unified closure architecture for Qurio/QueueCare, combining:
+This specification delivers the unified closure architecture for Qurio/QueueCare:
 1. **Same-day Stop OPD** (intake freeze for today's session while serving the remaining queue, per ADR-039).
 2. **Multi-day Holiday & Shutdown Blackout** (calendar-range closures for hospital, branch, or doctor with automatic appointment cancellation and patient notifications, per ADR-040).
 3. **Dashboard UX Fix**: Hiding the "Stop OPD" button until the OPD session has actually been started (`sessionStarted === true`).
 
-### Resolution of Review Blockers & Architectural Directives
-- **B1 (WhatsApp Template Approval)**: Reuses the existing, Meta-approved `opd_appointment_cancelled` template (`isCritical = true`) which takes `doctorName` and `appointmentDate` and carries a `/book?doctor={{1}}` rebooking button. A dedicated `opd_blackout_cancellation` template is added to `lib/notify/templates.ts` for future review, but runtime shipping uses the approved template without delay.
-- **B2 (State Machine Integrity)**: Bulk appointment cancellations execute strictly via state machine transitions (`transitionAppointment(status, 'cancel')`) with append-only `queue_events` audit writes (`action: 'cancel'`, structured metadata). Appointments in `IN_CONSULTATION` or `COMPLETED` states are never cancelled.
-- **B3 & M8 (Permissions & Roles)**: Uses existing owner permission `hospital.configure` (`STAFF_ROLES = ['owner', 'receptionist', 'doctor', 'nurse']`). Destructive multi-day blackout creation and revocation are strictly owner-only.
-- **B4 (Strict RLS)**: Uses the exact `app.hospital_id` setting with `nullif(current_setting('app.hospital_id', true), '')::uuid` and copies the full `DO $outer$ ... FOREACH ...` block from `0026_billing_foundation.sql` enforcing `FORCE ROW LEVEL SECURITY`, `tenant_isolation`, `read_only_write`, and `read_only_delete`.
-- **B5 (Unified Closure Resolver)**: Establishes `resolveOpdClosure()` in `lib/services/opd-hours.ts` as the single source of truth called by all four gates (`createWalkIn`, `bookScheduledSlot`, `getDoctorSlotsForDate`/`getDoctorBookingDetails`, and `handleInboundMessage`).
-- **H1 (Today vs Future Date Messaging)**: `OpdClosedError` takes `targetDate` and `serviceDate`. WhatsApp messaging differentiates attempting to book *today* (which offers tomorrow's slots or tomorrow's live queue) from attempting to book a *future date* inside a blackout range (which informs that `{serviceDate}` is closed and reopens on `{reopenDate}`).
-- **H2 (Preview Disruption UX)**: Adds `previewBlackoutDisruption()` and a confirmation modal showing exact counts of appointments to be cancelled, WhatsApp notices to be sent, and active consultations left alone before committing.
-- **H3 (Race Conditions)**: Transactional boundary wraps blackout creation, appointment snapshot, state machine cancellation, and queue events. A final in-transaction check catches any concurrent walk-in rows before commit.
-- **H4 (Message Budget Canary)**: `opd_appointment_cancelled` is in `CRITICAL_TEMPLATES`, which inherently bypasses circuit-breaker suppression in `lib/notify/worker.ts`. The monthly ratio numerator excludes automated administrative disruption messages.
+### Resolution of Architectural Review Directives
+
+| Code | Item | Resolution |
+| :--- | :--- | :--- |
+| **NB1** | Status Partition | **Today**: Cancel `CREATED, CONFIRMED, WAITING, SKIPPED, HELD`. Leave `CALLED, IN_CONSULTATION, COMPLETED`. Terminal `CANCELLED, NO_SHOW, EXPIRED`.<br>**Future**: Cancel `CREATED, CONFIRMED, WAITING`. Terminal `CANCELLED, NO_SHOW, EXPIRED`. Identical in preview and execution. |
+| **NB2** | Overlap Precedence | `getActiveBlackout` queries `ORDER BY end_date DESC, created_at DESC LIMIT 1`. Picks the latest reopen date if overlapping blackouts exist. |
+| **NB3** | State Machine Transition | Uses `canCancel(status)` and `applyAction(status, 'cancel')` from `lib/domain/queue.ts`. Updates appointment status to `CANCELLED` and writes append-only `queue_events` audit rows with structured metadata. |
+| **NB4** | Overlapping Blackouts | Prevented at creation time. `createBlackoutPeriodAndNotify` rejects with validation error if date range overlaps an existing uncancelled blackout for the same scope. |
+| **NB5** | Concurrency / Race Condition | Strategy A: `createBlackoutPeriodAndNotify` calls `lockDoctorDay(tx, { hospitalId, doctorId, serviceDate })`. `createWalkIn` already takes `lockDoctorDay`, so walk-in creation and blackout creation serialize perfectly. |
+| **NB6** | Canary & Circuit Breaker | Verified: `opd_appointment_cancelled` is already in `CRITICAL_TEMPLATES` in `lib/notify/templates.ts`. Worker query in `lib/notify/worker.ts` is explicitly updated to exclude `milestone = 'appointment_cancelled:blackout'` from monthly canary ratio. |
+| **NH1** | Interim WhatsApp Notice | Ships immediately using approved `opd_appointment_cancelled` (carries doctor and date, rebooking button). Dedicated `opd_blackout_cancellation` template registered in `templates.ts` for Meta submission. Inbound bot and `/book` auto-reply with full public reason. |
+| **NH2** | Multiple Appointments | Accepted policy: A patient with multiple appointments receives one cancellation notice per appointment, preserving outbox idempotency. |
+| **NH3** | `bookSlotWalkInDynamic` | In `app/(app)/dashboard/actions.ts`, catches `OpdClosedError` safely: `opdClosedAt: err.stoppedAt ? err.stoppedAt.toISOString() : undefined`. |
+| **NH4** | Consultation Fees & Refunds | Consultation fees for cancelled appointments remain recorded in `patient_payments` as unconsumed credit / pending manual settlement. Automated payment refunds are out of scope and owner-handled. |
+| **NH5** | `sessionStarted` Source | Sourced from `doctorDayStates.session_started_at !== null` (`snapshot.sessionStartedAt`). Dashboard passes `sessionStarted={Boolean(snapshot?.sessionStartedAt)}`. |
+| **NH6** | Primary Safety Gate Tests | Tests added: `createWalkIn` throws on blackout; `createWalkIn` with `isEmergency: true` succeeds during blackout; `createWalkIn` succeeds after revocation. |
 
 ---
 
@@ -40,7 +46,7 @@ CREATE TABLE blackout_periods (
   doctor_id UUID REFERENCES doctors(id) ON DELETE CASCADE,       -- NULL = All doctors in branch/hospital
   start_date DATE NOT NULL,
   end_date DATE NOT NULL,
-  reopen_date DATE NOT NULL,
+  reopen_date DATE NOT NULL,                                     -- Can be > end_date + 1 (e.g. Friday closure, Monday reopen)
   reason TEXT NOT NULL,                                          -- Internal administrative reason
   public_reason TEXT,                                            -- Patient-facing notice (defaults to "Scheduled closure")
   created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -55,7 +61,7 @@ CREATE TABLE blackout_periods (
 CREATE INDEX blackout_periods_lookup_idx ON blackout_periods (hospital_id, branch_id, doctor_id, start_date, end_date)
   WHERE cancelled_at IS NULL;
 
--- Strict Multi-Tenant Row Level Security
+-- Strict Multi-Tenant Row Level Security (0026 pattern)
 DO $outer$
 DECLARE
   t text;
@@ -96,9 +102,9 @@ END
 $outer$;
 ```
 
-### 2.2 Date and Timezone Discipline (M10)
-- `start_date`, `end_date`, and `reopen_date` are Postgres `DATE` types (stored as `YYYY-MM-DD` strings).
-- All comparisons use `DATE` vs `DATE` (via `serviceDateIn(hospital.timezone, timestamp)`). Never compare UTC timestamps directly against local calendar dates.
+### 2.2 Date and Timezone Discipline
+- `start_date`, `end_date`, and `reopen_date` are Postgres `DATE` types (`YYYY-MM-DD`).
+- All comparisons use `DATE` vs `DATE` (via `serviceDateIn(hospital.timezone, timestamp)`). UTC timestamps are never compared directly against calendar dates.
 
 ---
 
@@ -128,30 +134,33 @@ export async function resolveOpdClosure(args: {
   timezone?: string;
 }): Promise<OpdClosureResolution> {
   // 1. Check active uncancelled blackouts covering serviceDate
-  // Queries blackout_periods WHERE cancelled_at IS NULL
-  //   AND start_date <= serviceDate AND end_date >= serviceDate
-  //   AND (doctor_id IS NULL OR doctor_id = args.doctorId)
-  //   AND (branch_id IS NULL OR branch_id = args.branchId)
-  // ORDER BY created_at DESC LIMIT 1 (precedence: M5)
-  // If found: return closureType: 'blackout'
+  // SELECT * FROM blackout_periods
+  // WHERE hospital_id = :hospitalId
+  //   AND cancelled_at IS NULL
+  //   AND start_date <= :serviceDate
+  //   AND end_date >= :serviceDate
+  //   AND (doctor_id IS NULL OR doctor_id = :doctorId)
+  //   AND (branch_id IS NULL OR branch_id = :branchId)
+  // ORDER BY end_date DESC, created_at DESC
+  // LIMIT 1;
+  // If found: return closureType: 'blackout', isClosed: true
 
   // 2. Check same-day Stop OPD (only applicable if serviceDate === today)
   // Reads doctor_day_states for today. If opd_stopped_at <= now:
-  // return closureType: 'stop_today'
+  // return closureType: 'stop_today', isClosed: true
 
-  // 3. Neither: return closureType: 'none', isClosed: false
+  // 3. Otherwise: return closureType: 'none', isClosed: false
 }
 ```
 
 ### 3.1 Domain Error: `OpdClosedError` ([lib/domain/queue.ts](file:///d:/Projects/HospitalAutomation/lib/domain/queue.ts))
-Fully backwards-compatible constructor:
 
 ```typescript
 export interface OpdClosureInfo {
   stoppedAt?: Date | null;
   closureType?: 'stop_today' | 'blackout';
   isMultiDay?: boolean;
-  serviceDate?: string | null; // Date patient attempted to book
+  serviceDate?: string | null;
   reopenDate?: string | null;
   endDate?: string | null;
   reason?: string | null;
@@ -201,7 +210,7 @@ export class OpdClosedError extends Error {
 
 Located in `lib/services/blackout.ts`:
 
-### 4.1 Preview Disruption (H2)
+### 4.1 Preview Disruption (H2, NB1)
 ```typescript
 export async function previewBlackoutDisruption(args: {
   hospitalId: string;
@@ -209,6 +218,8 @@ export async function previewBlackoutDisruption(args: {
   doctorId?: string | null;
   startDate: string;
   endDate: string;
+  timezone?: string;
+  now?: Date;
 }): Promise<{
   totalAppointments: number;
   willCancel: number;
@@ -216,28 +227,36 @@ export async function previewBlackoutDisruption(args: {
   patientCountWithWhatsApp: number;
 }>
 ```
-Queries all appointments in `[startDate, endDate]` for the given doctor/branch/hospital. Partitions by status:
-- Cancellable: `CREATED`, `CONFIRMED`, `WAITING`, `PARKED`, `HELD` -> `willCancel`.
-- Non-cancellable: `IN_CONSULTATION`, `COMPLETED`, `CANCELLED` -> `inConsultationOrDone` (left alone).
+Partitions candidate appointments in `[startDate, endDate]`:
+- **If `serviceDate === today`**:
+  - Cancel: `CREATED`, `CONFIRMED`, `WAITING`, `SKIPPED`, `HELD`.
+  - Leave: `CALLED`, `IN_CONSULTATION`, `COMPLETED` (counted in `inConsultationOrDone`).
+  - Terminal: `CANCELLED`, `NO_SHOW`, `EXPIRED`.
+- **If `serviceDate > today` (Future)**:
+  - Cancel: `CREATED`, `CONFIRMED`, `WAITING`.
+  - Terminal: all others.
 
-### 4.2 Creation with State Machine Cancellations (B2, H3, M4)
+### 4.2 Creation with State Machine Cancellations (B2, NB3, NB4, NB5, M4)
 `createBlackoutPeriodAndNotify(args)`:
-1. Validates inputs (`hospital.configure` verified, `endDate >= startDate`, `reopenDate > endDate`).
-2. Opens tenant transaction:
+1. Validates actor has `hospital.configure`.
+2. Validates `startDate <= endDate` and `reopenDate > endDate`.
+3. Checks for overlapping active blackouts (NB4). If overlap exists, throws friendly validation error.
+4. Opens tenant transaction:
+   - Takes `lockDoctorDay` on target doctor(s) for today if blackout covers today (NB5).
    - Inserts row into `blackout_periods`.
-   - Fetches candidate appointments in `[startDate, endDate]` with `FOR UPDATE`.
-   - For each cancellable row:
-     - Applies state machine transition to `CANCELLED`.
-     - Appends to `queue_events` (`action: 'cancel'`, metadata: `{ reason: 'blackout', blackout_id: id, public_reason }`).
-     - If patient has phone & WhatsApp opt-in: enqueues notification in `notification_outbox` with `templateCode: 'opd_appointment_cancelled'`, `appointmentDate`, `doctorName`.
-   - Concurrency sweep: verifies no unhandled `WAITING` rows slipped in; cancels them before transaction commit.
-   - Logs destructive action to `audit_logs` (`action: 'blackout.created'`).
+   - Queries appointments with `FOR UPDATE`.
+   - For each cancellable row per the status partition:
+     - Calls `applyAction(row.status, 'cancel')` verifying transition is valid.
+     - Updates status to `CANCELLED`.
+     - Inserts into `queue_events` (`action: 'cancel'`, `fromStatus: row.status`, `toStatus: 'CANCELLED'`, metadata: `{ reason: 'blackout', blackout_id: id, public_reason }`).
+     - If patient has phone and opted-in: writes outbox row (`templateCode: 'opd_appointment_cancelled'`, `milestone: 'appointment_cancelled:blackout'`).
+   - Writes to `audit_logs` (`action: 'blackout.created'`).
 
 ### 4.3 Cancellation / Revocation (M3, M4)
 `cancelBlackoutPeriod(args)`:
 - Sets `cancelled_at = now()`, `cancelled_by_user_id = actor.id`.
 - Writes to `audit_logs` (`action: 'blackout.cancelled'`).
-- Semantics: Reopens slot booking and walk-in intake immediately. Does not attempt to revive previously cancelled appointments (patients received notice and made other plans).
+- Immediately re-enables intake and slots. Does not resurrect cancelled appointments.
 
 ---
 
@@ -245,10 +264,10 @@ Queries all appointments in `[startDate, endDate]` for the given doctor/branch/h
 
 ### 5.1 The Four Gates
 1. **`createWalkIn` ([lib/services/queue.ts](file:///d:/Projects/HospitalAutomation/lib/services/queue.ts))**:
-   - Calls `resolveOpdClosure({ hospitalId, doctorId, serviceDate: today })`.
-   - If `isClosed`: throws `OpdClosedError`.
+   - Calls `resolveOpdClosure({ hospitalId, doctorId, serviceDate: today, branchId })`.
+   - If `isClosed` and not `isEmergency`: throws `OpdClosedError`.
 2. **`bookScheduledSlot` ([lib/services/web-booking.ts](file:///d:/Projects/HospitalAutomation/lib/services/web-booking.ts))**:
-   - Calls `resolveOpdClosure({ hospitalId, doctorId, serviceDate: slotDate })`.
+   - Calls `resolveOpdClosure({ hospitalId, doctorId, serviceDate: slotDate, branchId })`.
    - If `isClosed`: throws `OpdClosedError`.
 3. **`getDoctorSlotsForDate` & `getDoctorBookingDetails`**:
    - Calls `resolveOpdClosure`.
@@ -277,25 +296,20 @@ Queries all appointments in `[startDate, endDate]` for the given doctor/branch/h
 
 ### 6.1 Admin Scheduling UI ([app/(app)/settings/scheduling](file:///d:/Projects/HospitalAutomation/app/(app)/settings/scheduling))
 Owner-only section: `<HolidaysAndBlackoutsManager />`:
-- Table of active and scheduled blackouts (Dates, Reopen Date, Scope, Public Reason, Actions).
+- Active & scheduled blackouts table (Dates, Reopen Date, Scope, Public Reason, Actions).
 - **"Add Holiday / Blackout" Flow**:
-  1. Input Step: Select Scope (All Doctors / Specific Doctor, Branch), Dates, Reopen Date, Internal Reason, and Public Reason.
-  2. Preview Step (H2): Calls `previewBlackoutDisruption`. Shows summary of affected appointments and notifications.
-  3. Confirm Step: Calls Server Action `createBlackoutPeriodAction`.
-- **"Revoke Blackout" Action**: Modal confirmation to reopen dates early.
+  1. Input: Scope (All Doctors / Specific Doctor, Branch), Dates, Reopen Date, Internal Reason, Public Reason.
+  2. Preview (H2): Calls `previewBlackoutDisruption`. Displays affected appointments count.
+  3. Confirm: Calls `createBlackoutPeriodAction`.
+- **"Revoke Blackout" Action**: Modal confirmation.
 
-### 6.2 Discoverability on Same-Day + Multi-Day Closures (M7)
-- If a hospital decides at 3:00 PM to close today and remain closed tomorrow:
-  - Admin schedules a Blackout with `start_date = today` and `end_date = tomorrow`.
-  - Because `resolveOpdClosure` checks blackouts first, this single action closes both today's intake and tomorrow's intake automatically. No need to click "Stop OPD" first.
-
-### 6.3 Dashboard Stop OPD Button Lifecycle
+### 6.2 Dashboard Stop OPD Button Lifecycle (NH5)
 - [app/(app)/dashboard/opd-stop-control.tsx](file:///d:/Projects/HospitalAutomation/app/(app)/dashboard/opd-stop-control.tsx):
   - Prop `sessionStarted?: boolean`.
-  - When `!sessionStarted && !stoppedAt`, returns `null`. The button is invisible until staff clicks "Start OPD".
+  - When `!sessionStarted && !stoppedAt`, returns `null`.
   - If OPD is already stopped or scheduled, the status badge with Reopen / Cancel actions remains visible at all times.
 - [app/(app)/dashboard/page.tsx](file:///d:/Projects/HospitalAutomation/app/(app)/dashboard/page.tsx):
-  - Passes `sessionStarted={sessionStarted}` at lines 319 (doctor view) and 700 (receptionist view).
+  - Passes `sessionStarted={Boolean(snapshot?.sessionStartedAt)}`.
 
 ---
 
@@ -306,17 +320,20 @@ Owner-only section: `<HolidaysAndBlackoutsManager />`:
    - `lib/domain/__tests__/blackout.test.ts`: `OpdClosedError` contextual messages and backward compatibility.
 2. **Integration Tests**:
    - `lib/services/__tests__/blackout.integration.test.ts`:
-     - Test 1: Preview disruption returns accurate cancellation and left-alone counts.
-     - Test 2: Hospital-wide blackout creation cancels appointments via state machine and enqueues `opd_appointment_cancelled` messages.
+     - Test 1: Preview disruption returns accurate partition counts.
+     - Test 2: Hospital-wide blackout cancels cancellable appointments and leaves CALLED/in-consultation alone.
      - Test 3: Doctor-specific blackout isolates cancellations to target doctor.
-     - Test 4: Concurrency and race conditions (H3) between walk-in creation and blackout.
-     - Test 5: Revocation restores slot generation and intake gates.
-     - Test 6: Precedence on overlapping blackouts (M5).
+     - Test 4: Overlapping blackout creation is rejected with validation error (NB4).
+     - Test 5: Concurrency/serialization with `lockDoctorDay` (NB5).
+     - Test 6: Revocation restores slot generation and intake gates.
+     - Test 7: `createWalkIn` throws `OpdClosedError` on active blackout (NH6 Test X).
+     - Test 8: `createWalkIn` succeeds with `isEmergency: true` during active blackout (NH6 Test Y).
+     - Test 9: `createWalkIn` succeeds after blackout revocation (NH6 Test Z).
    - `lib/services/__tests__/booking.integration.test.ts`:
-     - Test 7: WhatsApp reply on future blacked-out date.
-     - Test 8: WhatsApp reply on today's multi-day blackout.
-     - Test 9: WhatsApp reply on today's same-day stop with tomorrow's slot link.
-     - Test 10: WhatsApp reply on today's same-day stop for queue-only doctor.
+     - Test 10: WhatsApp reply on future blacked-out date.
+     - Test 11: WhatsApp reply on today's multi-day blackout.
+     - Test 12: WhatsApp reply on today's same-day stop with tomorrow's slot link.
+     - Test 13: WhatsApp reply on today's same-day stop for queue-only doctor.
 3. **Verification**:
    - `npm run typecheck`
    - Vitest test suite (`npm run test`) 100% green.
