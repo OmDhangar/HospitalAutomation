@@ -110,6 +110,9 @@ export async function addWalkInDynamic(args: {
   warning?: string;
   quotaReached?: boolean;
   opdClosedAt?: string;
+  closureType?: string;
+  reopenDate?: string | null;
+  publicReason?: string | null;
   /** The live queue has closed for today: offer these slots instead. */
   freeSlots?: FreeSlot[];
 }> {
@@ -197,11 +200,23 @@ export async function addWalkInDynamic(args: {
     return { ok: true, tokenNumber: appt.tokenNumber, isEmergency: Boolean(args.isEmergency), warning };
   } catch (err: unknown) {
     if (err instanceof OpdClosedError) {
-      const formatTime = formatTimeIn(timezone, err.stoppedAt);
+      if (err.closureType === 'blackout') {
+        const reopenMsg = err.reopenDate ? ` Reopening on ${err.reopenDate}.` : '';
+        const reasonMsg = err.publicReason ? ` (${err.publicReason})` : '';
+        return {
+          ok: false,
+          error: `OPD is closed${reasonMsg}.${reopenMsg} Emergency patients can still be admitted.`,
+          closureType: err.closureType,
+          reopenDate: err.reopenDate,
+          publicReason: err.publicReason,
+        };
+      }
+      const formatTime = err.stoppedAt ? ` (stopped at ${formatTimeIn(timezone, err.stoppedAt)})` : '';
       return {
         ok: false,
-        error: `OPD is closed for today (stopped at ${formatTime}). Emergency patients can still be admitted.`,
-        opdClosedAt: err.stoppedAt.toISOString(),
+        error: `OPD is closed for today${formatTime}. Emergency patients can still be admitted.`,
+        opdClosedAt: err.stoppedAt?.toISOString(),
+        closureType: err.closureType,
       };
     }
     // After a split day's live queue closes, a walk-in takes a free evening slot.
@@ -231,7 +246,14 @@ export async function bookSlotWalkInDynamic(args: {
   phone: string;
 }): Promise<
   | { ok: true; tokenLabel: string; slotTime: string }
-  | { ok: false; error: string; opdClosedAt?: string }
+  | {
+      ok: false;
+      error: string;
+      opdClosedAt?: string;
+      closureType?: string;
+      reopenDate?: string | null;
+      publicReason?: string | null;
+    }
 > {
   try {
     const session = await authorize();
@@ -253,10 +275,22 @@ export async function bookSlotWalkInDynamic(args: {
     return { ok: true, tokenLabel: booked.tokenLabel, slotTime: booked.slotTimeFormatted };
   } catch (err: unknown) {
     if (err instanceof OpdClosedError) {
+      if (err.closureType === 'blackout') {
+        const reopenMsg = err.reopenDate ? ` Reopening on ${err.reopenDate}.` : '';
+        const reasonMsg = err.publicReason ? ` (${err.publicReason})` : '';
+        return {
+          ok: false,
+          error: `OPD is closed${reasonMsg}.${reopenMsg} Emergency patients can still be admitted.`,
+          closureType: err.closureType,
+          reopenDate: err.reopenDate,
+          publicReason: err.publicReason,
+        };
+      }
       return {
         ok: false,
         error: 'OPD is closed for today. Emergency patients can still be admitted.',
-        opdClosedAt: err.stoppedAt.toISOString(),
+        opdClosedAt: err.stoppedAt?.toISOString(),
+        closureType: err.closureType,
       };
     }
     return {

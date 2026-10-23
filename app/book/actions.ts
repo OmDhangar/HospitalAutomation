@@ -121,7 +121,7 @@ export async function submitSlotBooking(formData: FormData): Promise<BookSlotRes
       return {
         ok: false,
         error: err.message,
-        opdClosedAt: err.stoppedAt.toISOString(),
+        opdClosedAt: err.stoppedAt?.toISOString(),
       };
     }
     if (err instanceof BookingError) return { ok: false, error: err.message };
