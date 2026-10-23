@@ -28,6 +28,7 @@ export interface OpdClosureInfo {
   stoppedAt?: Date | null;
   closureType?: 'stop_today' | 'blackout';
   isMultiDay?: boolean;
+  startDate?: string | null;
   serviceDate?: string | null;
   reopenDate?: string | null;
   endDate?: string | null;
@@ -39,6 +40,7 @@ export class OpdClosedError extends Error {
   readonly stoppedAt: Date | null;
   readonly closureType: 'stop_today' | 'blackout';
   readonly isMultiDay: boolean;
+  readonly startDate: string | null;
   readonly serviceDate: string | null;
   readonly reopenDate: string | null;
   readonly endDate: string | null;
@@ -51,6 +53,7 @@ export class OpdClosedError extends Error {
       this.stoppedAt = arg;
       this.closureType = 'stop_today';
       this.isMultiDay = false;
+      this.startDate = null;
       this.serviceDate = null;
       this.reopenDate = null;
       this.endDate = null;
@@ -65,6 +68,7 @@ export class OpdClosedError extends Error {
       this.stoppedAt = arg.stoppedAt ?? null;
       this.closureType = arg.closureType ?? 'stop_today';
       this.isMultiDay = Boolean(arg.isMultiDay);
+      this.startDate = arg.startDate ?? null;
       this.serviceDate = arg.serviceDate ?? null;
       this.reopenDate = arg.reopenDate ?? null;
       this.endDate = arg.endDate ?? null;

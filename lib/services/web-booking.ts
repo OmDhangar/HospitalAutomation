@@ -18,7 +18,7 @@ import type { Locale } from '@/lib/i18n/patient';
 import { getProvider } from '@/lib/notify/provider';
 import { allocateTokenInTx, CapacityError } from './capacity';
 import { lockDoctorDay } from './doctor-day';
-import { getOpdStopStatusInTx, type OpdStopStatus } from './opd-hours';
+import { getOpdStopStatusInTx, resolveOpdClosure, resolveOpdClosureInTx, type OpdStopStatus } from './opd-hours';
 import { resolvePatientInTx, type PatientInput } from './patients';
 import { getDoctorSlotsForDate, type GeneratedSlot } from './scheduling';
 import { getPlanAccess } from './subscriptions';
@@ -158,20 +158,17 @@ export async function getDoctorBookingDetails(args: {
     const serviceDate = args.serviceDate || today;
     const isToday = serviceDate === today;
 
-    let isClosed = false;
-    let closedAt: string | null = null;
-    let stopStatus: OpdStopStatus | null = null;
+    const closure = await resolveOpdClosureInTx(tx, {
+      hospitalId: args.hospitalId,
+      doctorId: args.doctorId,
+      branchId: row.branchId,
+      serviceDate,
+      now,
+      timezone,
+    });
 
-    if (isToday) {
-      stopStatus = await getOpdStopStatusInTx(tx, {
-        hospitalId: args.hospitalId,
-        doctorId: args.doctorId,
-        serviceDate,
-        now,
-      });
-      isClosed = stopStatus.isStopped;
-      closedAt = isClosed && stopStatus.stoppedAt ? stopStatus.stoppedAt.toISOString() : null;
-    }
+    const isClosed = closure.isClosed;
+    const closedAt = isClosed && closure.stoppedAt ? closure.stoppedAt.toISOString() : null;
 
     // Slots as the scheduler computes them
     const scheduleResult = await getDoctorSlotsForDate({
@@ -188,8 +185,10 @@ export async function getDoctorBookingDetails(args: {
       slotLabel: s.slotNumber !== null ? tokenLabel('slot', s.slotNumber) : null,
     }));
 
-    if (isToday && stopStatus?.stoppedAt) {
-      const stopMs = stopStatus.stoppedAt.getTime();
+    if (closure.closureType === 'blackout') {
+      slots = [];
+    } else if (isToday && closure.stoppedAt) {
+      const stopMs = closure.stoppedAt.getTime();
       slots = slots.filter((s) => new Date(s.datetimeIso).getTime() < stopMs);
     }
 
@@ -218,6 +217,9 @@ export async function getDoctorBookingDetails(args: {
       isOnlineOpen: scheduleResult.isOnlineOpen ?? true,
       isClosed,
       closedAt,
+      closureType: closure.closureType,
+      reopenDate: closure.reopenDate ?? null,
+      publicReason: closure.publicReason ?? null,
     };
   });
 }
@@ -269,26 +271,36 @@ export async function bookScheduledSlot(args: {
 
   const [docHospital] = await withTenant(args.hospitalId, async (tx) =>
     tx
-      .select({ timezone: hospitals.timezone })
-      .from(hospitals)
-      .where(eq(hospitals.id, args.hospitalId)),
+      .select({ timezone: hospitals.timezone, branchId: doctors.branchId })
+      .from(doctors)
+      .innerJoin(hospitals, eq(hospitals.id, doctors.hospitalId))
+      .where(eq(doctors.id, args.doctorId)),
   );
   const timezone = docHospital?.timezone ?? 'Asia/Kolkata';
   const serviceDate = serviceDateIn(timezone, slotDate);
-  const isToday = serviceDate === serviceDateIn(timezone, now);
 
-  if (isToday) {
-    const stop = await withTenant(args.hospitalId, (tx) =>
-      getOpdStopStatusInTx(tx, {
-        hospitalId: args.hospitalId,
-        doctorId: args.doctorId,
-        serviceDate,
-        now,
-      }),
-    );
-    if (stop.stoppedAt !== null && slotDate.getTime() >= stop.stoppedAt.getTime()) {
-      throw new OpdClosedError(stop.stoppedAt);
-    }
+  const closure = await resolveOpdClosure({
+    hospitalId: args.hospitalId,
+    doctorId: args.doctorId,
+    branchId: docHospital?.branchId ?? '',
+    serviceDate,
+    now,
+    timezone,
+  });
+
+  if (closure.closureType === 'blackout') {
+    throw new OpdClosedError({
+      closureType: 'blackout',
+      serviceDate,
+      reopenDate: closure.reopenDate,
+      endDate: closure.endDate,
+      reason: closure.reason,
+      publicReason: closure.publicReason,
+      isMultiDay: closure.isMultiDay,
+    });
+  }
+  if (closure.stoppedAt && slotDate.getTime() >= closure.stoppedAt.getTime()) {
+    throw new OpdClosedError(closure.stoppedAt);
   }
 
   /**
@@ -503,18 +515,28 @@ async function bookSlotInTx(
 
   const timezone = hospital?.timezone ?? 'Asia/Kolkata';
   const serviceDate = serviceDateIn(timezone, slotDate);
-  const todayInTimezone = serviceDateIn(timezone, now);
+  const closure = await resolveOpdClosureInTx(tx, {
+    hospitalId: args.hospitalId,
+    doctorId: doctor.id,
+    branchId: doctor.branchId,
+    serviceDate,
+    now,
+    timezone,
+  });
 
-  if (serviceDate === todayInTimezone) {
-    const stop = await getOpdStopStatusInTx(tx, {
-      hospitalId: args.hospitalId,
-      doctorId: doctor.id,
+  if (closure.closureType === 'blackout') {
+    throw new OpdClosedError({
+      closureType: 'blackout',
       serviceDate,
-      now,
+      reopenDate: closure.reopenDate,
+      endDate: closure.endDate,
+      reason: closure.reason,
+      publicReason: closure.publicReason,
+      isMultiDay: closure.isMultiDay,
     });
-    if (stop.stoppedAt !== null && slotDate.getTime() >= stop.stoppedAt.getTime()) {
-      throw new OpdClosedError(stop.stoppedAt);
-    }
+  }
+  if (closure.stoppedAt && slotDate.getTime() >= closure.stoppedAt.getTime()) {
+    throw new OpdClosedError(closure.stoppedAt);
   }
 
   // The patient first, then the doctor's day: the lock order every booking path keeps.

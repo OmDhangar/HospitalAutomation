@@ -69,6 +69,7 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
   const admin = enabled ? postgres(adminUrl!, { max: 3 }) : (null as never);
   let hospitalId: string;
   let doctorId: string;
+  let branchId: string;
   let phoneNumberId: string;
   let userId: string;
   let spy: SpyProvider;
@@ -90,7 +91,7 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
     doctorId = uuid();
     userId = uuid();
     phoneNumberId = `pn-${uuid()}`;
-    const branchId = uuid();
+    branchId = uuid();
 
     await admin`
       insert into users (id, email, password_hash, name)
@@ -369,6 +370,7 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
           patientName: 'Late Slot Patient',
           phoneE164: '+919876543210',
           slotDatetimeIso: new Date(`${today}T14:00:00+05:30`).toISOString(),
+          now,
         }),
       ).rejects.toThrow(OpdClosedError);
 
@@ -380,6 +382,7 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
           patientName: 'After Stop Patient',
           phoneE164: '+919876543210',
           slotDatetimeIso: new Date(`${today}T15:00:00+05:30`).toISOString(),
+          now,
         }),
       ).rejects.toThrow(OpdClosedError);
     });
@@ -539,6 +542,49 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
       });
       expect(tomorrowDetails?.isClosed).toBe(false);
       expect(tomorrowDetails?.closedAt).toBeNull();
+    });
+
+    it('18. bookScheduledSlot throws OpdClosedError on blackout date', async () => {
+      const now = new Date('2026-10-24T10:00:00+05:30');
+      const blackoutDate = '2026-10-27';
+
+      await admin`
+        insert into blackout_periods (hospital_id, branch_id, doctor_id, start_date, end_date, reopen_date, reason, public_reason)
+        values (${hospitalId}, ${branchId}, null, '2026-10-26', '2026-10-28', '2026-10-29', 'Maintenance', 'Closed for Maintenance')
+      `;
+
+      await expect(
+        bookScheduledSlot({
+          hospitalId,
+          doctorId,
+          slotDatetimeIso: '2026-10-27T10:00:00+05:30',
+          patientName: 'Slot Patient',
+          phoneE164: '+919900000095',
+          now,
+        }),
+      ).rejects.toThrow(OpdClosedError);
+    });
+
+    it('19. getDoctorSlotsForDate returns slots: [] and isClosed: true on blackout date', async () => {
+      const now = new Date('2026-10-24T10:00:00+05:30');
+      const blackoutDate = '2026-10-27';
+
+      await admin`
+        insert into blackout_periods (hospital_id, branch_id, doctor_id, start_date, end_date, reopen_date, reason, public_reason)
+        values (${hospitalId}, ${branchId}, null, '2026-10-26', '2026-10-28', '2026-10-29', 'Maintenance', 'Closed for Maintenance')
+      `;
+
+      const res = await getDoctorSlotsForDate({
+        hospitalId,
+        doctorId,
+        serviceDate: blackoutDate,
+        now,
+      });
+
+      expect(res.slots).toEqual([]);
+      expect(res.isClosed).toBe(true);
+      expect(res.closureType).toBe('blackout');
+      expect(res.reopenDate).toBe('2026-10-29');
     });
   });
 });

@@ -46,7 +46,7 @@ import type { AppointmentStatus, QueueAction, QueueContext, QueueEntry } from '@
 import { generatePublicToken } from '@/lib/security/tokens';
 import { allocateTokenInTx, getDayCapacityInTx } from './capacity';
 import { lockDoctorDay } from './doctor-day';
-import { getOpdStopStatusInTx } from './opd-hours';
+import { getOpdStopStatusInTx, resolveOpdClosureInTx } from './opd-hours';
 import { resolvePatientInTx, type PatientInput } from './patients';
 import { resolveScheduledStartInTx } from './scheduling';
 
@@ -558,14 +558,26 @@ export async function createWalkIn(args: {
       : 'walk_in';
   return withTenant(args.hospitalId, async (tx) => {
     const t0 = performance.now();
-    const stop = await getOpdStopStatusInTx(tx, {
+    const closure = await resolveOpdClosureInTx(tx, {
       hospitalId: args.hospitalId,
       doctorId: args.doctorId,
+      branchId: args.branchId,
       serviceDate,
       now,
+      timezone: args.timezone,
     });
-    if (stop.isStopped && !isEmergency) {
-      throw new OpdClosedError(stop.stoppedAt!);
+    if (closure.isClosed && !isEmergency) {
+      throw new OpdClosedError({
+        closureType: closure.closureType === 'none' ? 'stop_today' : closure.closureType,
+        stoppedAt: closure.stoppedAt,
+        startDate: closure.startDate,
+        endDate: closure.endDate,
+        reopenDate: closure.reopenDate,
+        reason: closure.reason,
+        publicReason: closure.publicReason,
+        isMultiDay: closure.isMultiDay,
+        serviceDate,
+      });
     }
 
     // A no-phone placeholder never opts in: nothing is ever sent to it.

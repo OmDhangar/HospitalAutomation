@@ -452,6 +452,13 @@ export async function resolveOpdClosureInTx(
         stoppedAt: stopStatus.stoppedAt,
         isMultiDay: false,
       };
+    } else if (stopStatus.stoppedAt !== null) {
+      return {
+        isClosed: false,
+        closureType: 'none',
+        stoppedAt: stopStatus.stoppedAt,
+        isMultiDay: false,
+      };
     }
   }
 
