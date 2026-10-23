@@ -25,13 +25,22 @@ export function NoticeTypeStep({
     badge?: string;
   }> = [
     {
+      id: 'general_announcement',
+      title: 'General Announcement / Custom Message',
+      description:
+        'Compose and send custom specialized messages, health camps, facility notices, or operational updates directly to your patients.',
+      icon: '📢',
+      available: true,
+      badge: 'Marketing (Custom)',
+    },
+    {
       id: 'hospital_closure',
       title: 'Hospital Closure Notice',
       description:
-        'Inform patients that the hospital or OPD will be closed on a specific date due to emergencies, holidays, or unforeseen events.',
+        'Inform patients that the hospital or OPD will be closed on a specific date or multi-day interval due to emergencies, holidays, or maintenance.',
       icon: '🏥',
       available: true,
-      badge: 'Ready to send',
+      badge: 'Utility (Official Notice)',
     },
     {
       id: 'doctor_schedule_change',

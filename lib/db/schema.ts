@@ -4612,7 +4612,11 @@ export const claimRemittances = pgTable(
 
 /* -------------------------------------------------------- WhatsApp Notices */
 
-export type NoticeType = 'hospital_closure' | 'doctor_schedule_change' | 'appointment_change';
+export type NoticeType =
+  | 'hospital_closure'
+  | 'doctor_schedule_change'
+  | 'appointment_change'
+  | 'general_announcement';
 export type CampaignStatus =
   | 'draft'
   | 'scheduled'

@@ -10,7 +10,8 @@ export type TemplateCode =
   | 'appointment_cancelled'
   | 'doctor_delayed'
   | 'owner_monthly_report'
-  | 'hospital_closure_notice';
+  | 'hospital_closure_notice'
+  | 'general_announcement';
 
 /**
  * Meta approves templates per name *and* per language. Submit them all at once.
@@ -26,6 +27,8 @@ export type TemplateCode =
 export type TemplateDefinition = {
   /** Template name as registered with Meta. */
   name: string;
+  /** Meta template category. Defaults to UTILITY. */
+  category?: 'UTILITY' | 'MARKETING';
   variables: readonly string[];
   body: Record<Locale, string>;
   urlButton?: {
@@ -248,15 +251,33 @@ export const TEMPLATES: Record<TemplateCode, TemplateDefinition> = {
     },
   },
   /**
-   * Hospital closure notice sent to affected patients and recent active OPD patients.
+   * Hospital closure notice matching official operational notice format:
+   * Header: "सर्व रुग्ण आणि त्यांच्या नातेवाईकांसाठी महत्त्वाची सूचना:"
+   * Body: "{{1}} हे रुग्णालय {{2}} पूर्णपणे बंद राहील. या काळात रुग्णालयातील सर्व बाह्यरुग्ण विभाग (OPD) आणि इतर नियमित सेवा बंद राहतील. रुग्णालयाचे कामकाज आणि सर्व सेवा {{3}} पासून नेहमीप्रमाणे नियमित वेळेत पुन्हा सुरू होतील."
+   * Footer: "गैरसोयीबद्दल आम्ही दिलगीर आहोत. अधिक माहितीसाठी कृपया {{4}} वर संपर्क साधा. कृपया सर्व रुग्ण आणि नातेवाईकांनी याची नोंद घ्यावी."
    */
   hospital_closure_notice: {
-    name: 'opd_hospital_closure_notice',
-    variables: ['hospitalName', 'closureDate', 'reason', 'contactPhone'],
+    name: 'opd_hospital_closure_update',
+    category: 'UTILITY',
+    variables: ['hospitalName', 'closureDate', 'reopenDate', 'contactPhone'],
     body: {
-      mr: 'रुग्णालय सूचना: {{1}} हे रुग्णालय {{2}} रोजी बंद राहील (कारण: {{3}}). अधिक माहितीसाठी कृपया {{4}} वर संपर्क साधा.',
-      hi: 'अस्पताल सूचना: {{1}} अस्पताल {{2}} को बंद रहेगा (कारण: {{3}})। अधिक जानकारी के लिए कृपया {{4}} पर संपर्क करें।',
-      en: 'Hospital Notice: {{1}} will be closed on {{2}} due to {{3}}. For assistance or rescheduling please contact {{4}} on phone.',
+      mr: 'सर्व रुग्ण आणि त्यांच्या नातेवाईकांसाठी महत्त्वाची सूचना:\n\n{{1}} हे रुग्णालय {{2}} पूर्णपणे बंद राहील. या काळात रुग्णालयातील सर्व बाह्यरुग्ण विभाग (OPD) आणि इतर नियमित सेवा बंद राहतील. रुग्णालयाचे कामकाज आणि सर्व सेवा {{3}} पासून नेहमीप्रमाणे नियमित वेळेत पुन्हा सुरू होतील.\n\nगैरसोयीबद्दल आम्ही दिलगीर आहोत. अधिक माहितीसाठी कृपया {{4}} वर संपर्क साधा. कृपया सर्व रुग्ण आणि नातेवाईकांनी याची नोंद घ्यावी.',
+      hi: 'सभी मरीजों और उनके परिजनों के लिए महत्वपूर्ण सूचना:\n\n{{1}} अस्पताल {{2}} पूर्ण रूप से बंद रहेगा। इस दौरान अस्पताल का ओपीडी (OPD) विभाग और अन्य नियमित सेवाएं बंद रहेंगी। अस्पताल का कामकाज और सभी सेवाएं {{3}} से सामान्य रूप से पुनः शुरू होंगी।\n\nअसुविधा के लिए हमें खेद है। अधिक जानकारी के लिए कृपया {{4}} पर संपर्क करें। सभी मरीज और परिजन कृपया इसका संज्ञान लें।',
+      en: 'Important Notice for all Patients and Relatives:\n\n{{1}} will remain completely closed on {{2}}. During this period, all Outpatient Department (OPD) and routine services will be suspended. Hospital operations and regular services will resume normally from {{3}}.\n\nWe sincerely regret the inconvenience. For any emergency assistance, please contact {{4}} on phone. Please take note of this schedule.',
+    },
+  },
+  /**
+   * General announcement or custom specialized notice sent to patients.
+   * Classified as MARKETING by Meta as it allows arbitrary promotional or health camp announcements.
+   */
+  general_announcement: {
+    name: 'opd_general_announcement',
+    category: 'MARKETING',
+    variables: ['hospitalName', 'customMessage', 'contactPhone'],
+    body: {
+      mr: 'रुग्णालय सूचना — {{1}}:\n\n{{2}}\n\nअधिक माहिती किंवा मदतीसाठी कृपया {{3}} वर संपर्क साधा.',
+      hi: 'अस्पताल सूचना — {{1}}:\n\n{{2}}\n\nअधिक जानकारी या सहायता के लिए कृपया {{3}} पर संपर्क करें।',
+      en: 'Notice from {{1}}:\n\n{{2}}\n\nFor queries or assistance, please contact {{3}} on phone.',
     },
   },
 };
@@ -287,6 +308,7 @@ export const CRITICAL_TEMPLATES: ReadonlySet<TemplateCode> = new Set([
   'appointment_cancelled',
   // A patient travels to a closed hospital.
   'hospital_closure_notice',
+  'general_announcement',
 ]);
 
 export const isCritical = (code: TemplateCode): boolean => CRITICAL_TEMPLATES.has(code);
