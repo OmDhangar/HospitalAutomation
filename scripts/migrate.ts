@@ -40,6 +40,30 @@ async function main() {
     await sql`ALTER TABLE medicines ADD COLUMN IF NOT EXISTS tc_changed_at TIMESTAMPTZ`;
   }
 
+  if (await tableExists('appointments')) {
+    await sql`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS emergency_reason TEXT`;
+    await sql`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS emergency_notes TEXT`;
+    await sql`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS emergency_handled_at TIMESTAMPTZ`;
+    await sql`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS emergency_handled_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL`;
+  }
+
+  if (await tableExists('wards')) {
+    await sql`ALTER TABLE wards ADD COLUMN IF NOT EXISTS in_charge_user_id UUID`;
+  }
+
+  if (await tableExists('charge_items')) {
+    await sql`ALTER TABLE charge_items ADD COLUMN IF NOT EXISTS service_point_id UUID`;
+  }
+
+  if (await tableExists('beds')) {
+    await sql`ALTER TABLE beds ADD COLUMN IF NOT EXISTS bed_code TEXT`;
+  }
+
+  if (await tableExists('doctor_day_states')) {
+    await sql`ALTER TABLE doctor_day_states ADD COLUMN IF NOT EXISTS opd_stopped_at TIMESTAMPTZ`;
+    await sql`ALTER TABLE doctor_day_states ADD COLUMN IF NOT EXISTS opd_stopped_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL`;
+  }
+
   // 0039 grants the identity functions to the application role by name; the name is configurable.
   await sql`select set_config('qurio.app_role', ${process.env.APP_DB_ROLE ?? 'opd_app'}, false)`;
 

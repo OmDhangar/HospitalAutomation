@@ -16,6 +16,14 @@ const OPD_ROLES = ['owner', 'receptionist', 'doctor'] as const;
 describe('can', () => {
   it('lets every OPD role move the queue', () => {
     for (const role of OPD_ROLES) expect(can(role, 'queue.mutate')).toBe(true);
+    expect(can('receptionist', 'queue.mutate')).toBe(true);
+  });
+
+  it('restricts opd.reopen to owner and doctor only, never receptionist or nurse', () => {
+    expect(can('owner', 'opd.reopen')).toBe(true);
+    expect(can('doctor', 'opd.reopen')).toBe(true);
+    expect(can('receptionist', 'opd.reopen')).toBe(false);
+    expect(can('nurse', 'opd.reopen')).toBe(false);
   });
 
   it('keeps configuration with the owner', () => {

@@ -15,6 +15,11 @@ import type {
 import { setProvider } from '@/lib/notify/provider';
 import { DAILY_PROMPT_CAP } from '@/lib/domain/booking';
 import { handleInboundMessage } from '@/lib/services/booking';
+import { bookScheduledSlot, getDoctorBookingDetails } from '@/lib/services/web-booking';
+import { getDoctorSlotsForDate } from '@/lib/services/scheduling';
+import { OpdClosedError } from '@/lib/domain/queue';
+import { stopOpdForDoctor } from '@/lib/services/opd-hours';
+import { serviceDateIn } from '@/lib/domain/time';
 
 const adminUrl = process.env.DATABASE_ADMIN_URL;
 const enabled = Boolean(adminUrl && process.env.DATABASE_URL);
@@ -65,6 +70,7 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
   let hospitalId: string;
   let doctorId: string;
   let phoneNumberId: string;
+  let userId: string;
   let spy: SpyProvider;
 
   const inbound = (n: number, message: { text?: string; replyId?: string }) =>
@@ -82,9 +88,14 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
 
     hospitalId = uuid();
     doctorId = uuid();
+    userId = uuid();
     phoneNumberId = `pn-${uuid()}`;
     const branchId = uuid();
 
+    await admin`
+      insert into users (id, email, password_hash, name)
+      values (${userId}, ${'doc-' + userId.slice(0, 8) + '@test.com'}, 'hash', 'Test User')
+    `;
     await admin`
       insert into hospitals (id, name, slug)
       values (${hospitalId}, 'WA Hospital', ${'wa-' + hospitalId.slice(0, 10)})
@@ -333,5 +344,201 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
     expect(await appointmentsFor()).toHaveLength(0);
     expect(spy.lists).toHaveLength(menus);
     expect(spy.lists.at(-1)?.rows.every((r) => r.id.startsWith('patient:'))).toBe(true);
+  });
+
+  describe('OPD stop booking gates & WhatsApp flow (cases 12-14, 15, 16, 17)', () => {
+    it('12. bookScheduledSlot throws OpdClosedError at or after stop', async () => {
+      const now = new Date('2026-10-23T10:00:00+05:30');
+      const today = serviceDateIn('Asia/Kolkata', now);
+      const stopTime = new Date('2026-10-23T14:00:00+05:30');
+
+      await stopOpdForDoctor({
+        hospitalId,
+        doctorId,
+        serviceDate: today,
+        stopAt: stopTime,
+        actorUserId: userId,
+        now,
+      });
+
+      // Attempt to book slot at 14:00 (exact stop time)
+      await expect(
+        bookScheduledSlot({
+          hospitalId,
+          doctorId,
+          patientName: 'Late Slot Patient',
+          phoneE164: '+919876543210',
+          slotDatetimeIso: new Date(`${today}T14:00:00+05:30`).toISOString(),
+        }),
+      ).rejects.toThrow(OpdClosedError);
+
+      // Attempt to book slot at 15:00 (after stop time)
+      await expect(
+        bookScheduledSlot({
+          hospitalId,
+          doctorId,
+          patientName: 'After Stop Patient',
+          phoneE164: '+919876543210',
+          slotDatetimeIso: new Date(`${today}T15:00:00+05:30`).toISOString(),
+        }),
+      ).rejects.toThrow(OpdClosedError);
+    });
+
+    it('13. bookScheduledSlot succeeds before stoppedAt', async () => {
+      const now = new Date('2026-10-23T10:00:00+05:30');
+      const today = serviceDateIn('Asia/Kolkata', now);
+      const stopTime = new Date('2026-10-23T14:00:00+05:30');
+
+      await stopOpdForDoctor({
+        hospitalId,
+        doctorId,
+        serviceDate: today,
+        stopAt: stopTime,
+        actorUserId: userId,
+        now,
+      });
+
+      // Slot at 10:00 AM (before 14:00 stop, with now at 09:30)
+      const booked = await bookScheduledSlot({
+        hospitalId,
+        doctorId,
+        patientName: 'Early Slot Patient',
+        phoneE164: '+919876543210',
+        slotDatetimeIso: new Date(`${today}T10:00:00+05:30`).toISOString(),
+        now: new Date('2026-10-23T09:30:00+05:30'),
+      });
+
+      expect(booked.tokenNumber).toBeDefined();
+      expect(booked.appointment.status).toBe('WAITING');
+    });
+
+    it('14. Future serviceDate is unaffected by today stop', async () => {
+      const now = new Date();
+      const today = serviceDateIn('Asia/Kolkata', now);
+      const tomorrowDate = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      const tomorrow = serviceDateIn('Asia/Kolkata', tomorrowDate);
+
+      // Add doctor schedule for tomorrow's day-of-week
+      await admin`
+        insert into doctor_schedules (hospital_id, doctor_id, weekday, mode, start_time, end_time, effective_from)
+        values (${hospitalId}, ${doctorId}, extract(dow from (current_date + interval '1 day'))::smallint, 'both', '09:00', '17:00', current_date)
+        on conflict do nothing
+      `;
+
+      // Stop OPD today
+      await stopOpdForDoctor({
+        hospitalId,
+        doctorId,
+        serviceDate: today,
+        stopAt: now,
+        actorUserId: userId,
+        now,
+      });
+
+      // Tomorrow's slot at 10:00 AM succeeds!
+      const booked = await bookScheduledSlot({
+        hospitalId,
+        doctorId,
+        patientName: 'Tomorrow Patient',
+        phoneE164: '+919876543210',
+        slotDatetimeIso: new Date(`${tomorrow}T10:00:00+05:30`).toISOString(),
+      });
+
+      expect(booked.tokenNumber).toBeDefined();
+    });
+
+    it('15. getDoctorSlotsForDate filters slots >= opd_stopped_at for today', async () => {
+      const now = new Date('2026-10-23T10:00:00+05:30');
+      const today = serviceDateIn('Asia/Kolkata', now);
+      const stopTime = new Date('2026-10-23T12:00:00+05:30');
+
+      await stopOpdForDoctor({
+        hospitalId,
+        doctorId,
+        serviceDate: today,
+        stopAt: stopTime,
+        actorUserId: userId,
+        now,
+      });
+
+      const { slots } = await getDoctorSlotsForDate({
+        hospitalId,
+        doctorId,
+        serviceDate: today,
+        now,
+      });
+
+      // All returned slots must be strictly before 12:00
+      for (const slot of slots) {
+        const slotTime = new Date(slot.datetimeIso).getTime();
+        expect(slotTime).toBeLessThan(stopTime.getTime());
+      }
+    });
+
+    it('16. WhatsApp flow on a closed day returns a message rather than silence', async () => {
+      const now = new Date();
+      const today = serviceDateIn('Asia/Kolkata', now);
+
+      await stopOpdForDoctor({
+        hospitalId,
+        doctorId,
+        serviceDate: today,
+        stopAt: now,
+        actorUserId: userId,
+        now,
+      });
+
+      // Run conversation steps to booking
+      await inbound(1, { text: 'Hi' });
+      await inbound(2, { replyId: 'lang:en' });
+      await inbound(3, { replyId: 'patient:self' });
+      await inbound(4, { replyId: `doc:${doctorId}` });
+      await inbound(5, { replyId: 'queue_choice:join' });
+
+      // Must receive the generic closure reply instead of being dropped
+      const closureMsg = spy.texts.find((m) =>
+        m.body.includes('The hospital has closed OPD for today'),
+      );
+      expect(closureMsg).toBeDefined();
+      expect(closureMsg?.body).toBe(
+        'The hospital has closed OPD for today. Please try again tomorrow.',
+      );
+    });
+
+    it('17. tomorrow getDoctorBookingDetails returns isClosed: false even when today has a stop set', async () => {
+      const now = new Date();
+      const today = serviceDateIn('Asia/Kolkata', now);
+      const tomorrowDate = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      const tomorrow = serviceDateIn('Asia/Kolkata', tomorrowDate);
+
+      await stopOpdForDoctor({
+        hospitalId,
+        doctorId,
+        serviceDate: today,
+        stopAt: now,
+        actorUserId: userId,
+        now,
+      });
+
+      // Today's details reflect closure
+      const todayDetails = await getDoctorBookingDetails({
+        hospitalId,
+        doctorId,
+        serviceDate: today,
+        now,
+      });
+      expect(todayDetails?.isClosed).toBe(true);
+      expect(todayDetails?.closedAt).not.toBeNull();
+
+      // Tomorrow's details MUST have isClosed: false, closedAt: null
+      const tomorrowDetails = await getDoctorBookingDetails({
+        hospitalId,
+        doctorId,
+        serviceDate: tomorrow,
+        now,
+      });
+      expect(tomorrowDetails?.isClosed).toBe(false);
+      expect(tomorrowDetails?.closedAt).toBeNull();
+    });
   });
 });

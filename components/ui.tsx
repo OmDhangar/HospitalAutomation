@@ -6,7 +6,7 @@ export const cn = (...parts: Array<string | false | null | undefined>): string =
 
 /* --------------------------------------------------------------- button */
 
-type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
+type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'emergency' | 'emergency-outline';
 type ButtonSize = 'sm' | 'md' | 'lg' | 'xl';
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
@@ -20,6 +20,12 @@ const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   danger:
     'bg-white text-rose-700 ring-1 ring-inset ring-rose-200 hover:bg-rose-50 ' +
     'active:bg-rose-100 focus-visible:outline-rose-500',
+  emergency:
+    'bg-red-600 text-white ring-1 ring-inset ring-red-700 hover:bg-red-700 ' +
+    'active:bg-red-800 shadow-xs focus-visible:outline-red-700 font-bold',
+  'emergency-outline':
+    'bg-red-50 text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-100 ' +
+    'active:bg-red-200 focus-visible:outline-red-500 font-bold',
 };
 
 const BUTTON_SIZES: Record<ButtonSize, string> = {

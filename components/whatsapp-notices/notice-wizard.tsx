@@ -12,6 +12,7 @@ import {
 } from './notice-recipients-step';
 import { NoticePreviewStep } from './notice-preview-step';
 import type { NoticeSelectionResult } from '@/lib/domain/notice-selection';
+import { addDays } from '@/lib/domain/notice-dates';
 
 interface NoticeWizardProps {
   hospitalId: string;
@@ -39,11 +40,12 @@ export function NoticeWizard({ hospitalId, hospitalName, defaultPhone }: NoticeW
     isDateRange: false,
     closureDate: defaultDateStr,
     closureEndDate: defaultDateStr,
-    closureDuration: 'Full day',
-    reason: 'unforeseen maintenance and repairs',
+    closureDuration: '1 day',
+    reopenDate: addDays(defaultDateStr, 1),
+    reason: '',
     rescheduleInstructions: 'Appointments will be rescheduled for the next available clinic day.',
     contactPhone: defaultPhone || '+91 ',
-    templateCode: 'opd_hospital_closure_notice',
+    templateCode: 'hospital_closure_notice',
   });
 
   // Campaign Draft ID
@@ -60,6 +62,24 @@ export function NoticeWizard({ hospitalId, hospitalName, defaultPhone }: NoticeW
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Step Navigation Handlers
+  const handleSelectNoticeType = (type: NoticeType) => {
+    setNoticeType(type);
+    if (type === 'general_announcement') {
+      setDetails((prev) => ({
+        ...prev,
+        title: `General Announcement - ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}`,
+        templateCode: 'general_announcement',
+        customMessage: prev.customMessage || '',
+      }));
+    } else {
+      setDetails((prev) => ({
+        ...prev,
+        title: `Hospital Closure Notice - ${tomorrow.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}`,
+        templateCode: 'hospital_closure_notice',
+      }));
+    }
+  };
+
   const handleDetailsChange = (fields: Partial<NoticeDetailsData>) => {
     setDetails((prev) => ({ ...prev, ...fields }));
   };
@@ -80,9 +100,22 @@ export function NoticeWizard({ hospitalId, hospitalName, defaultPhone }: NoticeW
           closureEndDate,
           closureDuration: details.closureDuration,
           reason: details.reason,
+          customMessage: details.customMessage,
           rescheduleInstructions: details.rescheduleInstructions,
           contactPhone: details.contactPhone,
-          templateCode: details.templateCode,
+          templateCode: noticeType === 'general_announcement' ? 'general_announcement' : details.templateCode,
+          templateVariables:
+            noticeType === 'general_announcement'
+              ? {
+                  hospitalName,
+                  customMessage: details.customMessage || '',
+                  contactPhone: details.contactPhone,
+                }
+              : {
+                  hospitalName,
+                  reopenDate: details.reopenDate || addDays(closureEndDate, 1),
+                  contactPhone: details.contactPhone,
+                },
         }),
       });
 
@@ -120,9 +153,15 @@ export function NoticeWizard({ hospitalId, hospitalName, defaultPhone }: NoticeW
             closureEndDate,
             closureDuration: details.closureDuration,
             reason: details.reason,
+            customMessage: details.customMessage,
             rescheduleInstructions: details.rescheduleInstructions,
             contactPhone: details.contactPhone,
-            templateCode: details.templateCode,
+            templateCode: noticeType === 'general_announcement' ? 'general_announcement' : details.templateCode,
+            templateVariables: noticeType === 'general_announcement' ? {
+              hospitalName,
+              customMessage: details.customMessage || '',
+              contactPhone: details.contactPhone,
+            } : undefined,
           }),
         });
 
@@ -269,7 +308,7 @@ export function NoticeWizard({ hospitalId, hospitalName, defaultPhone }: NoticeW
       {currentStep === 1 && (
         <NoticeTypeStep
           selectedType={noticeType}
-          onSelectType={setNoticeType}
+          onSelectType={handleSelectNoticeType}
           onNext={() => setCurrentStep(2)}
         />
       )}
@@ -277,6 +316,7 @@ export function NoticeWizard({ hospitalId, hospitalName, defaultPhone }: NoticeW
       {currentStep === 2 && (
         <NoticeDetailsStep
           hospitalName={hospitalName}
+          noticeType={noticeType}
           data={details}
           onChange={handleDetailsChange}
           onBack={() => setCurrentStep(1)}

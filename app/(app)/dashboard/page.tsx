@@ -34,9 +34,10 @@ import {
 } from '@/lib/domain/permissions';
 import type { PaymentStatus } from '@/lib/domain/patient-billing';
 import { formatIndianPhone, isMockPhone } from '@/lib/domain/phone';
-import { formatTimeIn, minutesBetween } from '@/lib/domain/time';
+import { formatTimeIn, minutesBetween, serviceDateIn } from '@/lib/domain/time';
 import type { DayCapacitySummary } from '@/lib/domain/capacity';
 import { getDayCapacity } from '@/lib/services/capacity';
+import { getBatchOpdStopStatus } from '@/lib/services/opd-hours';
 import { loadDashboardData } from '@/lib/services/dashboard-loader';
 import type { QueueRow } from '@/lib/services/queue';
 import {
@@ -45,6 +46,7 @@ import {
   type IpdStatus,
 } from '@/lib/services/ipd-census';
 import { ConsultationPanel } from './consultation-panel';
+import { OpdStopControl, StopBranchOpdButton } from './opd-stop-control';
 import { TestOrderCard } from './test-order-card';
 import { getModuleStatesForRequest } from '@/lib/auth/modules';
 import { moduleAllows } from '@/lib/modules/registry';
@@ -56,6 +58,7 @@ import {
   CallNextButton,
   DoctorTabs,
   EmergencyButton,
+  EmergencyTriageTray,
   PausePatientButton,
   PriorityButton,
   QueueActionButton,
@@ -154,6 +157,27 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
   ];
   const seenToday = snapshot?.completed ?? [];
 
+  const allActiveRows: QueueRow[] = [
+    ...(serving ? [serving] : []),
+    ...(snapshot?.rows ?? []),
+    ...(snapshot?.parked ?? []),
+    ...(snapshot?.booked ?? []),
+  ];
+
+  const activeEmergencies = Array.from(
+    new Map(
+      allActiveRows
+        .filter(
+          (row) =>
+            row.isEmergency &&
+            !row.emergencyHandledAt &&
+            row.status !== 'COMPLETED' &&
+            row.status !== 'CANCELLED',
+        )
+        .map((row) => [row.appointmentId, row]),
+    ).values(),
+  );
+
   // The day's quota for this doctor; null when no quota is configured.
   const capacity = await getDayCapacity({
     hospitalId: session.hospitalId,
@@ -165,6 +189,29 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
   const sessionStarted = Boolean(snapshot?.sessionStartedAt);
   const notStartedButSeeing =
     !sessionStarted && (Boolean(serving) || (snapshot?.completedCount ?? 0) > 0);
+
+  const todayServiceDate = serviceDateIn(session.timezone, now);
+  const opdStopStatusRaw = await getBatchOpdStopStatus({
+    hospitalId: session.hospitalId,
+    doctorIds: doctors.map((d) => d.id),
+    serviceDate: todayServiceDate,
+    now,
+  });
+
+  const canReopen = can(session.role, 'opd.reopen') && !session.readOnly;
+  const opdStopStatus: Record<
+    string,
+    { stoppedAt: Date | null; isStopped: boolean; scheduled: boolean; canReopen: boolean }
+  > = {};
+  for (const doc of doctors) {
+    const raw = opdStopStatusRaw[doc.id];
+    opdStopStatus[doc.id] = {
+      stoppedAt: raw?.stoppedAt ?? null,
+      isStopped: raw?.isStopped ?? false,
+      scheduled: raw?.scheduled ?? false,
+      canReopen,
+    };
+  }
 
   // Shift to IPD (T1.4): the doctor's one click, and the badge that replaces it.
   const canShift = can(session.role, 'ipd.shift') && !session.readOnly;
@@ -269,6 +316,11 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                   Admitted <span className="numeric">({admittedCount})</span>
                 </Link>
               ) : null}
+              <OpdStopControl
+                doctorId={currentDoctor.id}
+                status={opdStopStatus[currentDoctor.id]}
+                timezone={session.timezone}
+              />
               <SessionControl
                 doctorId={selectedId!}
                 started={sessionStarted}
@@ -302,6 +354,8 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
             {/* Main Clinical Focus Area */}
             <ConsultationGateProvider>
             <div className="space-y-5 lg:col-span-2">
+              <EmergencyTriageTray emergencies={activeEmergencies} doctorId={selectedId!} />
+
               {/* NOW SERVING CARD */}
               <Card className={cn(serving?.isEmergency && 'border-2 border-red-500 ring-2 ring-red-300 shadow-lg shadow-red-100/50')}>
                 {serving?.isEmergency ? (
@@ -348,7 +402,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                           </p>
                           {serving.isEmergency ? (
                             <span className="inline-flex items-center gap-1 rounded-md bg-red-600 px-2.5 py-0.5 text-xs font-black text-white shadow-xs animate-pulse">
-                              <span>🚨</span> EMERGENCY
+                              <span>🚨</span> EMERGENCY {serving.emergencyReason ? `· ${serving.emergencyReason}` : ''}
                             </span>
                           ) : null}
                         </div>
@@ -548,6 +602,11 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
         /* 2. RECEPTIONIST / OWNER DASHBOARD VIEW (Full Desk Controls)              */
         /* ========================================================================= */
         <div className="space-y-5">
+          {can(session.role, 'queue.mutate') && !session.readOnly ? (
+            <div className="flex justify-end -mb-2">
+              <StopBranchOpdButton branchId={currentDoctor.branchId} timezone={session.timezone} />
+            </div>
+          ) : null}
           {/* Doctor selector tabs + View Toggle */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <DoctorTabs doctors={doctors} selectedId={selectedId!} />
@@ -620,6 +679,8 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
             waitingCount={waiting.length}
             queueContent={
               <>
+                <EmergencyTriageTray emergencies={activeEmergencies} doctorId={selectedId!} />
+
                 <Card className={cn(serving?.isEmergency && 'border-2 border-red-500 ring-2 ring-red-300 shadow-md shadow-red-100/50')}>
                   {serving?.isEmergency ? (
                     <div className="flex items-center justify-between gap-3 bg-red-600 px-4 py-2 text-white sm:px-6 animate-pulse">
@@ -635,11 +696,18 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                     title="Now serving"
                     hint={serving ? `${snapshot?.doctorName} · ${servingHint(serving)}` : snapshot?.doctorName}
                     action={
-                      <SessionControl
-                        doctorId={selectedId ?? ''}
-                        started={sessionStarted}
-                        paused={snapshot?.paused ?? false}
-                      />
+                      <div className="flex items-center gap-2">
+                        <OpdStopControl
+                          doctorId={currentDoctor.id}
+                          status={opdStopStatus[currentDoctor.id]}
+                          timezone={session.timezone}
+                        />
+                        <SessionControl
+                          doctorId={selectedId ?? ''}
+                          started={sessionStarted}
+                          paused={snapshot?.paused ?? false}
+                        />
+                      </div>
                     }
                   />
 
@@ -669,7 +737,7 @@ export default async function DashboardPage({ searchParams }: PageProps<'/dashbo
                             </p>
                             {serving.isEmergency ? (
                               <span className="inline-flex items-center gap-1 rounded-md bg-red-600 px-2 py-0.5 text-xs font-black text-white shadow-xs animate-pulse">
-                                <span>🚨</span> EMERGENCY
+                                <span>🚨</span> EMERGENCY {serving.emergencyReason ? `· ${serving.emergencyReason}` : ''}
                               </span>
                             ) : null}
                           </div>
@@ -970,7 +1038,12 @@ function WaitingRow({
             </p>
             {row.isEmergency ? (
               <span className="inline-flex items-center gap-1 rounded-md bg-red-600 px-2 py-0.5 text-[11px] font-black text-white shadow-xs animate-pulse">
-                <span>🚨</span> EMERGENCY
+                <span>🚨</span> EMERGENCY {row.emergencyReason ? `· ${row.emergencyReason}` : ''}
+              </span>
+            ) : null}
+            {row.isEmergency && row.emergencyNotes ? (
+              <span className="text-xs text-red-700 italic">
+                &ldquo;{row.emergencyNotes}&rdquo;
               </span>
             ) : null}
             {row.scheduledSlotAt ? (
@@ -1267,7 +1340,7 @@ function WaitingList({
   payment: PaymentPillContext;
 }) {
   return (
-    <ul className="divide-y divide-ink-200">
+    <ul className="max-h-[580px] overflow-y-auto overscroll-contain pr-1 divide-y divide-ink-200 scrollbar-thin">
       {rows.map((row) => (
         <WaitingRow
           key={row.appointmentId}

@@ -582,3 +582,29 @@ only a signed version.
 be mistaken for the record; once handed over, a summary must stay exactly as signed, so a correction
 is a new, explained version.
 
+
+### ADR-039 · Same-day Stop OPD: intake gate, not queue cancellation
+*23 Oct 2026 · OPD Stop plan*
+
+**Decision:** Stopping today's OPD (`stopOpdForDoctor` / `stopOpdForBranch`) sets `opd_stopped_at` and `opd_stopped_by_user_id` on `doctor_day_states` for today's service date in the hospital timezone. It cuts off new intake at three gates: walk-in registration (`createWalkIn`), slot booking (`bookScheduledSlot`), and availability discovery (`getDoctorBookingDetails` / `getDoctorSlotsForDate`). It does NOT touch `advanceQueue`, `applyQueueAction`, or `lib/domain/queue.ts`: existing WAITING / CALLED / HELD appointments continue flowing through consultation to completion. Emergency walk-ins (`isEmergency: true`) explicitly bypass the stop gate. Reopening (`opd.reopen`) is restricted to doctor and owner roles, whereas stopping uses `queue.mutate` (available to receptionists, doctors, and owners). Stop time is scoped strictly to today and rejects dates other than today or stop times > 5 minutes in the past.
+
+**Why:** A hospital or doctor stopping new arrivals must still clear patients already sitting in the waiting room. Cancelling or rescheduling them would disrupt care and force manual re-entry. Separating the intake cutoff from queue advancement preserves queue state machine invariants while cleanly stopping walk-ins, online slot bookings, and WhatsApp inbound flows.
+
+### ADR-040 · Unified OPD Closure Architecture & Multi-Day Blackout Engine
+*24 Oct 2026 · Blackout plan*
+
+**Decision:** Multi-day calendar shutdowns and holiday blackouts are managed via a dedicated `blackout_periods` table (scoped by `hospital_id`, optional `branch_id`, optional `doctor_id`, `start_date`, `end_date`, `reopen_date`, `reason`, and `public_reason`), protected under strict Row Level Security. All intake gates across the platform—walk-in registration (`createWalkIn`), online slot booking (`bookScheduledSlot`), slot discovery (`getDoctorSlotsForDate` / `getDoctorBookingDetails`), and WhatsApp conversational booking (`handleInboundMessage`)—must NOT perform ad-hoc checks; instead, they all call a single unified resolver: `resolveOpdClosure(hospitalId, doctorId, serviceDate)`.
+
+Creating a blackout is restricted to `hospital.configure` (owner-only). When scheduled, it:
+1. Validates `start_date <= end_date` and `reopen_date > end_date`.
+2. Automatically cancels existing cancellable appointments (`CREATED`, `CONFIRMED`, `WAITING`, `PARKED`, `HELD`) strictly through the queue state machine (`transitionAppointment(status, 'cancel')`) and logs append-only `queue_events` audit entries. Patients in consultation (`IN_CONSULTATION`) or finished (`COMPLETED`) are left alone.
+3. Automatically enqueues WhatsApp cancellation notices to affected patients using the Meta-approved `opd_appointment_cancelled` template (`isCritical: true`, which bypasses the circuit breaker).
+4. Provides a pre-execution disruption preview (`previewBlackoutDisruption`) showing affected appointment counts before the owner commits.
+5. In WhatsApp conversational booking, `OpdClosedError` differentiates between booking attempts for *today* (offering tomorrow's slot link or live queue) versus booking attempts for a *future date* inside a blackout (informing the patient of the closure and the specific reopen date).
+
+Revoking/cancelling an active blackout (`cancelBlackoutPeriod`) re-opens future booking slots and walk-in intake immediately, but does not resurrect previously cancelled appointments.
+
+**Why:** Stop OPD (same-day intake freeze, ADR-039) and Blackout (multi-day calendar closure with appointment cancellations) serve different operational requirements, but without a unified resolver, intake gates inevitably drift and produce inconsistent booking states. Unifying closure resolution guarantees that web booking, walk-in reception, and WhatsApp bot conversations operate off the identical source of truth, while routing cancellations through the state machine preserves queue audit invariants.
+
+
+

@@ -16,6 +16,7 @@ import {
 } from '@/components/icons';
 import { useConsultationGate } from '@/components/clinical/consultation-gate';
 import { useToast } from '@/components/toast';
+import { formatTimeIn } from '@/lib/domain/time';
 import { playChime } from '@/lib/utils/sound';
 import type { QueueAction } from '@/lib/domain/types';
 import {
@@ -24,6 +25,7 @@ import {
   advanceQueueDynamic,
   bookSlotWalkInDynamic,
   type FreeSlot,
+  markEmergencyHandledDynamic,
   pauseAppointmentDynamic,
   queueActionDynamic,
   releaseReservedDynamic,
@@ -33,6 +35,7 @@ import {
   startSessionDynamic,
   togglePauseDynamic,
 } from './actions';
+import type { QueueRow } from '@/lib/services/queue';
 
 export function DoctorTabs({
   doctors,
@@ -147,6 +150,7 @@ export function AddWalkInForm({
   const offerExtra = (full || quotaReached) && canIssueExtra;
   // Set when the live queue has closed for today (split day): book a slot instead.
   const [freeSlots, setFreeSlots] = useState<FreeSlot[] | null>(null);
+  const [opdClosedAt, setOpdClosedAt] = useState<string | null>(null);
 
   const resetPatient = () => {
     setName('');
@@ -156,6 +160,7 @@ export function AddWalkInForm({
     setPaid(false);
     setExtra(false);
     setIsEmergency(false);
+    setOpdClosedAt(null);
     // Ready for the next person in line without reaching for the mouse.
     nameRef.current?.focus();
   };
@@ -230,6 +235,7 @@ export function AddWalkInForm({
         if (res.warning) toast.error('Payment not recorded', res.warning);
         resetPatient();
       } else {
+        if (res.opdClosedAt) setOpdClosedAt(res.opdClosedAt);
         if (res.quotaReached) setFull(true);
         if (res.freeSlots) setFreeSlots(res.freeSlots);
         toast.error('Could not add patient', res.error);
@@ -428,6 +434,13 @@ export function AddWalkInForm({
           ) : (
             <p className="mt-1 text-xs">Only the owner can issue an extra token.</p>
           )}
+        </div>
+      ) : null}
+
+      {opdClosedAt ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          OPD was closed for today at {formatTimeIn('Asia/Kolkata', new Date(opdClosedAt))}. Emergency patients can still be
+          admitted — tick &quot;Emergency Admission&quot; below to proceed.
         </div>
       ) : null}
 
@@ -702,8 +715,8 @@ export function EmergencyButton({
       className={cn(
         'inline-flex items-center gap-1 font-bold shadow-xs transition-all',
         isEmergency
-          ? 'bg-red-600 text-white border border-red-700 hover:bg-red-700 animate-pulse'
-          : 'bg-red-50 text-red-700 border border-red-200 hover:bg-red-100',
+          ? 'bg-red-600 text-red-700 border border-red-700 hover:bg-red-700 hover:text-white '
+          : 'bg-red-50 text-red-700 border border-red-200 hover:bg-red-600 hover:text-white',
       )}
     >
       <span>🚨</span>
@@ -1244,6 +1257,158 @@ export function ReceptionDashboardLayout({
             {overviewContent}
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+export function EmergencyTriageTray({
+  emergencies,
+  doctorId,
+}: {
+  emergencies: QueueRow[];
+  doctorId: string;
+}) {
+  const toast = useToast();
+  const [pendingId, setPendingId] = useState<string | null>(null);
+
+  if (!emergencies || emergencies.length === 0) return null;
+
+  const handleMarkHandled = async (appointmentId: string) => {
+    setPendingId(appointmentId);
+    try {
+      const res = await markEmergencyHandledDynamic({ appointmentId });
+      if (res.ok) {
+        toast.success('Emergency Triage Handled', 'Patient cleared from the active emergency tray.');
+      } else {
+        toast.error('Failed to update', res.error);
+      }
+    } finally {
+      setPendingId(null);
+    }
+  };
+
+  const handleCallInNow = async (appointmentId: string) => {
+    setPendingId(appointmentId);
+    try {
+      const res = await advanceQueueDynamic({ doctorId });
+      if (res.ok) {
+        toast.success('Patient Called', 'Emergency patient called into consultation room.');
+      } else {
+        toast.error('Could not call next', res.error);
+      }
+    } finally {
+      setPendingId(null);
+    }
+  };
+
+  return (
+    <div className="rounded-2xl border-2 border-red-500 bg-red-50 p-4 sm:p-5 shadow-lg shadow-red-500/10 ring-4 ring-red-400/20 animate-in fade-in transition-all">
+      {/* Alert Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-red-200">
+        <div className="flex items-center gap-2.5">
+          <span className="relative flex size-3.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75" />
+            <span className="relative inline-flex size-3.5 rounded-full bg-red-600" />
+          </span>
+          <h3 className="text-base sm:text-lg font-black tracking-wide text-red-950 uppercase flex items-center gap-2">
+            <span>🚨 EMERGENCY PATIENTS</span>
+            <span className="rounded-full bg-red-600 px-2.5 py-0.5 text-xs font-bold text-white shadow-xs">
+              {emergencies.length} ACTIVE
+            </span>
+          </h3>
+        </div>
+        <p className="text-xs font-semibold text-red-800">
+          Immediate attention required · High visibility triage
+        </p>
+      </div>
+
+      {/* Patient Cards List */}
+      <div className="mt-3 space-y-3">
+        {emergencies.map((patient) => {
+          const isActing = pendingId === patient.appointmentId;
+          return (
+            <div
+              key={patient.appointmentId}
+              className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-red-200 bg-white p-3.5 shadow-xs transition-all hover:border-red-300"
+            >
+              <div className="min-w-0 space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-lg bg-red-600 px-2.5 py-1 text-xs font-black text-white shadow-xs">
+                    Token #{patient.tokenLabel}
+                  </span>
+                  <span className="text-base font-bold text-ink-950 truncate">
+                    {patient.patientName}
+                  </span>
+                  {patient.patientAge ? (
+                    <span className="text-xs font-medium text-ink-600">
+                      ({patient.patientAge} yrs)
+                    </span>
+                  ) : null}
+                  {patient.patientPhone ? (
+                    <a
+                      href={`tel:${patient.patientPhone}`}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-red-700 hover:text-red-900 bg-red-50 px-2 py-0.5 rounded-md"
+                    >
+                      📞 {patient.patientPhone}
+                    </a>
+                  ) : null}
+                  <span
+                    className={cn(
+                      'text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full',
+                      patient.status === 'CALLED' || patient.status === 'IN_CONSULTATION'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-red-100 text-red-800',
+                    )}
+                  >
+                    {patient.status === 'CALLED'
+                      ? 'Called'
+                      : patient.status === 'IN_CONSULTATION'
+                        ? 'In Consultation'
+                        : 'Waiting'}
+                  </span>
+                </div>
+
+                {/* Reason & Symptoms */}
+                <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                  <span className="inline-flex items-center gap-1 rounded-md bg-red-100 border border-red-200 px-2.5 py-0.5 text-xs font-bold text-red-900">
+                    <span className="size-1.5 rounded-full bg-red-600" />
+                    {patient.emergencyReason || 'Unspecified Medical Emergency'}
+                  </span>
+                  {patient.emergencyNotes ? (
+                    <span className="text-xs text-ink-700 italic">
+                      &ldquo;{patient.emergencyNotes}&rdquo;
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+
+              {/* Action buttons */}
+              <div className="flex items-center gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-red-100">
+                <Button
+                  type="button"
+                  variant="emergency"
+                  size="sm"
+                  onClick={() => handleCallInNow(patient.appointmentId)}
+                  isLoading={isActing}
+                  className="shadow-xs"
+                >
+                  Call In Now
+                </Button>
+                <Button
+                  type="button"
+                  variant="emergency-outline"
+                  size="sm"
+                  onClick={() => handleMarkHandled(patient.appointmentId)}
+                  isLoading={isActing}
+                  title="Acknowledge and mark emergency triage handled"
+                >
+                  ✓ Mark Handled
+                </Button>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

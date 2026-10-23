@@ -11,13 +11,14 @@ import {
 } from '@/lib/db/schema';
 import { generatePublicToken } from '@/lib/security/tokens';
 import { formatDoctorName } from '@/lib/domain/booking';
-import { tokenLabel } from '@/lib/domain/queue';
+import { tokenLabel, OpdClosedError } from '@/lib/domain/queue';
 import { sessionForSlot, type DaySession } from '@/lib/domain/sessions';
 import { formatTimeIn, serviceDateIn } from '@/lib/domain/time';
 import type { Locale } from '@/lib/i18n/patient';
 import { getProvider } from '@/lib/notify/provider';
 import { allocateTokenInTx, CapacityError } from './capacity';
 import { lockDoctorDay } from './doctor-day';
+import { getOpdStopStatusInTx, type OpdStopStatus } from './opd-hours';
 import { resolvePatientInTx, type PatientInput } from './patients';
 import { getDoctorSlotsForDate, type GeneratedSlot } from './scheduling';
 import { getPlanAccess } from './subscriptions';
@@ -51,6 +52,8 @@ export type DoctorBookingDetails = {
   slots: TimeSlot[];
   onlineOpensAt?: string | null;
   isOnlineOpen?: boolean;
+  isClosed?: boolean;
+  closedAt?: string | null;
 };
 
 /** A booking refused for a reason the patient can be told. */
@@ -151,7 +154,24 @@ export async function getDoctorBookingDetails(args: {
 
     const timezone = row.timezone ?? 'Asia/Kolkata';
     const now = args.now ?? new Date();
-    const serviceDate = args.serviceDate || serviceDateIn(timezone, now);
+    const today = serviceDateIn(timezone, now);
+    const serviceDate = args.serviceDate || today;
+    const isToday = serviceDate === today;
+
+    let isClosed = false;
+    let closedAt: string | null = null;
+    let stopStatus: OpdStopStatus | null = null;
+
+    if (isToday) {
+      stopStatus = await getOpdStopStatusInTx(tx, {
+        hospitalId: args.hospitalId,
+        doctorId: args.doctorId,
+        serviceDate,
+        now,
+      });
+      isClosed = stopStatus.isStopped;
+      closedAt = isClosed && stopStatus.stoppedAt ? stopStatus.stoppedAt.toISOString() : null;
+    }
 
     // Slots as the scheduler computes them
     const scheduleResult = await getDoctorSlotsForDate({
@@ -161,12 +181,17 @@ export async function getDoctorBookingDetails(args: {
       now,
     });
 
-    const slots: TimeSlot[] = scheduleResult.slots.map((s) => ({
+    let slots: TimeSlot[] = scheduleResult.slots.map((s) => ({
       timeStr: s.timeStr,
       datetimeIso: s.datetimeIso,
       available: s.available,
       slotLabel: s.slotNumber !== null ? tokenLabel('slot', s.slotNumber) : null,
     }));
+
+    if (isToday && stopStatus?.stoppedAt) {
+      const stopMs = stopStatus.stoppedAt.getTime();
+      slots = slots.filter((s) => new Date(s.datetimeIso).getTime() < stopMs);
+    }
 
     return {
       doctor: {
@@ -191,6 +216,8 @@ export async function getDoctorBookingDetails(args: {
         ? formatTimeIn(timezone, scheduleResult.onlineOpensAt)
         : null,
       isOnlineOpen: scheduleResult.isOnlineOpen ?? true,
+      isClosed,
+      closedAt,
     };
   });
 }
@@ -207,18 +234,22 @@ export async function bookScheduledSlot(args: {
   phoneE164: string;
   slotDatetimeIso: string;
   locale?: Locale;
+  isEmergency?: boolean;
+  emergencyReason?: string | null;
+  emergencyNotes?: string | null;
   /**
    * Booked inside a WhatsApp chat that has already sent the confirmation for
    * free, so the paid appointment_confirmed template is not queued as well.
    */
   confirmationSentInChat?: boolean;
+  now?: Date;
 }) {
   const slotDate = new Date(args.slotDatetimeIso);
   if (isNaN(slotDate.getTime())) {
     throw new BookingError('INVALID_SLOT', 'That appointment time is not valid.');
   }
 
-  const now = new Date();
+  const now = args.now ?? new Date();
 
   // A revoked or lapsed plan stops online booking: the staff who would see
   // this patient are locked out of the queue it joins.
@@ -234,6 +265,30 @@ export async function bookScheduledSlot(args: {
       'TOO_FAR_AHEAD',
       `Appointments can be booked up to ${MAX_BOOKING_DAYS_AHEAD} days ahead.`,
     );
+  }
+
+  const [docHospital] = await withTenant(args.hospitalId, async (tx) =>
+    tx
+      .select({ timezone: hospitals.timezone })
+      .from(hospitals)
+      .where(eq(hospitals.id, args.hospitalId)),
+  );
+  const timezone = docHospital?.timezone ?? 'Asia/Kolkata';
+  const serviceDate = serviceDateIn(timezone, slotDate);
+  const isToday = serviceDate === serviceDateIn(timezone, now);
+
+  if (isToday) {
+    const stop = await withTenant(args.hospitalId, (tx) =>
+      getOpdStopStatusInTx(tx, {
+        hospitalId: args.hospitalId,
+        doctorId: args.doctorId,
+        serviceDate,
+        now,
+      }),
+    );
+    if (stop.stoppedAt !== null && slotDate.getTime() >= stop.stoppedAt.getTime()) {
+      throw new OpdClosedError(stop.stoppedAt);
+    }
   }
 
   /**
@@ -284,6 +339,9 @@ export async function bookScheduledSlot(args: {
       },
       source: 'whatsapp',
       checkIn: false,
+      isEmergency: args.isEmergency,
+      emergencyReason: args.emergencyReason,
+      emergencyNotes: args.emergencyNotes,
       confirmationSentInChat: args.confirmationSentInChat,
       now,
     }),
@@ -409,6 +467,9 @@ async function bookSlotInTx(
     source: 'whatsapp' | 'reception';
     /** The patient is here: put them straight into the waiting line. */
     checkIn: boolean;
+    isEmergency?: boolean;
+    emergencyReason?: string | null;
+    emergencyNotes?: string | null;
     actorUserId?: string | null;
     confirmationSentInChat?: boolean;
     now: Date;
@@ -442,6 +503,19 @@ async function bookSlotInTx(
 
   const timezone = hospital?.timezone ?? 'Asia/Kolkata';
   const serviceDate = serviceDateIn(timezone, slotDate);
+  const todayInTimezone = serviceDateIn(timezone, now);
+
+  if (serviceDate === todayInTimezone) {
+    const stop = await getOpdStopStatusInTx(tx, {
+      hospitalId: args.hospitalId,
+      doctorId: doctor.id,
+      serviceDate,
+      now,
+    });
+    if (stop.stoppedAt !== null && slotDate.getTime() >= stop.stoppedAt.getTime()) {
+      throw new OpdClosedError(stop.stoppedAt);
+    }
+  }
 
   // The patient first, then the doctor's day: the lock order every booking path keeps.
   const patient = await resolvePatientInTx(tx, {
@@ -528,6 +602,9 @@ async function bookSlotInTx(
       serviceDate,
       tokenNumber,
       status,
+      isEmergency: Boolean(args.isEmergency),
+      emergencyReason: args.emergencyReason ?? null,
+      emergencyNotes: args.emergencyNotes ?? null,
       source: args.source,
       quotaPool,
       sessionKind,
@@ -554,6 +631,7 @@ async function bookSlotInTx(
       slotTime: slotTimeFormatted,
       source: args.source === 'reception' ? 'reception_slot_booking' : 'web_slot_booking',
       ...(ownList ? { slot_number: tokenNumber } : {}),
+      ...(args.isEmergency ? { is_emergency: true, emergency_reason: args.emergencyReason ?? null } : {}),
     },
   });
 
@@ -634,5 +712,7 @@ async function bookSlotInTx(
     doctorName: doctor.name,
     patientName: patient.name,
     patientAge: patient.age,
+    isEmergency: Boolean(args.isEmergency),
+    emergencyReason: args.emergencyReason ?? null,
   };
 }

@@ -21,8 +21,10 @@ export const isStaffRole = (value: string): value is StaffRole =>
   (STAFF_ROLES as readonly string[]).includes(value);
 
 const PERMISSIONS = {
-  /** Add walk-ins and move tokens through the queue. */
+  /** Add walk-ins and move tokens through the queue. Also used to Stop OPD. */
   'queue.mutate': ['owner', 'receptionist', 'doctor'],
+  /** Reopen OPD for a doctor after it was stopped today. Owner and doctor only; not the desk. */
+  'opd.reopen': ['owner', 'doctor'],
   /**
    * Past the daily quota: issue an EXTRA token, or release unused reserved
    * walk-in capacity to online booking. The owner's call, not the desk's.

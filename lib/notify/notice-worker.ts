@@ -13,6 +13,7 @@ import {
 } from '@/lib/db/schema';
 import type { Locale } from '@/lib/i18n/patient';
 import { isMockPhone, normalizeIndianPhone } from '@/lib/domain/phone';
+import { formatClosureNoticePeriod } from '@/lib/domain/notice-dates';
 import { openCredential } from '@/lib/security/credentials';
 import { isRetryableMetaError, isTemplateUnderReview, ProviderError } from './errors';
 import { getProvider, MetaCloudProvider, type NotificationProvider } from './provider';
@@ -228,16 +229,23 @@ export async function drainNoticeCampaignOutbox(
 
     let variables: string[];
     if (templateCode === 'hospital_closure_notice') {
-      const dateText =
-        templateVarsObj.closureDateText ??
-        (row.closureEndDate && row.closureEndDate !== row.closureDate
-          ? `${row.closureDate} to ${row.closureEndDate}`
-          : (row.closureDate ?? ''));
+      const { closurePeriodText, reopenDateText } = formatClosureNoticePeriod(
+        row.closureDate ?? new Date().toISOString().split('T')[0],
+        row.closureEndDate,
+        locale,
+        templateVarsObj.reopenDate,
+      );
 
       variables = [
         String(templateVarsObj.hospitalName ?? row.hospitalName),
-        String(dateText),
-        String(templateVarsObj.reason ?? row.reason ?? 'unforeseen circumstance'),
+        String(templateVarsObj.closureDateText ?? closurePeriodText),
+        String(templateVarsObj.reopenDateText ?? reopenDateText),
+        String(templateVarsObj.contactPhone ?? row.contactPhone ?? ''),
+      ];
+    } else if (templateCode === 'general_announcement') {
+      variables = [
+        String(templateVarsObj.hospitalName ?? row.hospitalName),
+        String(templateVarsObj.customMessage ?? templateVarsObj.message ?? row.reason ?? ''),
         String(templateVarsObj.contactPhone ?? row.contactPhone ?? ''),
       ];
     } else {

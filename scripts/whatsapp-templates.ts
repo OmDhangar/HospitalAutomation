@@ -49,7 +49,17 @@ const EXAMPLES: Record<string, string[]> = {
   opd_appointment_cancelled: ['Mehta', '24 Sep'],
   opd_doctor_delayed: ['Mehta', '30', '11:15 AM'],
   opd_owner_monthly_report: ['2026-08', '4820', '18', '96'],
-  opd_hospital_closure_notice: ['City Care Hospital', '24 Oct', 'maintenance work', '+919876543210'],
+  opd_hospital_closure_update: [
+    'City Care Hospital',
+    'शुक्रवार दिनांक २३ ऑक्टोबर २०२६ पासून रविवार दिनांक २५ ऑक्टोबर २०२६ पर्यंत',
+    'सोमवार, दिनांक २६ ऑक्टोबर २०२६',
+    '+919876543210',
+  ],
+  opd_general_announcement: [
+    'City Care Hospital',
+    'Our hospital is organizing a Free Cardiac & Diabetes Checkup Camp this Sunday from 9:00 AM to 2:00 PM. Prior registration is recommended.',
+    '+919876543210',
+  ],
 };
 
 /**
@@ -98,7 +108,7 @@ type ButtonsComponent = {
 type TemplatePayload = {
   name: string;
   language: string;
-  category: 'UTILITY';
+  category: 'UTILITY' | 'MARKETING';
   components: Array<BodyComponent | ButtonsComponent>;
 };
 
@@ -148,7 +158,7 @@ function buildPayloads(): TemplatePayload[] {
         name: definition.name,
         // Meta expects a language tag; ours map one-to-one.
         language: locale,
-        category: 'UTILITY',
+        category: definition.category ?? 'UTILITY',
         components,
       });
     }

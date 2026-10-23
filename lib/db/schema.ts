@@ -787,6 +787,13 @@ export const appointments = pgTable(
     priority: smallint('priority').notNull().default(0),
     /** Flagged when admitted as an emergency. Highest queue priority and red alert UI. */
     isEmergency: boolean('is_emergency').notNull().default(false),
+    /** Predefined reason for emergency (e.g. Heart Attack, Head Pain, Accident). */
+    emergencyReason: text('emergency_reason'),
+    /** Additional clinical or symptom notes entered by the patient or staff. */
+    emergencyNotes: text('emergency_notes'),
+    /** When the emergency patient was attended / handled by clinic staff. */
+    emergencyHandledAt: timestamp('emergency_handled_at', { withTimezone: true }),
+    emergencyHandledByUserId: uuid('emergency_handled_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     source: appointmentSource('source').notNull(),
     /** Unguessable, never sequential; the patient's only credential. */
     publicToken: text('public_token').notNull().unique(),
@@ -927,6 +934,9 @@ export const doctorDayStates = pgTable(
     lastReservedToken: integer('last_reserved_token').notNull().default(0),
     /** Owner released unused reserved walk-in capacity to the shared pool. */
     reservedReleasedAt: timestamp('reserved_released_at', { withTimezone: true }),
+    /** Today's OPD intake stopped (0070). Null = open; past = stopped; future = scheduled stop. */
+    opdStoppedAt: timestamp('opd_stopped_at', { withTimezone: true }),
+    opdStoppedByUserId: uuid('opd_stopped_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     updatedAt: updatedAt(),
   },
   (t) => [uniqueIndex('doctor_day_states_key').on(t.doctorId, t.serviceDate)],
@@ -4612,7 +4622,11 @@ export const claimRemittances = pgTable(
 
 /* -------------------------------------------------------- WhatsApp Notices */
 
-export type NoticeType = 'hospital_closure' | 'doctor_schedule_change' | 'appointment_change';
+export type NoticeType =
+  | 'hospital_closure'
+  | 'doctor_schedule_change'
+  | 'appointment_change'
+  | 'general_announcement';
 export type CampaignStatus =
   | 'draft'
   | 'scheduled'

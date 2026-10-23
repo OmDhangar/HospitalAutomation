@@ -91,6 +91,7 @@ select has_table_privilege('opd_app', 'your_table', 'INSERT');   -- expect true
 | 0026 | Billing foundation: encounters, services, bills, bill_items, patient_payments |
 | 0027 | RLS for `doctor_slot_overrides` and `doctor_interval_blocks` (security fix) |
 | 0028 | OPD clinical records: medicines, diagnoses, notes, prescriptions, drafts, access log, clinical key |
+| 0070 | OPD same-day stop: `doctor_day_states.opd_stopped_at`, `opd_stopped_by_user_id` |
 
 The roadmap in `docs/plans/hms-expansion-plan.md` uses planned numbers. The
 real numbers are the ones in `drizzle/meta/_journal.json`.

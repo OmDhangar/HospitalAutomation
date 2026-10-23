@@ -2,6 +2,7 @@ import { and, asc, eq, gte, lte, sql } from 'drizzle-orm';
 import { withTenant, type Tx } from '@/lib/db';
 import {
   appointments,
+  doctorDayStates,
   doctorIntervalBlocks,
   doctors,
   doctorScheduleExceptions,
@@ -620,10 +621,25 @@ export async function getDoctorSlotsForDate(args: {
     const now = args.now ?? new Date();
     const isToday = args.serviceDate === serviceDateIn(timezone, now);
 
+    let opdStoppedAt: Date | null = null;
     let onlineOpensAt: Date | null = null;
     let isOnlineOpen = true;
 
     if (isToday) {
+      const [dayState] = await tx
+        .select({ opdStoppedAt: doctorDayStates.opdStoppedAt })
+        .from(doctorDayStates)
+        .where(
+          and(
+            eq(doctorDayStates.hospitalId, args.hospitalId),
+            eq(doctorDayStates.doctorId, args.doctorId),
+            eq(doctorDayStates.serviceDate, args.serviceDate),
+          ),
+        );
+      if (dayState?.opdStoppedAt) {
+        opdStoppedAt = dayState.opdStoppedAt;
+      }
+
       // A doctor with no schedule has no start time, so online is always open.
       const scheduledStartAt = rows.length > 0 ? dayStartAt(daySessions) : null;
 
@@ -641,6 +657,11 @@ export async function getDoctorSlotsForDate(args: {
       // In the hospital's timezone; this used to hard-code +05:30.
       const slotDate = zonedTimeToUtc(args.serviceDate, s.time24, timezone);
       const datetimeIso = slotDate.toISOString();
+
+      // For today, exclude slots at or after opd_stopped_at
+      if (isToday && opdStoppedAt && slotDate.getTime() >= opdStoppedAt.getTime()) {
+        continue;
+      }
 
       let available = true;
       let reason: string | null = null;

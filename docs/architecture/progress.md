@@ -645,3 +645,14 @@ and a second run of 0053. Browser check on the demo hospital: a nurse (390 px) e
 the print shows DRAFT; the doctor signs from the banner; the print is clean.
 **Not applied to production:** 0053 is for the owner to apply (`npm run db:migrate:plan` first).
 
+**OPD Stop same-day intake control (23 Oct 2026), migration 0070 (ADR-039):**
+- **Schema:** `ALTER TABLE doctor_day_states ADD COLUMN IF NOT EXISTS opd_stopped_at TIMESTAMPTZ`, `opd_stopped_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL`.
+- **Intake Gates:** `createWalkIn`, `bookScheduledSlot`, `getDoctorBookingDetails`, `getDoctorSlotsForDate` respect `opd_stopped_at` for today only in the hospital timezone. Existing queued patients flow through `advanceQueue` unaffected. Emergency walk-ins bypass stop gate.
+- **WhatsApp Fallback:** Inbound handler catches `OpdClosedError` on queue join and slot booking, replying with generic text fallback message.
+- **Permissions:** `opd.reopen` restricted to doctor and owner; stop uses `queue.mutate` (receptionist, doctor, owner).
+- **UI:** Dashboard `OpdStopControl` with Stop modal (now vs scheduled), red stopped pill with Reopen, amber scheduled pill with Cancel; branch-wide stop button; patient booking page closure banner, tab disabling, and tomorrow quick links.
+
+**Verified:** typecheck; 924 unit tests; 17 integration tests across `opd-hours.integration.test.ts` (7), `queue.integration.test.ts` (4), `booking.integration.test.ts` (6), `components/__tests__/opd-stop-control.test.tsx` (4); scratch DB rehearsal via `verify-migrations.mts create/drop`.
+**Not applied to production:** 0070 is for the owner to apply (`npm run db:migrate:plan` first).
+
+
