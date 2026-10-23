@@ -583,6 +583,36 @@ export const doctorIntervalBlocks = pgTable(
   (t) => [index('doctor_interval_blocks_idx').on(t.doctorId, t.serviceDate)],
 );
 
+/** Multi-day calendar shutdowns and holiday blackouts (0071, ADR-040). */
+export const blackoutPeriods = pgTable(
+  'blackout_periods',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').references(() => branches.id, { onDelete: 'cascade' }),
+    doctorId: uuid('doctor_id').references(() => doctors.id, { onDelete: 'cascade' }),
+    startDate: date('start_date').notNull(),
+    endDate: date('end_date').notNull(),
+    reopenDate: date('reopen_date').notNull(),
+    reason: text('reason').notNull(),
+    publicReason: text('public_reason'),
+    createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    cancelledByUserId: uuid('cancelled_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index('blackout_periods_lookup_idx')
+      .on(t.hospitalId, t.branchId, t.doctorId, t.startDate, t.endDate)
+      .where(sql`cancelled_at IS NULL`),
+    check('blackout_date_range_valid', sql`${t.endDate} >= ${t.startDate}`),
+    check('blackout_reopen_date_valid', sql`${t.reopenDate} > ${t.endDate}`),
+  ],
+);
+
 /* ------------------------------------------------------------------ persons */
 
 /**

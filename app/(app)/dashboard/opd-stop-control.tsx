@@ -28,10 +28,12 @@ export function OpdStopControl({
   doctorId,
   status,
   timezone = 'Asia/Kolkata',
+  sessionStarted = false,
 }: {
   doctorId: string;
   status?: OpdStopControlStatus | null;
   timezone?: string;
+  sessionStarted?: boolean;
 }) {
   const toast = useToast();
   const [isOpen, setIsOpen] = useState(false);
@@ -96,6 +98,8 @@ export function OpdStopControl({
 
   // State 1: Open (stoppedAt is null)
   if (!stoppedAt) {
+    if (!sessionStarted) return null;
+
     return (
       <>
         <Button

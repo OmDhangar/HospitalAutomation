@@ -22,6 +22,7 @@ import {
 } from '@/lib/domain/sessions';
 import { formatTimeIn, serviceDateIn, zonedTimeToUtc } from '@/lib/domain/time';
 import { clearDoctorCache } from './hospital';
+import { resolveOpdClosureInTx } from './opd-hours';
 
 export type GeneratedSlot = {
   timeStr: string; // e.g. "10:00 AM"
@@ -513,12 +514,17 @@ export async function getDoctorSlotsForDate(args: {
   totalAvailable: number;
   onlineOpensAt?: Date | null;
   isOnlineOpen?: boolean;
+  isClosed?: boolean;
+  closureType?: 'none' | 'stop_today' | 'blackout';
+  reopenDate?: string | null;
+  publicReason?: string | null;
 }> {
   return withTenant(args.hospitalId, async (tx) => {
     // 1. Fetch doctor & hospital info
     const [doc] = await tx
       .select({
         id: doctors.id,
+        branchId: doctors.branchId,
         name: doctors.name,
         specialty: doctors.specialty,
         defaultConsultMinutes: doctors.defaultConsultMinutes,
@@ -534,6 +540,32 @@ export async function getDoctorSlotsForDate(args: {
     }
 
     const timezone = doc.timezone ?? 'Asia/Kolkata';
+
+    const closure = await resolveOpdClosureInTx(tx, {
+      hospitalId: args.hospitalId,
+      doctorId: args.doctorId,
+      branchId: doc.branchId,
+      serviceDate: args.serviceDate,
+      now: args.now,
+      timezone,
+    });
+
+    if (closure.isClosed && closure.closureType === 'blackout') {
+      const rows = await loadScheduleRows(tx, args.doctorId);
+      const config = scheduleSettings(doc, rows);
+      return {
+        config,
+        sessions: [],
+        slots: [],
+        intervalBlocks: [],
+        overrides: [],
+        totalAvailable: 0,
+        isClosed: true,
+        closureType: 'blackout',
+        reopenDate: closure.reopenDate,
+        publicReason: closure.publicReason,
+      };
+    }
 
     // 2. The day's sessions, or the classic default for a doctor with no schedule
     const rows = await loadScheduleRows(tx, args.doctorId);
@@ -737,6 +769,10 @@ export async function getDoctorSlotsForDate(args: {
       totalAvailable,
       onlineOpensAt,
       isOnlineOpen,
+      isClosed: closure.isClosed,
+      closureType: closure.closureType,
+      reopenDate: closure.reopenDate,
+      publicReason: closure.publicReason,
     };
   });
 }

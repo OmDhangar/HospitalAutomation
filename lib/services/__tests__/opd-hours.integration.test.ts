@@ -8,6 +8,7 @@ import {
   getOpdStopStatus,
   getBatchOpdStopStatus,
   reopenOpdForDoctor,
+  resolveOpdClosure,
   stopOpdForBranch,
   stopOpdForDoctor,
 } from '@/lib/services/opd-hours';
@@ -244,4 +245,85 @@ describe.skipIf(!enabled)('opd-hours service integration', () => {
     expect((logs[0].metadata as any)?.doctorCount).toBe(2);
     expect((logs[0].metadata as any)?.reason).toBe('Clinic emergency drill');
   });
+
+  it('8. resolveOpdClosure unifies blackout and stop_today with proper precedence', async () => {
+    const now = new Date('2026-10-24T11:00:00+05:30');
+    const today = serviceDateIn(TZ, now);
+
+    // Initial state: open
+    const openRes = await resolveOpdClosure({
+      hospitalId,
+      doctorId: doctorId1,
+      branchId,
+      serviceDate: today,
+      now,
+      timezone: TZ,
+    });
+    expect(openRes.isClosed).toBe(false);
+    expect(openRes.closureType).toBe('none');
+
+    // Case A: same-day Stop OPD
+    await stopOpdForDoctor({
+      hospitalId,
+      doctorId: doctorId1,
+      serviceDate: today,
+      stopAt: now,
+      actorUserId: userId,
+      reason: 'Doctor left clinic',
+      now,
+    });
+
+    const stopRes = await resolveOpdClosure({
+      hospitalId,
+      doctorId: doctorId1,
+      branchId,
+      serviceDate: today,
+      now,
+      timezone: TZ,
+    });
+    expect(stopRes.isClosed).toBe(true);
+    expect(stopRes.closureType).toBe('stop_today');
+    expect(stopRes.stoppedAt).toEqual(now);
+
+    // Case B: blackout period covering future date
+    await admin`
+      insert into blackout_periods (hospital_id, branch_id, doctor_id, start_date, end_date, reopen_date, reason, public_reason)
+      values (${hospitalId}, ${branchId}, null, '2026-10-26', '2026-10-28', '2026-10-29', 'Hospital Renovation', 'Clinic Closed for Renovation')
+    `;
+
+    const blackoutRes = await resolveOpdClosure({
+      hospitalId,
+      doctorId: doctorId1,
+      branchId,
+      serviceDate: '2026-10-27',
+      now,
+      timezone: TZ,
+    });
+    expect(blackoutRes.isClosed).toBe(true);
+    expect(blackoutRes.closureType).toBe('blackout');
+    expect(blackoutRes.startDate).toBe('2026-10-26');
+    expect(blackoutRes.endDate).toBe('2026-10-28');
+    expect(blackoutRes.reopenDate).toBe('2026-10-29');
+    expect(blackoutRes.publicReason).toBe('Clinic Closed for Renovation');
+    expect(blackoutRes.isMultiDay).toBe(true);
+
+    // Case C: Overlapping blackouts pick the latest end_date (NB2)
+    await admin`
+      insert into blackout_periods (hospital_id, branch_id, doctor_id, start_date, end_date, reopen_date, reason, public_reason)
+      values (${hospitalId}, ${branchId}, null, '2026-10-27', '2026-10-30', '2026-10-31', 'Extended Renovation', 'Extended Renovation Notice')
+    `;
+
+    const overlapRes = await resolveOpdClosure({
+      hospitalId,
+      doctorId: doctorId1,
+      branchId,
+      serviceDate: '2026-10-27',
+      now,
+      timezone: TZ,
+    });
+    expect(overlapRes.closureType).toBe('blackout');
+    expect(overlapRes.endDate).toBe('2026-10-30');
+    expect(overlapRes.reopenDate).toBe('2026-10-31');
+  });
 });
+

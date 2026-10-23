@@ -711,10 +711,82 @@ describe.skipIf(!enabled)('queue engine', () => {
         hospitalId,
         doctorId,
         timezone: TZ,
+        now: stopNow,
       });
       const call2 = adv2.transitions.find((t) => t.action === 'call');
       expect(call2?.appointmentId).toBe(p2.appointment.id);
       expect(call2?.to).toBe('CALLED');
+    });
+
+    it('12. createWalkIn throws OpdClosedError on active blackout (NH6 Test X)', async () => {
+      const now = new Date('2026-10-24T10:00:00+05:30');
+      const today = serviceDateIn(TZ, now);
+
+      await admin`
+        insert into blackout_periods (hospital_id, branch_id, doctor_id, start_date, end_date, reopen_date, reason, public_reason)
+        values (${hospitalId}, ${branchId}, null, ${today}, ${today}, '2026-10-25', 'Diwali Holiday', 'Closed for Diwali')
+      `;
+
+      await expect(
+        createWalkIn({
+          hospitalId,
+          branchId,
+          doctorId,
+          timezone: TZ,
+          patient: { phoneE164: '+919900000091', name: 'Blackout Patient' },
+          now,
+        }),
+      ).rejects.toThrow(OpdClosedError);
+    });
+
+    it('13. createWalkIn with isEmergency: true succeeds during blackout (NH6 Test Y)', async () => {
+      const now = new Date('2026-10-24T10:00:00+05:30');
+      const today = serviceDateIn(TZ, now);
+
+      await admin`
+        insert into blackout_periods (hospital_id, branch_id, doctor_id, start_date, end_date, reopen_date, reason, public_reason)
+        values (${hospitalId}, ${branchId}, null, ${today}, ${today}, '2026-10-25', 'Diwali Holiday', 'Closed for Diwali')
+      `;
+
+      const res = await createWalkIn({
+        hospitalId,
+        branchId,
+        doctorId,
+        timezone: TZ,
+        patient: { phoneE164: '+919900000092', name: 'Emergency During Blackout' },
+        isEmergency: true,
+        now,
+      });
+
+      expect(res.appointment).toBeDefined();
+      expect(res.appointment.isEmergency).toBe(true);
+    });
+
+    it('14. createWalkIn succeeds after blackout revocation (NH6 Test Z)', async () => {
+      const now = new Date('2026-10-24T10:00:00+05:30');
+      const today = serviceDateIn(TZ, now);
+      const blackoutId = uuid();
+
+      await admin`
+        insert into blackout_periods (id, hospital_id, branch_id, doctor_id, start_date, end_date, reopen_date, reason, public_reason)
+        values (${blackoutId}, ${hospitalId}, ${branchId}, null, ${today}, ${today}, '2026-10-25', 'Drill', 'Clinic Drill')
+      `;
+
+      // Revoke
+      await admin`
+        update blackout_periods set cancelled_at = now() where id = ${blackoutId}
+      `;
+
+      const res = await createWalkIn({
+        hospitalId,
+        branchId,
+        doctorId,
+        timezone: TZ,
+        patient: { phoneE164: '+919900000093', name: 'Patient After Revocation' },
+        now,
+      });
+
+      expect(res.appointment).toBeDefined();
     });
   });
 });

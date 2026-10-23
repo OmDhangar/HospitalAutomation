@@ -49,6 +49,7 @@ import {
   toggleStaffAction,
 } from './actions';
 import { DoctorScheduleManager } from './scheduling/doctor-schedule-manager';
+import { HolidaysAndBlackoutsManager } from './scheduling/holidays-manager';
 
 export interface BranchItem {
   id: string;
@@ -1174,6 +1175,7 @@ export function SettingsClientView({
       {/* 7. Tab 4: Scheduling Rules */}
       {activeTab === 'scheduling' ? (
         <div className="space-y-6 animate-in fade-in-50 duration-200">
+          <HolidaysAndBlackoutsManager doctors={doctors} branches={branches} />
           {doctors.length === 0 ? (
             <Card>
               <EmptyState

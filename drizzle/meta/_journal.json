@@ -393,6 +393,13 @@
       "when": 1792200000000,
       "tag": "0070_opd_stop",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1792250000000,
+      "tag": "0071_blackout_periods",
+      "breakpoints": true
     }
   ]
 }

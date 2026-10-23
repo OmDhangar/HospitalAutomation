@@ -605,6 +605,3 @@ Creating a blackout is restricted to `hospital.configure` (owner-only). When sch
 Revoking/cancelling an active blackout (`cancelBlackoutPeriod`) re-opens future booking slots and walk-in intake immediately, but does not resurrect previously cancelled appointments.
 
 **Why:** Stop OPD (same-day intake freeze, ADR-039) and Blackout (multi-day calendar closure with appointment cancellations) serve different operational requirements, but without a unified resolver, intake gates inevitably drift and produce inconsistent booking states. Unifying closure resolution guarantees that web booking, walk-in reception, and WhatsApp bot conversations operate off the identical source of truth, while routing cancellations through the state machine preserves queue audit invariants.
-
-
-

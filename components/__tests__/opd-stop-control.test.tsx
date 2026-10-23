@@ -19,9 +19,16 @@ vi.mock('@/app/(app)/dashboard/opd-actions', () => ({
 }));
 
 describe('OpdStopControl component rendering', () => {
-  it('renders "Stop OPD today" button when stoppedAt is null', () => {
+  it('hides "Stop OPD today" button when sessionStarted is false and stoppedAt is null', () => {
     const html = renderToStaticMarkup(
-      <OpdStopControl doctorId="doc-1" status={null} timezone="Asia/Kolkata" />
+      <OpdStopControl doctorId="doc-1" status={null} timezone="Asia/Kolkata" sessionStarted={false} />
+    );
+    expect(html).toBe('');
+  });
+
+  it('renders "Stop OPD today" button when sessionStarted is true and stoppedAt is null', () => {
+    const html = renderToStaticMarkup(
+      <OpdStopControl doctorId="doc-1" status={null} timezone="Asia/Kolkata" sessionStarted={true} />
     );
     expect(html).toContain('Stop OPD today');
   });

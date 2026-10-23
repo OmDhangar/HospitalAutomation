@@ -31,9 +31,9 @@
  *   to be called and completed normally.
  */
 
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lte, or } from 'drizzle-orm';
 import { withTenant, type Tx } from '@/lib/db';
-import { auditLogs, doctorDayStates, doctors, hospitals } from '@/lib/db/schema';
+import { auditLogs, blackoutPeriods, doctorDayStates, doctors, hospitals } from '@/lib/db/schema';
 import { serviceDateIn } from '@/lib/domain/time';
 
 export interface OpdStopStatus {
@@ -365,3 +365,125 @@ export async function stopOpdForBranch(args: {
     return { doctorCount: branchDoctors.length };
   });
 }
+
+export interface OpdClosureResolution {
+  isClosed: boolean;
+  closureType: 'none' | 'stop_today' | 'blackout';
+  stoppedAt?: Date | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  reopenDate?: string | null;
+  reason?: string | null;
+  publicReason?: string | null;
+  isMultiDay: boolean;
+}
+
+/**
+ * Unified resolver for OPD closure status inside an existing transaction.
+ * Evaluates active blackout periods first, then same-day Stop OPD status.
+ */
+export async function resolveOpdClosureInTx(
+  tx: Tx,
+  args: {
+    hospitalId: string;
+    doctorId: string;
+    branchId: string;
+    serviceDate: string;
+    now?: Date;
+    timezone?: string;
+  },
+): Promise<OpdClosureResolution> {
+  // 1. Check active uncancelled blackout periods covering serviceDate
+  // Matches hospital-wide (branchId is null) or specific branch, AND doctor-wide or specific doctor.
+  // When overlapping, the blackout with the latest end_date wins (NB2).
+  const [blackout] = await tx
+    .select({
+      startDate: blackoutPeriods.startDate,
+      endDate: blackoutPeriods.endDate,
+      reopenDate: blackoutPeriods.reopenDate,
+      reason: blackoutPeriods.reason,
+      publicReason: blackoutPeriods.publicReason,
+    })
+    .from(blackoutPeriods)
+    .where(
+      and(
+        eq(blackoutPeriods.hospitalId, args.hospitalId),
+        isNull(blackoutPeriods.cancelledAt),
+        lte(blackoutPeriods.startDate, args.serviceDate),
+        gte(blackoutPeriods.endDate, args.serviceDate),
+        or(isNull(blackoutPeriods.doctorId), eq(blackoutPeriods.doctorId, args.doctorId)),
+        or(isNull(blackoutPeriods.branchId), eq(blackoutPeriods.branchId, args.branchId)),
+      ),
+    )
+    .orderBy(desc(blackoutPeriods.endDate), desc(blackoutPeriods.createdAt))
+    .limit(1);
+
+  if (blackout) {
+    const isMultiDay = blackout.startDate !== blackout.endDate;
+    return {
+      isClosed: true,
+      closureType: 'blackout',
+      startDate: blackout.startDate,
+      endDate: blackout.endDate,
+      reopenDate: blackout.reopenDate,
+      reason: blackout.reason,
+      publicReason: blackout.publicReason ?? null,
+      isMultiDay,
+    };
+  }
+
+  // 2. Check same-day Stop OPD if serviceDate === today in hospital timezone
+  const now = args.now ?? new Date();
+  const timezone = args.timezone ?? (await loadHospitalTimezoneInTx(tx, args.hospitalId));
+  const today = serviceDateIn(timezone, now);
+
+  if (args.serviceDate === today) {
+    const stopStatus = await getOpdStopStatusInTx(tx, {
+      hospitalId: args.hospitalId,
+      doctorId: args.doctorId,
+      serviceDate: args.serviceDate,
+      now,
+    });
+
+    if (stopStatus.isStopped) {
+      return {
+        isClosed: true,
+        closureType: 'stop_today',
+        stoppedAt: stopStatus.stoppedAt,
+        isMultiDay: false,
+      };
+    } else if (stopStatus.stoppedAt !== null) {
+      return {
+        isClosed: false,
+        closureType: 'none',
+        stoppedAt: stopStatus.stoppedAt,
+        isMultiDay: false,
+      };
+    }
+  }
+
+  // 3. Open
+  return {
+    isClosed: false,
+    closureType: 'none',
+    isMultiDay: false,
+  };
+}
+
+/**
+ * Unified resolver for OPD closure status.
+ * Single source of truth across walk-ins, slot booking, discovery, and WhatsApp bot.
+ */
+export async function resolveOpdClosure(args: {
+  hospitalId: string;
+  doctorId: string;
+  branchId: string;
+  serviceDate: string;
+  now?: Date;
+  timezone?: string;
+}): Promise<OpdClosureResolution> {
+  return withTenant(args.hospitalId, async (tx) => {
+    return resolveOpdClosureInTx(tx, args);
+  });
+}
+

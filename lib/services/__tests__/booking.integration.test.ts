@@ -69,6 +69,7 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
   const admin = enabled ? postgres(adminUrl!, { max: 3 }) : (null as never);
   let hospitalId: string;
   let doctorId: string;
+  let branchId: string;
   let phoneNumberId: string;
   let userId: string;
   let spy: SpyProvider;
@@ -90,7 +91,7 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
     doctorId = uuid();
     userId = uuid();
     phoneNumberId = `pn-${uuid()}`;
-    const branchId = uuid();
+    branchId = uuid();
 
     await admin`
       insert into users (id, email, password_hash, name)
@@ -113,7 +114,8 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
     `;
     await admin`
       insert into doctor_schedules (hospital_id, doctor_id, weekday, mode, start_time, end_time, effective_from)
-      values (${hospitalId}, ${doctorId}, extract(dow from current_date)::smallint, 'both', '09:00', '17:00', current_date)
+      select ${hospitalId}, ${doctorId}, s.d::smallint, 'both', '09:00', '17:00', '2026-01-01'
+      from generate_series(0, 6) as s(d)
     `;
   });
 
@@ -292,7 +294,7 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
     // Push the stored counter to the cap, as if the day had been busy.
     await admin`
       update whatsapp_conversations
-      set prompts_today = ${DAILY_PROMPT_CAP}, prompts_date = current_date
+      set prompts_today = ${DAILY_PROMPT_CAP}, prompts_date = (current_timestamp at time zone 'Asia/Kolkata')::date
       where hospital_id = ${hospitalId}
     `;
 
@@ -369,6 +371,7 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
           patientName: 'Late Slot Patient',
           phoneE164: '+919876543210',
           slotDatetimeIso: new Date(`${today}T14:00:00+05:30`).toISOString(),
+          now,
         }),
       ).rejects.toThrow(OpdClosedError);
 
@@ -380,6 +383,7 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
           patientName: 'After Stop Patient',
           phoneE164: '+919876543210',
           slotDatetimeIso: new Date(`${today}T15:00:00+05:30`).toISOString(),
+          now,
         }),
       ).rejects.toThrow(OpdClosedError);
     });
@@ -495,14 +499,13 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
       await inbound(4, { replyId: `doc:${doctorId}` });
       await inbound(5, { replyId: 'queue_choice:join' });
 
-      // Must receive the generic closure reply instead of being dropped
+      // Must receive the closure reply instead of being dropped
       const closureMsg = spy.texts.find((m) =>
-        m.body.includes('The hospital has closed OPD for today'),
+        m.body.includes("Today's OPD is closed"),
       );
       expect(closureMsg).toBeDefined();
-      expect(closureMsg?.body).toBe(
-        'The hospital has closed OPD for today. Please try again tomorrow.',
-      );
+      expect(closureMsg?.body).toContain("Today's OPD is closed");
+      expect(closureMsg?.body).toContain("or return tomorrow for the live queue.");
     });
 
     it('17. tomorrow getDoctorBookingDetails returns isClosed: false even when today has a stop set', async () => {
@@ -539,6 +542,150 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
       });
       expect(tomorrowDetails?.isClosed).toBe(false);
       expect(tomorrowDetails?.closedAt).toBeNull();
+    });
+
+    it('18. bookScheduledSlot throws OpdClosedError on blackout date', async () => {
+      const now = new Date('2026-10-24T10:00:00+05:30');
+      const blackoutDate = '2026-10-27';
+
+      await admin`
+        insert into blackout_periods (hospital_id, branch_id, doctor_id, start_date, end_date, reopen_date, reason, public_reason)
+        values (${hospitalId}, ${branchId}, null, '2026-10-26', '2026-10-28', '2026-10-29', 'Maintenance', 'Closed for Maintenance')
+      `;
+
+      await expect(
+        bookScheduledSlot({
+          hospitalId,
+          doctorId,
+          slotDatetimeIso: '2026-10-27T10:00:00+05:30',
+          patientName: 'Slot Patient',
+          phoneE164: '+919900000095',
+          now,
+        }),
+      ).rejects.toThrow(OpdClosedError);
+    });
+
+    it('19. getDoctorSlotsForDate returns slots: [] and isClosed: true on blackout date', async () => {
+      const now = new Date('2026-10-24T10:00:00+05:30');
+      const blackoutDate = '2026-10-27';
+
+      await admin`
+        insert into blackout_periods (hospital_id, branch_id, doctor_id, start_date, end_date, reopen_date, reason, public_reason)
+        values (${hospitalId}, ${branchId}, null, '2026-10-26', '2026-10-28', '2026-10-29', 'Maintenance', 'Closed for Maintenance')
+      `;
+
+      const res = await getDoctorSlotsForDate({
+        hospitalId,
+        doctorId,
+        serviceDate: blackoutDate,
+        now,
+      });
+
+      expect(res.slots).toEqual([]);
+      expect(res.isClosed).toBe(true);
+      expect(res.closureType).toBe('blackout');
+      expect(res.reopenDate).toBe('2026-10-29');
+    });
+
+    it('20. Inbound message attempting to book future blacked-out date replies with reopen date and reason', async () => {
+      const blackoutDate = '2026-10-27';
+
+      await admin`
+        insert into blackout_periods (hospital_id, branch_id, doctor_id, start_date, end_date, reopen_date, reason, public_reason)
+        values (${hospitalId}, ${branchId}, null, '2026-10-26', '2026-10-28', '2026-10-29', 'Renovation', 'Renovation')
+      `;
+
+      // Complete conversational intake steps to slot selection
+      await inbound(1, { text: 'Hi' });
+      await inbound(2, { replyId: 'lang:en' });
+      await inbound(3, { replyId: 'patient:self' });
+      await inbound(4, { replyId: `slot:${blackoutDate}T10:00:00+05:30` });
+
+      const reply = spy.texts.at(-1);
+      expect(reply).toBeDefined();
+      expect(reply?.body).toContain('is closed on 2026-10-27 and will reopen on 2026-10-29 due to Renovation');
+      expect(reply?.body).toBe(
+        'OPD for Dr. Kulkarni is closed on 2026-10-27 and will reopen on 2026-10-29 due to Renovation. Please select a date after reopening.',
+      );
+    });
+
+    it('21. Inbound message on today multi-day blackout replies with reopen date and reason', async () => {
+      const now = new Date();
+      const today = serviceDateIn('Asia/Kolkata', now);
+      const futureReopen = '2026-12-01';
+
+      await admin`
+        insert into blackout_periods (hospital_id, branch_id, doctor_id, start_date, end_date, reopen_date, reason, public_reason)
+        values (${hospitalId}, ${branchId}, null, ${today}, '2026-11-30', ${futureReopen}, 'Festival Holiday', 'Festival Holiday')
+      `;
+
+      await inbound(1, { text: 'Hi' });
+      await inbound(2, { replyId: 'lang:en' });
+      await inbound(3, { replyId: 'patient:self' });
+      await inbound(4, { replyId: 'queue_choice:join' });
+
+      const reply = spy.texts.at(-1);
+      expect(reply).toBeDefined();
+      expect(reply?.body).toBe(
+        `Today's OPD is closed and will remain closed until ${futureReopen} due to Festival Holiday. Please visit us after reopening.`,
+      );
+    });
+
+    it('22. Inbound message on same-day stop for slot-accepting doctor includes tomorrow book link', async () => {
+      const now = new Date();
+      const today = serviceDateIn('Asia/Kolkata', now);
+      const [y, m, d] = today.split('-').map(Number);
+      const tomorrow = new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+
+      // Update doctor schedule to accept slots / both
+      await admin`update doctor_schedules set mode = 'both' where doctor_id = ${doctorId}`;
+
+      await stopOpdForDoctor({
+        hospitalId,
+        doctorId,
+        serviceDate: today,
+        stopAt: now,
+        actorUserId: userId,
+        now,
+      });
+
+      await inbound(1, { text: 'Hi' });
+      await inbound(2, { replyId: 'lang:en' });
+      await inbound(3, { replyId: 'patient:self' });
+      await inbound(4, { replyId: 'queue_choice:join' });
+
+      const reply = spy.texts.at(-1);
+      expect(reply).toBeDefined();
+      expect(reply?.body).toContain('You can book a slot for tomorrow using this link:');
+      expect(reply?.body).toContain(`/book?doctor=${doctorId}&phone=%2B919876500001&hospital=${hospitalId}&locale=en&date=${tomorrow}`);
+      expect(reply?.body).toContain('or return tomorrow for the live queue.');
+    });
+
+    it('23. Inbound message on same-day stop for queue-only doctor directs to tomorrow live queue without link', async () => {
+      const now = new Date();
+      const today = serviceDateIn('Asia/Kolkata', now);
+
+      await admin`update doctor_schedules set mode = 'queue' where doctor_id = ${doctorId}`;
+
+      await stopOpdForDoctor({
+        hospitalId,
+        doctorId,
+        serviceDate: today,
+        stopAt: now,
+        actorUserId: userId,
+        now,
+      });
+
+      await inbound(1, { text: 'Hi' });
+      await inbound(2, { replyId: 'lang:en' });
+      await inbound(3, { replyId: 'patient:self' });
+      await inbound(4, { replyId: 'queue_choice:join' });
+
+      const reply = spy.texts.at(-1);
+      expect(reply).toBeDefined();
+      expect(reply?.body).toBe(
+        `Today's OPD is closed. Please return tomorrow for the live queue.`,
+      );
     });
   });
 });

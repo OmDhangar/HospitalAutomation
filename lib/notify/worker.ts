@@ -1,4 +1,4 @@
-import { and, count, eq, gte, isNull, lte, sql } from 'drizzle-orm';
+import { and, count, eq, gte, isNull, lte, ne, sql } from 'drizzle-orm';
 import { getAdminDb } from '@/lib/db/admin';
 import {
   appointments,
@@ -218,6 +218,13 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
       variables = [token, cleanDoc];
     } else if (templateCode === 'appointment_cancelled') {
       variables = [cleanDoc, String(payload.appointmentDate ?? '')];
+    } else if (templateCode === 'blackout_cancellation') {
+      variables = [
+        cleanDoc,
+        String(payload.appointmentDate ?? ''),
+        String(payload.reopenDate ?? ''),
+        String(payload.reason ?? ''),
+      ];
     } else if (templateCode === 'doctor_delayed') {
       variables = [
         cleanDoc,
@@ -253,7 +260,9 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
     const urlButtonParam =
       templateCode === 'queue_link' || templateCode === 'appointment_confirmed'
         ? (row.publicToken ?? undefined)
-        : templateCode === 'slot_disrupted' || templateCode === 'appointment_cancelled'
+        : templateCode === 'slot_disrupted' ||
+            templateCode === 'appointment_cancelled' ||
+            templateCode === 'blackout_cancellation'
           ? (String(payload.doctorId ?? '') || undefined)
           : undefined;
 
@@ -334,7 +343,7 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
 }
 
 /** Outbound messages per completed appointment, this month, for one hospital. */
-async function hospitalMessageRatio(
+export async function hospitalMessageRatio(
   hospitalId: string,
   now: Date,
 ): Promise<number | null> {
@@ -360,6 +369,7 @@ async function hospitalMessageRatio(
         eq(notificationOutbox.hospitalId, hospitalId),
         eq(notificationOutbox.status, 'sent'),
         gte(notificationOutbox.sentAt, start),
+        ne(notificationOutbox.milestone, 'appointment_cancelled:blackout'),
       ),
     );
 

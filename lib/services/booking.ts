@@ -372,6 +372,69 @@ Track position: ${url}
 We'll send you a reminder 15 minutes before your appointment.`,
 };
 
+export function buildOpdClosedBotMessage(args: {
+  error: OpdClosedError;
+  doctor: { id: string; name: string; mode?: string | null };
+  phoneE164: string;
+  hospitalId: string;
+  locale: Locale;
+  today: string;
+  baseUrl?: string;
+}): string {
+  const { error, doctor, phoneE164, hospitalId, locale, today } = args;
+  const baseUrl = args.baseUrl ?? process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000';
+  const cleanDoc = cleanDoctorName(doctor.name);
+  const reason = error.publicReason || error.reason;
+  const reasonText = reason ? ` due to ${reason}` : '';
+
+  // Scenario 1: Blackout on a future date (serviceDate > today)
+  if (error.closureType === 'blackout' && error.serviceDate && error.serviceDate > today) {
+    if (locale === 'mr') {
+      return `डॉ. ${cleanDoc} यांची ओपीडी ${error.serviceDate} रोजी बंद आहे आणि ${error.reopenDate} रोजी पुन्हा सुरू होईल${reason ? ` (${reason})` : ''}. कृपया पुन्हा सुरू झाल्यावर तारीख निवडा.`;
+    }
+    if (locale === 'hi') {
+      return `डॉ. ${cleanDoc} की ओपीडी ${error.serviceDate} को बंद है और ${error.reopenDate} को पुनः शुरू होगी${reason ? ` (${reason})` : ''}। कृपया पुनः शुरू होने के बाद की तारीख चुनें।`;
+    }
+    return `OPD for Dr. ${cleanDoc} is closed on ${error.serviceDate} and will reopen on ${error.reopenDate}${reasonText}. Please select a date after reopening.`;
+  }
+
+  // Scenario 2: Blackout covering today (today is in blackout range or multi-day blackout)
+  if (error.closureType === 'blackout') {
+    if (locale === 'mr') {
+      return `आजची ओपीडी बंद आहे आणि ${error.reopenDate} पर्यंत बंद राहील${reason ? ` (${reason})` : ''}. कृपया ओपीडी पुन्हा सुरू झाल्यावर भेट द्या.`;
+    }
+    if (locale === 'hi') {
+      return `आज की ओपीडी बंद है और ${error.reopenDate} तक बंद रहेगी${reason ? ` (${reason})` : ''}। कृपया ओपीडी पुनः शुरू होने के बाद पधारें।`;
+    }
+    return `Today's OPD is closed and will remain closed until ${error.reopenDate}${reasonText}. Please visit us after reopening.`;
+  }
+
+  // Scenario 3: Same-day Stop OPD (closureType === 'stop_today')
+  if (doctor.mode === 'slot' || doctor.mode === 'both') {
+    const [y, m, d] = today.split('-').map(Number);
+    const tomorrowDate = new Date(Date.UTC(y, m - 1, d + 1));
+    const tomorrow = tomorrowDate.toISOString().slice(0, 10);
+    const bookUrl = `${baseUrl}/book?doctor=${doctor.id}&phone=${encodeURIComponent(phoneE164)}&hospital=${hospitalId}&locale=${locale}&date=${tomorrow}`;
+
+    if (locale === 'mr') {
+      return `आजची ओपीडी बंद आहे. तुम्ही उद्यासाठी या लिंकवरून वेळ स्लॉट बुक करू शकता: ${bookUrl} किंवा उद्या थेट रांगेत येऊ शकता.`;
+    }
+    if (locale === 'hi') {
+      return `आज की ओपीडी बंद है। आप कल के लिए इस लिंक से स्लॉट बुक कर सकते हैं: ${bookUrl} या कल लाइव कतार में आ सकते हैं।`;
+    }
+    return `Today's OPD is closed. You can book a slot for tomorrow using this link: ${bookUrl} or return tomorrow for the live queue.`;
+  }
+
+  // Queue-only doctor
+  if (locale === 'mr') {
+    return `आजची ओपीडी बंद आहे. कृपया उद्या थेट रांगेसाठी या.`;
+  }
+  if (locale === 'hi') {
+    return `आज की ओपीडी बंद है। कृपया कल लाइव कतार के लिए आएं।`;
+  }
+  return `Today's OPD is closed. Please return tomorrow for the live queue.`;
+}
+
 const ACTIVE_CHOICE_PROMPTS: Record<
   Locale,
   {
@@ -988,10 +1051,18 @@ export async function handleInboundMessage(
         });
       } catch (error) {
         if (error instanceof OpdClosedError) {
+          const body = buildOpdClosedBotMessage({
+            error,
+            doctor,
+            phoneE164,
+            hospitalId,
+            locale,
+            today,
+          });
           const sent = await provider.sendText({
             phoneNumberId: inbound.phoneNumberId,
             toPhoneE164: phoneE164,
-            body: 'The hospital has closed OPD for today. Please try again tomorrow.',
+            body,
           });
           await withTenant(hospitalId, (tx) =>
             tx.insert(notificationOutbox).values({
@@ -1077,6 +1148,43 @@ export async function handleInboundMessage(
         doctorId: doctor.id,
         serviceDate: today,
       });
+
+      if (scheduleResult.isClosed) {
+        const fakeErr = new OpdClosedError({
+          closureType: (scheduleResult.closureType as 'blackout' | 'stop_today') ?? 'blackout',
+          serviceDate: today,
+          reopenDate: scheduleResult.reopenDate,
+          publicReason: scheduleResult.publicReason,
+          isMultiDay: scheduleResult.closureType === 'blackout',
+        });
+        const body = buildOpdClosedBotMessage({
+          error: fakeErr,
+          doctor,
+          phoneE164,
+          hospitalId,
+          locale,
+          today,
+        });
+        const sent = await provider.sendText({
+          phoneNumberId: inbound.phoneNumberId,
+          toPhoneE164: phoneE164,
+          body,
+        });
+        await withTenant(hospitalId, (tx) =>
+          tx.insert(notificationOutbox).values({
+            hospitalId,
+            milestone: 'conversation:opd_closed',
+            templateCode: 'conversation',
+            locale,
+            payload: { doctorId: doctor.id, reason: 'opd_closed' },
+            status: 'sent',
+            providerMessageId: sent.providerMessageId,
+            sentAt: new Date(),
+          }),
+        );
+        break;
+      }
+
       const availableSlots = scheduleResult.slots.filter((s) => s.available);
 
       const baseUrl = process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000';
@@ -1222,10 +1330,18 @@ export async function handleInboundMessage(
         });
       } catch (error) {
         if (error instanceof OpdClosedError) {
+          const body = buildOpdClosedBotMessage({
+            error,
+            doctor,
+            phoneE164,
+            hospitalId,
+            locale,
+            today,
+          });
           const sent = await provider.sendText({
             phoneNumberId: inbound.phoneNumberId,
             toPhoneE164: phoneE164,
-            body: 'The hospital has closed OPD for today. Please try again tomorrow.',
+            body,
           });
           await withTenant(hospitalId, (tx) =>
             tx.insert(notificationOutbox).values({

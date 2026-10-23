@@ -11,7 +11,8 @@ export type TemplateCode =
   | 'doctor_delayed'
   | 'owner_monthly_report'
   | 'hospital_closure_notice'
-  | 'general_announcement';
+  | 'general_announcement'
+  | 'blackout_cancellation';
 
 /**
  * Meta approves templates per name *and* per language. Submit them all at once.
@@ -280,6 +281,24 @@ export const TEMPLATES: Record<TemplateCode, TemplateDefinition> = {
       en: 'Notice from {{1}}:\n\n{{2}}\n\nFor queries or assistance, please contact {{3}} on phone.',
     },
   },
+  /**
+   * Dedicated template for administrative holiday and multi-day closures (ADR-040).
+   * In review with Meta; ships pending approval while interim cancellations use opd_appointment_cancelled.
+   */
+  blackout_cancellation: {
+    name: 'opd_blackout_cancellation',
+    category: 'UTILITY',
+    variables: ['doctorName', 'appointmentDate', 'reopenDate', 'reason'],
+    body: {
+      mr: 'डॉ. {{1}} यांच्यासोबत {{2}} रोजीची तुमची अपॉइंटमेंट रद्द करण्यात आली आहे, कारण {{4}} मुळे ओपीडी बंद राहील. सेवा {{3}} रोजी पुन्हा सुरू होईल.',
+      hi: 'डॉ. {{1}} के साथ {{2}} की आपकी अपॉइंटमेंट रद्द कर दी गई है, क्योंकि {{4}} के कारण ओपीडी बंद रहेगी। सेवाएं {{3}} को पुनः शुरू होंगी।',
+      en: 'Your appointment with Dr. {{1}} on {{2}} has been cancelled as OPD will remain closed due to {{4}}. Services will resume on {{3}}.',
+    },
+    urlButton: {
+      label: { mr: 'नवीन वेळ निवडा', hi: 'नया समय चुनें', en: 'Book a new time' },
+      path: '/book?doctor={{1}}',
+    },
+  },
 };
 
 /**
@@ -309,6 +328,7 @@ export const CRITICAL_TEMPLATES: ReadonlySet<TemplateCode> = new Set([
   // A patient travels to a closed hospital.
   'hospital_closure_notice',
   'general_announcement',
+  'blackout_cancellation',
 ]);
 
 export const isCritical = (code: TemplateCode): boolean => CRITICAL_TEMPLATES.has(code);
