@@ -33,6 +33,10 @@ export type MyPatient = {
   gender: string | null;
   status: 'admitted' | 'discharge_ready';
   admittedAt: Date | null;
+  arrivedAt?: Date | null;
+  urgency?: 'emergency' | 'same_day' | 'planned' | null;
+  isMlc?: boolean;
+  admissionNumber?: string | null;
   bed: { label: string; wardName: string } | null;
   lastEntryAt: Date | null;
 };
@@ -61,6 +65,10 @@ export async function listMyAdmittedPatients(args: {
           gender: patients.gender,
           status: admissions.status,
           admittedAt: admissions.admittedAt,
+          arrivedAt: admissions.arrivedAt,
+          urgency: admissions.urgency,
+          isMlc: admissions.isMlc,
+          admissionNumber: admissions.admissionNumber,
           bedLabel: beds.label,
           wardName: wards.name,
           lastEntryAt: sql<Date | null>`(select max(${careEntries.occurredAt}) from ${careEntries}
@@ -88,6 +96,10 @@ export async function listMyAdmittedPatients(args: {
           gender: row.gender,
           status: row.status as MyPatient['status'],
           admittedAt: row.admittedAt,
+          arrivedAt: row.arrivedAt,
+          urgency: row.urgency,
+          isMlc: Boolean(row.isMlc),
+          admissionNumber: row.admissionNumber,
           bed: row.bedLabel && row.wardName ? { label: row.bedLabel, wardName: row.wardName } : null,
           lastEntryAt: row.lastEntryAt ? new Date(row.lastEntryAt) : null,
         })),

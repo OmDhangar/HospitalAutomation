@@ -23,7 +23,16 @@ export type ShiftToIpdResult =
   | { ok: true; admissionId: string; patientName: string; created: boolean }
   | { ok: false; error: string };
 
-export async function shiftToIpdDynamic(args: { appointmentId: string }): Promise<ShiftToIpdResult> {
+export type ShiftToIpdActionArgs = {
+  appointmentId: string;
+  reason?: string | null;
+  urgency?: 'emergency' | 'same_day' | 'planned' | null;
+  advisedWardKind?: 'general' | 'special' | 'hdu' | 'icu' | null;
+  estimatedStayDays?: number | null;
+  receptionNotes?: string | null;
+};
+
+export async function shiftToIpdDynamic(args: ShiftToIpdActionArgs): Promise<ShiftToIpdResult> {
   try {
     const session = await requireWritableSession();
     if (!can(session.role, 'ipd.shift')) return { ok: false, error: 'Only a doctor can shift a patient to IPD' };
@@ -32,6 +41,11 @@ export async function shiftToIpdDynamic(args: { appointmentId: string }): Promis
       hospitalId: session.hospitalId,
       appointmentId: args.appointmentId,
       actorUserId: session.userId,
+      reason: args.reason,
+      urgency: args.urgency,
+      advisedWardKind: args.advisedWardKind,
+      estimatedStayDays: args.estimatedStayDays,
+      receptionNotes: args.receptionNotes,
     });
 
     if (result.appointmentStatus === 'CALLED' || result.appointmentStatus === 'IN_CONSULTATION') {

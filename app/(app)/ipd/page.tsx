@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { AutoRefresh } from '@/components/auto-refresh';
 import { Button, Card, CardHeader, EmptyState, cn } from '@/components/ui';
-import { BedIcon, ClockIcon } from '@/components/icons';
+import { AlertCircleIcon, BedIcon, ClockIcon } from '@/components/icons';
 import { BedGrid } from '@/components/ipd/bed-grid';
 import { requireSession } from '@/lib/auth/session';
 import { dayOfStay, sinceLabel } from '@/lib/domain/admission';
@@ -173,46 +173,107 @@ function AwaitingBed({
         </p>
       ) : null}
       <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {patients.map((patient) => (
-          <li key={patient.admissionId}>
-            <Card className="flex h-full flex-col">
-              <div className="flex-1 space-y-1 p-4">
-                <p className="truncate text-lg font-bold text-ink-900">{patient.patientName}</p>
-                <p className="text-sm text-ink-600">
-                  {[patient.age !== null ? String(patient.age) : null, patient.gender?.[0]?.toUpperCase()]
-                    .filter(Boolean)
-                    .join(' ')}
-                  {patient.age !== null || patient.gender ? ' · ' : ''}
-                  {patient.doctorName}
-                </p>
-                <p className="flex items-center gap-1.5 text-xs text-ink-500">
-                  <ClockIcon className="size-3.5" />
-                  Requested {sinceLabel(patient.requestedAt, now)}
-                </p>
-                {patient.reason ? <p className="text-sm text-ink-700">{patient.reason}</p> : null}
-              </div>
-              <div className="border-t border-ink-200 p-3">
-                {canAdmit ? (
-                  <Link
-                    href={`/ipd/admissions/${patient.admissionId}/assign${bedForAssign ? `?bed=${bedForAssign}` : ''}`}
-                    className="block"
-                  >
-                    <Button variant="primary" size="lg" className="w-full gap-2">
-                      <BedIcon className="size-5" />
-                      Assign bed
-                    </Button>
-                  </Link>
-                ) : (
-                  <Link href={`/ipd/admissions/${patient.admissionId}`} className="block">
-                    <Button size="lg" className="w-full">
-                      Open
-                    </Button>
-                  </Link>
-                )}
-              </div>
-            </Card>
-          </li>
-        ))}
+        {patients.map((patient) => {
+          const isEmergency = patient.urgency === 'emergency';
+          const isPlanned = patient.urgency === 'planned';
+
+          return (
+            <li key={patient.admissionId}>
+              <Card className={cn(
+                'flex h-full flex-col transition-all',
+                isEmergency && 'ring-2 ring-rose-500/50 bg-rose-50/20'
+              )}>
+                <div className="flex-1 space-y-2.5 p-4">
+                  {/* Top Bar: Name & Urgency Badge */}
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="truncate text-lg font-bold text-ink-900">{patient.patientName}</p>
+                    {isEmergency ? (
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-rose-100 px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider text-rose-800 ring-1 ring-rose-300 animate-pulse">
+                        <AlertCircleIcon className="size-3 text-rose-600" />
+                        Emergency
+                      </span>
+                    ) : isPlanned ? (
+                      <span className="inline-flex shrink-0 items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700 ring-1 ring-blue-200">
+                        Planned
+                      </span>
+                    ) : (
+                      <span className="inline-flex shrink-0 items-center rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200">
+                        Same-Day
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Demographics & Attending Doctor */}
+                  <p className="text-sm text-ink-600">
+                    {[patient.age !== null ? `${patient.age}y` : null, patient.gender?.[0]?.toUpperCase()]
+                      .filter(Boolean)
+                      .join(' ')}
+                    {patient.age !== null || patient.gender ? ' · ' : ''}
+                    Advised by <span className="font-medium text-ink-800">Dr. {patient.doctorName}</span>
+                  </p>
+
+                  {/* Advised Ward & Est. Stay pills */}
+                  <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                    <span className="inline-flex items-center rounded-md bg-ink-100 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-ink-700">
+                      Advised: {patient.advisedWardKind?.toUpperCase() ?? 'GENERAL'}
+                    </span>
+                    {patient.estimatedStayDays ? (
+                      <span className="inline-flex items-center rounded-md bg-ink-100/70 px-2 py-0.5 text-xs text-ink-600">
+                        ~{patient.estimatedStayDays}d stay
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {/* Diagnosis */}
+                  {patient.reason ? (
+                    <div className="rounded-lg bg-ink-50 px-2.5 py-1.5 text-xs text-ink-700">
+                      <span className="font-semibold text-ink-900">Diagnosis: </span>
+                      {patient.reason}
+                    </div>
+                  ) : null}
+
+                  {/* Reception / Nursing Notes */}
+                  {patient.receptionNotes ? (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-2.5 py-1.5 text-xs text-amber-900">
+                      <span className="font-semibold text-amber-950">Desk note: </span>
+                      {patient.receptionNotes}
+                    </div>
+                  ) : null}
+
+                  {/* Wait Time */}
+                  <p className="flex items-center gap-1.5 text-xs text-ink-500 pt-1">
+                    <ClockIcon className="size-3.5" />
+                    Waiting since {sinceLabel(patient.requestedAt, now)}
+                  </p>
+                </div>
+
+                <div className="border-t border-ink-200 p-3">
+                  {canAdmit ? (
+                    <Link
+                      href={`/ipd/admissions/${patient.admissionId}/assign${bedForAssign ? `?bed=${bedForAssign}` : ''}`}
+                      className="block"
+                    >
+                      <Button
+                        variant={isEmergency ? 'danger' : 'primary'}
+                        size="lg"
+                        className={cn('w-full gap-2', isEmergency && 'bg-rose-600 text-white hover:bg-rose-700')}
+                      >
+                        <BedIcon className="size-5" />
+                        Assign Bed & Intake
+                      </Button>
+                    </Link>
+                  ) : (
+                    <Link href={`/ipd/admissions/${patient.admissionId}`} className="block">
+                      <Button size="lg" className="w-full">
+                        Open
+                      </Button>
+                    </Link>
+                  )}
+                </div>
+              </Card>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

@@ -235,9 +235,21 @@ export async function syncAdmissionBillingInTx(
   // 1. Process any medication administrations for this admission that have not been linked to a care entry
   const unlinkedAdmins = await tx
     .select({
-      admin: ipdMedicationAdministrations,
-      order: ipdMedicationOrders,
-      medicine: medicines,
+      admin: {
+        id: ipdMedicationAdministrations.id,
+        actualTime: ipdMedicationAdministrations.actualTime,
+        recordedAt: ipdMedicationAdministrations.recordedAt,
+        nurseUserId: ipdMedicationAdministrations.nurseUserId,
+      },
+      order: {
+        patientSupplied: ipdMedicationOrders.patientSupplied,
+        medicineId: ipdMedicationOrders.medicineId,
+        medicineName: ipdMedicationOrders.medicineName,
+      },
+      medicine: {
+        name: medicines.name,
+        sellingPricePaise: medicines.sellingPricePaise,
+      },
     })
     .from(ipdMedicationAdministrations)
     .innerJoin(

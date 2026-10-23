@@ -10,7 +10,9 @@ import {
   careEntries,
   doctors,
   encounters,
+  patientContacts,
   patients,
+  users,
   wards,
 } from '@/lib/db/schema';
 import {
@@ -27,6 +29,9 @@ import { getEncounterInTx, openEncounterForAppointmentInTx, type EncounterRow } 
 import { recordDepositInTx } from '@/lib/services/patient-billing';
 import { resolvePatientInTx, type PatientInput } from '@/lib/services/patients';
 import { assignIpdNumberInTx } from '@/lib/services/ipd-number';
+import { createClinicalAlertInTx } from '@/lib/services/clinical-alerts';
+import { recordConsentInTx } from '@/lib/services/consents';
+import { nextDocumentNumberInTx } from '@/lib/services/document-numbers';
 
 /**
  * Admissions: Shift to IPD, the admission sheet, transfers, cancellation and
@@ -111,12 +116,18 @@ export type ShiftResult = {
  * second. Completing the OPD token is the caller's job, through the queue's
  * own applyQueueAction, so the queue state machine is never bypassed.
  */
-export async function shiftToIpd(args: {
+export type ShiftToIpdArgs = {
   hospitalId: string;
   appointmentId: string;
   actorUserId: string;
   reason?: string | null;
-}): Promise<ShiftResult> {
+  urgency?: 'emergency' | 'same_day' | 'planned' | null;
+  advisedWardKind?: 'general' | 'special' | 'hdu' | 'icu' | null;
+  estimatedStayDays?: number | null;
+  receptionNotes?: string | null;
+};
+
+export async function shiftToIpd(args: ShiftToIpdArgs): Promise<ShiftResult> {
   return withTenant(
     args.hospitalId,
     async (tx) => {
@@ -135,6 +146,10 @@ export async function shiftToIpd(args: {
           branchId: encounter.branchId,
           admittingDoctorId: encounter.attendingDoctorId,
           reason: tidyReason(args.reason),
+          urgency: args.urgency ?? 'same_day',
+          advisedWardKind: args.advisedWardKind ?? null,
+          estimatedStayDays: args.estimatedStayDays ?? null,
+          receptionNotes: args.receptionNotes?.trim() || null,
           requestedByUserId: args.actorUserId,
         })
         .onConflictDoNothing({
@@ -237,6 +252,7 @@ export type AdmissionExtras = {
   /** In paise; the caller must have checked `billing.collect`. */
   depositPaise?: number | null;
   depositMethod?: 'cash' | 'upi' | 'card' | 'bank' | 'other';
+  reference?: string | null;
 };
 
 /** A bed the patient may be put in: active, in an active ward, in their branch, free. */
@@ -282,6 +298,7 @@ async function writeExtrasInTx(
     encounter: args.encounter,
     amountPaise: args.extras.depositPaise,
     method: args.extras.depositMethod,
+    reference: args.extras.reference,
     actorUserId: args.actorUserId,
   });
   return deposit.id;
@@ -591,3 +608,435 @@ export async function setDischargeReady(args: {
     { clinical: true },
   );
 }
+
+/** Determines whether setting an arrival timestamp requires an audited backdate reason (>15m in the past). */
+export function shouldRequireBackdateReason(arrivedAt: Date, now: Date = new Date()): boolean {
+  const diffMs = now.getTime() - arrivedAt.getTime();
+  return diffMs > 15 * 60 * 1000;
+}
+
+/** Confirms physical arrival in the ward, starting the clinical clock and notifying the doctor. */
+export async function confirmWardArrival(args: {
+  hospitalId: string;
+  admissionId: string;
+  actorUserId: string;
+  arrivedAt?: Date | null;
+  backdateReason?: string | null;
+}): Promise<{ arrivedAt: Date; alertId: string | null }> {
+  return withTenant(
+    args.hospitalId,
+    async (tx) => {
+      const admission = await lockAdmissionInTx(tx, args.admissionId);
+      if (admission.status === 'cancelled') throw new AdmissionError('This admission was cancelled');
+
+      const now = new Date();
+      const effectiveArrivedAt = args.arrivedAt ?? now;
+
+      if (shouldRequireBackdateReason(effectiveArrivedAt, now)) {
+        if (!args.backdateReason?.trim()) {
+          throw new AdmissionError('Please provide a reason for backdating arrival time by more than 15 minutes.');
+        }
+        await audit(tx, admission, args.actorUserId, 'ipd.arrival_backdated', {
+          enteredAt: now,
+          arrivedAt: effectiveArrivedAt,
+          reason: args.backdateReason.trim(),
+        });
+      }
+
+      await tx
+        .update(admissions)
+        .set({
+          arrivedAt: effectiveArrivedAt,
+          arrivalBackdateReason: args.backdateReason?.trim() ?? null,
+          updatedAt: now,
+        })
+        .where(eq(admissions.id, admission.id));
+
+      // Resolve bed, ward, doctor, and patient details for alert
+      const [patient] = await tx.select({ name: patients.name }).from(patients).where(eq(patients.id, admission.patientId));
+      const [currentBed] = await tx
+        .select({ bedLabel: beds.label, wardName: wards.name })
+        .from(bedAssignments)
+        .innerJoin(beds, eq(beds.id, bedAssignments.bedId))
+        .innerJoin(wards, eq(wards.id, beds.wardId))
+        .where(and(eq(bedAssignments.admissionId, admission.id), isNull(bedAssignments.toAt)))
+        .limit(1);
+
+      const [doctor] = await tx
+        .select({ name: doctors.name, userId: doctors.userId })
+        .from(doctors)
+        .where(eq(doctors.id, admission.admittingDoctorId));
+
+      let alertId: string | null = null;
+      if (currentBed) {
+        alertId = await createClinicalAlertInTx(tx, {
+          hospitalId: admission.hospitalId,
+          branchId: admission.branchId,
+          type: 'patient_arrived_ward',
+          subjectType: 'admission',
+          subjectId: admission.id,
+          recipientUserId: doctor?.userId ?? null,
+          title: 'Patient Arrived at Ward',
+          message: `${patient?.name ?? 'Patient'} has reached ${currentBed.wardName}, Bed ${currentBed.bedLabel}.`,
+          metadata: {
+            admissionId: admission.id,
+            patientName: patient?.name ?? 'Patient',
+            ipdNumber: admission.ipdNumber,
+            bedLabel: currentBed.bedLabel,
+            wardName: currentBed.wardName,
+            urgency: admission.urgency ?? 'same_day',
+            isMlc: admission.isMlc,
+          },
+        });
+      }
+
+      await audit(tx, admission, args.actorUserId, 'ipd.ward_arrival_confirmed', {
+        arrivedAt: effectiveArrivedAt,
+        bedLabel: currentBed?.bedLabel ?? null,
+      });
+
+      return { arrivedAt: effectiveArrivedAt, alertId };
+    },
+    { clinical: true },
+  );
+}
+
+export type PatientIntakePayload = {
+  hospitalId: string;
+  branchId: string;
+  actorUserId: string;
+  mode: 'opd_prefilled' | 'direct';
+  admissionId?: string; // required if mode === 'opd_prefilled'
+  patientInput?: PatientInput; // for direct walk-in
+  doctorId: string;
+  bedId: string;
+  urgency?: 'emergency' | 'same_day' | 'planned';
+  reason?: string | null;
+  patientArrived?: boolean;
+  arrivedAt?: Date | null;
+  backdateReason?: string | null;
+  // Attendant details
+  attendant?: {
+    name: string;
+    relationship: string;
+    phoneE164: string;
+    address?: string | null;
+    isPrimaryEmergency?: boolean;
+    isFinancialGuarantor?: boolean;
+  } | null;
+  // Versioned consent
+  consent?: {
+    templateCode: string;
+    templateTitle: string;
+    templateBody: string;
+    status: 'attested_paper' | 'pending';
+    signatoryName?: string | null;
+    signatoryRelation?: string | null;
+    signatoryPhone?: string | null;
+    doctorExplainedId?: string | null;
+    witnessStaffUserId?: string | null;
+  } | null;
+  // MLC fields
+  mlc?: {
+    isMlc: boolean;
+    category?: 'rta' | 'assault' | 'poisoning' | 'snake_bite' | 'burns' | 'industrial' | 'hanging' | 'unnatural' | 'other';
+    narrative?: string | null;
+    policeStationName?: string | null;
+    policeIntimatedAt?: Date | null;
+    policeIntimationMode?: 'written_slip' | 'phone_call' | 'in_person_constable';
+    constableName?: string | null;
+    constableBuckleNo?: string | null;
+  } | null;
+  // Financial
+  financial?: {
+    payerType: 'self_pay' | 'insurance_tpa' | 'corporate' | 'ayushman';
+    depositAmountRupees?: number | null;
+    depositPaymentMode?: 'cash' | 'upi' | 'card' | 'bank_transfer' | 'cheque';
+    depositNotes?: string | null;
+    preAuthNumber?: string | null;
+    tpaName?: string | null;
+    waiverReason?: string | null;
+  } | null;
+};
+
+export type PatientIntakeResult = {
+  admissionId: string;
+  admissionNumber: string;
+  patientName: string;
+  receiptNumber: string | null;
+  mlcNumber: string | null;
+  isIntakeComplete: boolean;
+};
+
+/** Executes full forensic and clinical intake binding bed, consent, MLC, attendant, and deposit. */
+export async function executePatientIntake(args: PatientIntakePayload): Promise<PatientIntakeResult> {
+  return withTenant(
+    args.hospitalId,
+    async (tx) => {
+      const now = new Date();
+      let admissionId = args.admissionId;
+      let patientId: string;
+      let encounterId: string;
+
+      if (args.mode === 'opd_prefilled') {
+        if (!admissionId) throw new AdmissionError('Admission ID is required for OPD shift intake');
+        const adm = await lockAdmissionInTx(tx, admissionId);
+        patientId = adm.patientId;
+        encounterId = adm.encounterId;
+      } else {
+        // Direct casualty or walk-in admission
+        if (!args.patientInput) throw new AdmissionError('Patient details required for direct admission');
+        const resolvedPatient = await resolvePatientInTx(tx, {
+          hospitalId: args.hospitalId,
+          input: args.patientInput,
+          actorUserId: args.actorUserId,
+        });
+        patientId = resolvedPatient.id;
+
+        const [doctor] = await tx
+          .select({ id: doctors.id, active: doctors.active })
+          .from(doctors)
+          .where(eq(doctors.id, args.doctorId));
+        if (!doctor || !doctor.active) throw new AdmissionError('Choose an active doctor');
+
+        const [encounter] = await tx
+          .insert(encounters)
+          .values({
+            hospitalId: args.hospitalId,
+            branchId: args.branchId,
+            patientId,
+            attendingDoctorId: doctor.id,
+            origin: args.urgency === 'emergency' ? 'emergency' : 'direct',
+            stage: 'ipd',
+            status: 'open',
+          })
+          .returning({ id: encounters.id });
+        encounterId = encounter.id;
+
+        const [newAdm] = await tx
+          .insert(admissions)
+          .values({
+            hospitalId: args.hospitalId,
+            encounterId: encounter.id,
+            patientId,
+            branchId: args.branchId,
+            admittingDoctorId: doctor.id,
+            reason: tidyReason(args.reason),
+            urgency: args.urgency ?? 'same_day',
+            requestedByUserId: args.actorUserId,
+          })
+          .returning({ id: admissions.id });
+        admissionId = newAdm.id;
+      }
+
+      // 1. Gapless FY sequence for Admission Number (e.g. ADM/26-27/00042)
+      const nextAdm = await nextDocumentNumberInTx(tx, {
+        hospitalId: args.hospitalId,
+        kind: 'admission',
+        prefix: 'ADM',
+        padding: 5,
+      });
+
+      // 2. Assign bed atomically
+      const bed = await freeBedInTx(tx, { bedId: args.bedId, branchId: args.branchId });
+      await tx.insert(bedAssignments).values({
+        hospitalId: args.hospitalId,
+        admissionId,
+        bedId: bed.id,
+        fromAt: now,
+        assignedByUserId: args.actorUserId,
+      });
+      await tx.update(beds).set({ status: 'occupied' }).where(eq(beds.id, bed.id));
+
+      // 3. MLC handling & sequence
+      let mlcNumber: string | null = null;
+      if (args.mlc?.isMlc) {
+        const nextMlc = await nextDocumentNumberInTx(tx, {
+          hospitalId: args.hospitalId,
+          kind: 'mlc',
+          prefix: 'MLC',
+          padding: 5,
+        });
+        mlcNumber = nextMlc.formatted;
+      }
+
+      // 4. Physical ward arrival evaluation
+      const hasArrived = Boolean(args.patientArrived);
+      let effectiveArrivedAt: Date | null = null;
+      let arrivalBackdateReason: string | null = null;
+
+      if (hasArrived) {
+        effectiveArrivedAt = args.arrivedAt ?? now;
+        if (shouldRequireBackdateReason(effectiveArrivedAt, now)) {
+          if (!args.backdateReason?.trim()) {
+            throw new AdmissionError('Please provide a reason for backdating arrival time by more than 15 minutes.');
+          }
+          arrivalBackdateReason = args.backdateReason.trim();
+        }
+      }
+
+      // 5. Attendant record
+      if (args.attendant?.name) {
+        await tx.insert(patientContacts).values({
+          hospitalId: args.hospitalId,
+          patientId,
+          name: args.attendant.name.trim(),
+          relation: args.attendant.relationship.trim(),
+          phoneE164: args.attendant.phoneE164.trim(),
+          address: args.attendant.address?.trim() ?? null,
+          isEmergencyContact: args.attendant.isPrimaryEmergency ?? true,
+          isDecisionMaker: args.attendant.isFinancialGuarantor ?? false,
+        });
+      }
+
+      // 6. Versioned consent
+      let consentStatus: 'pending' | 'obtained' = 'pending';
+      if (args.consent?.templateCode) {
+        consentStatus = args.consent.status === 'attested_paper' ? 'obtained' : 'pending';
+        await recordConsentInTx(tx, {
+          hospitalId: args.hospitalId,
+          admissionId,
+          patientId,
+          templateCode: args.consent.templateCode,
+          templateTitle: args.consent.templateTitle,
+          templateBody: args.consent.templateBody,
+          status: consentStatus,
+          signatoryName: args.consent.signatoryName,
+          signatoryRelation: args.consent.signatoryRelation,
+          signatoryPhone: args.consent.signatoryPhone,
+          doctorExplainedId: args.consent.doctorExplainedId ?? args.doctorId,
+          witnessStaffUserId: args.actorUserId,
+          paperFormFiled: args.consent.status === 'attested_paper',
+        });
+      }
+
+      // 7. Advance deposit / financial intake
+      let receiptNumber: string | null = null;
+      if (args.financial?.depositAmountRupees && args.financial.depositAmountRupees > 0) {
+        const nextRec = await nextDocumentNumberInTx(tx, {
+          hospitalId: args.hospitalId,
+          kind: 'deposit_receipt',
+          prefix: 'REC',
+          padding: 5,
+        });
+        receiptNumber = nextRec.formatted;
+
+        const encounter = await getEncounterInTx(tx, encounterId, { lock: true });
+        await writeExtrasInTx(tx, {
+          encounter,
+          extras: {
+            depositPaise: Math.round(args.financial.depositAmountRupees * 100),
+            depositMethod:
+              args.financial.depositPaymentMode === 'bank_transfer'
+                ? 'bank'
+                : args.financial.depositPaymentMode === 'cheque'
+                  ? 'other'
+                  : (args.financial.depositPaymentMode ?? 'cash'),
+            reference: receiptNumber,
+          },
+          actorUserId: args.actorUserId,
+        });
+      }
+
+      // 8. Derive intake completeness:
+      // Required: bed, attendant, consent (attested), and if MLC: police intimation recorded.
+      const hasAttendant = Boolean(args.attendant?.name);
+      const hasConsent = consentStatus === 'obtained';
+      const hasMlcIntimation = !args.mlc?.isMlc || Boolean(args.mlc.policeIntimatedAt);
+      const isIntakeComplete = hasAttendant && hasConsent && hasMlcIntimation;
+
+      // 9. Update admission record
+      await tx
+        .update(admissions)
+        .set({
+          status: 'admitted',
+          admittedAt: now,
+          admittedByUserId: args.actorUserId,
+          admissionNumber: nextAdm.formatted,
+          urgency: args.urgency ?? 'same_day',
+          reason: tidyReason(args.reason),
+          arrivedAt: effectiveArrivedAt,
+          arrivalBackdateReason,
+          isMlc: args.mlc?.isMlc ?? false,
+          mlcNumber,
+          mlcCategory: args.mlc?.category ?? null,
+          mlcNarrative: args.mlc?.narrative ?? null,
+          policeStationName: args.mlc?.policeStationName ?? null,
+          policeIntimatedAt: args.mlc?.policeIntimatedAt ?? null,
+          policeIntimationMode: args.mlc?.policeIntimationMode ?? null,
+          constableName: args.mlc?.constableName ?? null,
+          constableBuckleNo: args.mlc?.constableBuckleNo ?? null,
+          isIntakeComplete,
+          updatedAt: now,
+        })
+        .where(eq(admissions.id, admissionId));
+
+      await assignIpdNumberInTx(tx, { hospitalId: args.hospitalId, admissionId });
+
+      // 10. Fire alerts
+      const [patientRow] = await tx.select({ name: patients.name }).from(patients).where(eq(patients.id, patientId));
+      const [bedRow] = await tx.select({ wardId: beds.wardId }).from(beds).where(eq(beds.id, bed.id));
+      const [wardRow] = bedRow ? await tx.select({ name: wards.name }).from(wards).where(eq(wards.id, bedRow.wardId)) : [];
+      const [doctorRow] = await tx.select({ userId: doctors.userId }).from(doctors).where(eq(doctors.id, args.doctorId));
+
+      if (hasArrived) {
+        await createClinicalAlertInTx(tx, {
+          hospitalId: args.hospitalId,
+          branchId: args.branchId,
+          type: 'patient_arrived_ward',
+          subjectType: 'admission',
+          subjectId: admissionId,
+          recipientUserId: doctorRow?.userId ?? null,
+          title: 'Patient Arrived at Ward',
+          message: `${patientRow?.name ?? 'Patient'} has reached ${wardRow?.name ?? 'Ward'}, Bed ${bed.label}.`,
+          metadata: {
+            admissionId,
+            patientName: patientRow?.name ?? 'Patient',
+            bedLabel: bed.label,
+            wardName: wardRow?.name ?? 'Ward',
+            urgency: args.urgency ?? 'same_day',
+            isMlc: args.mlc?.isMlc ?? false,
+          },
+        });
+      } else if (args.urgency === 'emergency') {
+        await createClinicalAlertInTx(tx, {
+          hospitalId: args.hospitalId,
+          branchId: args.branchId,
+          type: 'new_emergency_admission',
+          subjectType: 'admission',
+          subjectId: admissionId,
+          recipientUserId: doctorRow?.userId ?? null,
+          title: 'Emergency Admission',
+          message: `Emergency admission for ${patientRow?.name ?? 'Patient'} allocated Bed ${bed.label}.`,
+          metadata: {
+            admissionId,
+            patientName: patientRow?.name ?? 'Patient',
+            bedLabel: bed.label,
+            wardName: wardRow?.name ?? 'Ward',
+            urgency: 'emergency',
+            isMlc: args.mlc?.isMlc ?? false,
+          },
+        });
+      }
+
+      await audit(tx, { hospitalId: args.hospitalId, id: admissionId }, args.actorUserId, 'ipd.intake_completed', {
+        admissionNumber: nextAdm.formatted,
+        bedLabel: bed.label,
+        receiptNumber,
+        mlcNumber,
+        isIntakeComplete,
+      });
+
+      return {
+        admissionId,
+        admissionNumber: nextAdm.formatted,
+        patientName: patientRow?.name ?? 'Patient',
+        receiptNumber,
+        mlcNumber,
+        isIntakeComplete,
+      };
+    },
+    { clinical: true },
+  );
+}
+

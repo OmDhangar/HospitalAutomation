@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { withTenant } from '@/lib/db';
 import {
   admissions,
@@ -8,6 +8,9 @@ import {
   doctors,
   encounterPayers,
   encounters,
+  patientConsents,
+  patientContacts,
+  patientPayments,
   patients,
   wards,
 } from '@/lib/db/schema';
@@ -64,8 +67,27 @@ export type CensusPatient = {
   admittedAt: Date | null;
   dischargeReadyAt: Date | null;
   reason: string | null;
+  urgency?: 'emergency' | 'same_day' | 'planned' | null;
+  advisedWardKind?: 'general' | 'special' | 'hdu' | 'icu' | null;
+  estimatedStayDays?: number | null;
+  receptionNotes?: string | null;
   bed: { id: string; label: string; wardId: string; wardName: string } | null;
 };
+
+const urgencyRank: Record<string, number> = {
+  emergency: 0,
+  same_day: 1,
+  planned: 2,
+};
+
+export function sortAwaitingBedByUrgency(patients: CensusPatient[]): CensusPatient[] {
+  return [...patients].sort((a, b) => {
+    const rankA = urgencyRank[a.urgency ?? 'same_day'] ?? 1;
+    const rankB = urgencyRank[b.urgency ?? 'same_day'] ?? 1;
+    if (rankA !== rankB) return rankA - rankB;
+    return new Date(a.requestedAt).getTime() - new Date(b.requestedAt).getTime();
+  });
+}
 
 export type CensusBed = {
   id: string;
@@ -179,6 +201,10 @@ export async function getIpdCensus(args: {
             admittedAt: admissions.admittedAt,
             dischargeReadyAt: admissions.dischargeReadyAt,
             reason: admissions.reason,
+            urgency: admissions.urgency,
+            advisedWardKind: admissions.advisedWardKind,
+            estimatedStayDays: admissions.estimatedStayDays,
+            receptionNotes: admissions.receptionNotes,
           })
           .from(admissions)
           .innerJoin(patients, eq(patients.id, admissions.patientId))
@@ -259,7 +285,7 @@ export async function getIpdCensus(args: {
       });
 
       return {
-        awaitingBed: patientsList.filter((p) => p.status === 'awaiting_bed'),
+        awaitingBed: sortAwaitingBedByUrgency(patientsList.filter((p) => p.status === 'awaiting_bed')),
         dischargeReady: patientsList.filter((p) => p.status === 'discharge_ready'),
         inBed: patientsList.filter((p) => p.status !== 'awaiting_bed'),
         wards: wardsList,
@@ -318,6 +344,42 @@ export type AdmissionSummary = {
     preauthAmountPaise: number | null;
     approvedAmountPaise: number | null;
   } | null;
+  urgency?: 'emergency' | 'same_day' | 'planned' | null;
+  advisedWardKind?: 'general' | 'special' | 'hdu' | 'icu' | null;
+  estimatedStayDays?: number | null;
+  receptionNotes?: string | null;
+  qid?: string | null;
+  admissionNumber?: string | null;
+  arrivedAt?: Date | null;
+  isMlc?: boolean;
+  mlcNumber?: string | null;
+  mlcCategory?: string | null;
+  policeStationName?: string | null;
+  policeIntimatedAt?: Date | null;
+  policeIntimationMode?: string | null;
+  constableName?: string | null;
+  constableBuckleNo?: string | null;
+  attendant?: {
+    name: string;
+    relation: string;
+    phoneE164: string | null;
+    address?: string | null;
+  } | null;
+  deposit?: {
+    amountPaise: number;
+    receiptNumber?: string | null;
+    method: string;
+    paidAt: Date;
+  } | null;
+  consent?: {
+    templateId?: string | null;
+    status: string;
+    signatureType: string;
+    signerName: string;
+    signerRelationship: string;
+    obtainedAt: Date;
+    doctorConfirmed: boolean;
+  } | null;
 };
 
 /**
@@ -342,6 +404,7 @@ export async function getAdmissionSummary(
           ipdNumber: admissions.ipdNumber,
           patientName: patients.name,
           mrn: patients.mrn,
+          qid: patients.qid,
           age: patients.age,
           gender: patients.gender,
           phoneE164: patients.phoneE164,
@@ -350,11 +413,25 @@ export async function getAdmissionSummary(
           doctorName: doctors.name,
           doctorUserId: doctors.userId,
           reason: admissions.reason,
+          urgency: admissions.urgency,
+          advisedWardKind: admissions.advisedWardKind,
+          estimatedStayDays: admissions.estimatedStayDays,
+          receptionNotes: admissions.receptionNotes,
           requestedAt: admissions.requestedAt,
           admittedAt: admissions.admittedAt,
           dischargeReadyAt: admissions.dischargeReadyAt,
           dischargedAt: admissions.dischargedAt,
           vitalsFrequency: admissions.vitalsFrequency,
+          admissionNumber: admissions.admissionNumber,
+          arrivedAt: admissions.arrivedAt,
+          isMlc: admissions.isMlc,
+          mlcNumber: admissions.mlcNumber,
+          mlcCategory: admissions.mlcCategory,
+          policeStationName: admissions.policeStationName,
+          policeIntimatedAt: admissions.policeIntimatedAt,
+          policeIntimationMode: admissions.policeIntimationMode,
+          constableName: admissions.constableName,
+          constableBuckleNo: admissions.constableBuckleNo,
         })
         .from(admissions)
         .innerJoin(patients, eq(patients.id, admissions.patientId))
@@ -362,7 +439,7 @@ export async function getAdmissionSummary(
         .where(eq(admissions.id, admissionId));
       if (!row) return null;
 
-      const [[bed], [payer]] = await Promise.all([
+      const [[bed], [payer], [attendant], [deposit], [consent]] = await Promise.all([
         tx
           .select({ id: beds.id, label: beds.label, wardId: wards.id, wardName: wards.name })
           .from(bedAssignments)
@@ -381,8 +458,51 @@ export async function getAdmissionSummary(
           })
           .from(encounterPayers)
           .where(and(eq(encounterPayers.encounterId, row.encounterId), isNull(encounterPayers.voidedAt))),
+        tx
+          .select({
+            name: patientContacts.name,
+            relation: patientContacts.relation,
+            phoneE164: patientContacts.phoneE164,
+            address: patientContacts.address,
+          })
+          .from(patientContacts)
+          .where(eq(patientContacts.patientId, row.patientId))
+          .orderBy(desc(patientContacts.isEmergencyContact), desc(patientContacts.createdAt))
+          .limit(1),
+        tx
+          .select({
+            amountPaise: patientPayments.amountPaise,
+            receiptNumber: sql<string | null>`coalesce(${patientPayments.reference}, ${patientPayments.id}::text)`,
+            method: patientPayments.method,
+            paidAt: patientPayments.receivedAt,
+          })
+          .from(patientPayments)
+          .where(and(eq(patientPayments.encounterId, row.encounterId), isNull(patientPayments.voidedAt)))
+          .orderBy(desc(patientPayments.receivedAt))
+          .limit(1),
+        tx
+          .select({
+            templateId: patientConsents.templateId,
+            status: patientConsents.status,
+            signatureType: patientConsents.method,
+            signerName: patientConsents.signatoryNameSnapshot,
+            signerRelationship: patientConsents.signatoryRelationSnapshot,
+            obtainedAt: patientConsents.signedAt,
+            doctorConfirmed: sql<boolean>`${patientConsents.explainedByDoctorId} is not null`,
+          })
+          .from(patientConsents)
+          .where(eq(patientConsents.admissionId, admissionId))
+          .orderBy(desc(patientConsents.createdAt))
+          .limit(1),
       ]);
-      return { ...row, bed: bed ?? null, payer: payer ?? null };
+      return {
+        ...row,
+        bed: bed ?? null,
+        payer: payer ?? null,
+        attendant: attendant ?? null,
+        deposit: deposit ?? null,
+        consent: consent ?? null,
+      };
     },
     { clinical: true },
   );

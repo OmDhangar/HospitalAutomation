@@ -12,6 +12,7 @@ import { moduleAllows } from '@/lib/modules/registry';
 import { countEscalatedTests, myServicePoints } from '@/lib/services/test-orders';
 import { switchUserAction } from '../ward-device/actions';
 import { signOutAction } from './dashboard/actions';
+import { GlobalSurveillanceBanner } from '@/components/ipd/global-surveillance-banner';
 
 /**
  * The header reads the session cookie to display user info and role-based
@@ -67,6 +68,10 @@ async function AppHeader() {
 
   if (can(session.role, 'reports.view')) {
     navItems.push({ label: 'Reports', href: '/reports' });
+  }
+
+  if (can(session.role, 'hospital.configure') || session.role === 'receptionist') {
+    navItems.push({ label: 'WhatsApp Notices', href: '/whatsapp-notices' });
   }
 
   if (can(session.role, 'hospital.configure')) {
@@ -220,6 +225,8 @@ export default function AppLayout({ children }: LayoutProps<'/'>) {
         <Suspense fallback={null}>
           <SupportNotice />
         </Suspense>
+
+        <GlobalSurveillanceBanner />
 
         {/**
          * Responsive main container with tight padding on mobile (px-3.5 py-3.5)

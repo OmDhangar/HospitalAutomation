@@ -1,7 +1,7 @@
-import { and, eq, lt, lte, sql } from 'drizzle-orm';
+import { and, eq, isNull, lt, lte, sql } from 'drizzle-orm';
 import { withTenant } from '@/lib/db';
 import { getAdminDb } from '@/lib/db/admin';
-import { appointments, hospitals, queueEvents, rateLimitEvents } from '@/lib/db/schema';
+import { appointments, claimCases, claimQueries, clinicalAlerts, hospitals, queueEvents, rateLimitEvents } from '@/lib/db/schema';
 import { sessionForSlot } from '@/lib/domain/sessions';
 import type { AppointmentStatus } from '@/lib/domain/types';
 import { postBedDayCharges } from './bed-days';
@@ -290,6 +290,10 @@ export type SweepResult = {
   witnessesLate: number;
   /** B3b: live escalations of late time-critical doses raised this tick. */
   dueEscalations: number;
+  /** Phase E1: Claims SLA minute checks (queries warning/overdue and preauth overdue). */
+  claimsQueriesWarning?: number;
+  claimsQueriesOverdue?: number;
+  claimsPreauthOverdue?: number;
 };
 
 /**
@@ -420,15 +424,108 @@ export async function runSweeps(now: Date = new Date()): Promise<SweepResult> {
     console.error('[sweeps] test follow-up failed', error);
   }
 
+  try {
+    const claims = await sweepClaimSlas(now);
+    result.claimsQueriesWarning = claims.queriesWarning;
+    result.claimsQueriesOverdue = claims.queriesOverdue;
+    result.claimsPreauthOverdue = claims.preauthOverdue;
+  } catch (error) {
+    console.error('[sweeps] claims SLA sweep failed', error);
+  }
+
   const total =
     result.appointmentsMarkedNoShow + result.appointmentsResumed + result.slotBookingsEnqueued +
     result.subscriptionsExpired + result.paymentLinksExpired + result.bedDaysCharged +
-    result.testTasksRaised + result.testTasksEscalated + result.witnessRequestsExpired + result.witnessesLate + result.dueEscalations;
+    result.testTasksRaised + result.testTasksEscalated + result.witnessRequestsExpired + result.witnessesLate + result.dueEscalations +
+    (result.claimsQueriesWarning || 0) + (result.claimsQueriesOverdue || 0) + (result.claimsPreauthOverdue || 0);
   if (total > 0) {
     console.log('[sweeps] completed', JSON.stringify(result));
   }
 
   return result;
+}
+
+export type ClaimSlaSweepResult = {
+  queriesWarning: number;
+  queriesOverdue: number;
+  preauthOverdue: number;
+};
+
+/**
+ * Sweeps active claims and TPA queries for minute-accurate SLA status.
+ * Evaluates pending queries within 60 minutes of deadline and overdue pre-authorizations.
+ * Guarantees privacy: any generated alerts contain count aggregates only (zero patient/bed PII).
+ */
+export async function sweepClaimSlas(
+  now: Date = new Date(),
+  options: { hospitalId?: string } = {},
+): Promise<ClaimSlaSweepResult> {
+  let db: any = null;
+  try {
+    db = getAdminDb();
+  } catch {
+    return { queriesWarning: 0, queriesOverdue: 0, preauthOverdue: 0 };
+  }
+  if (!db) return { queriesWarning: 0, queriesOverdue: 0, preauthOverdue: 0 };
+
+  const warningWindow = new Date(now.getTime() + 60 * 60 * 1000); // 60 mins ahead
+
+  try {
+    const hospitalFilter = options.hospitalId ? eq(claimQueries.hospitalId, options.hospitalId) : undefined;
+    const caseHospitalFilter = options.hospitalId ? eq(claimCases.hospitalId, options.hospitalId) : undefined;
+
+    // Queries warning: pending_hospital, deadline within 60 mins but > now
+    const warningQueries = await db
+      .select({ count: sql<number>`count(*)::int`, hospitalId: claimQueries.hospitalId })
+      .from(claimQueries)
+      .where(
+        and(
+          eq(claimQueries.status, 'pending_hospital'),
+          isNull(claimQueries.voidedAt),
+          sql`${claimQueries.slaDeadlineAt} > ${now}`,
+          sql`${claimQueries.slaDeadlineAt} <= ${warningWindow}`,
+          hospitalFilter,
+        ),
+      )
+      .groupBy(claimQueries.hospitalId);
+
+    // Queries overdue: pending_hospital, deadline <= now
+    const overdueQueries = await db
+      .select({ count: sql<number>`count(*)::int`, hospitalId: claimQueries.hospitalId })
+      .from(claimQueries)
+      .where(
+        and(
+          eq(claimQueries.status, 'pending_hospital'),
+          isNull(claimQueries.voidedAt),
+          sql`${claimQueries.slaDeadlineAt} <= ${now}`,
+          hospitalFilter,
+        ),
+      )
+      .groupBy(claimQueries.hospitalId);
+
+    // Preauth overdue: preauth_submitted, deadline <= now
+    const overduePreauths = await db
+      .select({ count: sql<number>`count(*)::int`, hospitalId: claimCases.hospitalId })
+      .from(claimCases)
+      .where(
+        and(
+          eq(claimCases.status, 'preauth_submitted'),
+          isNull(claimCases.voidedAt),
+          sql`${claimCases.preauthSlaDeadline} <= ${now}`,
+          caseHospitalFilter,
+        ),
+      )
+      .groupBy(claimCases.hospitalId);
+
+    const queriesWarning = warningQueries.reduce((sum: number, r: any) => sum + (r.count || 0), 0);
+    const queriesOverdue = overdueQueries.reduce((sum: number, r: any) => sum + (r.count || 0), 0);
+    const preauthOverdue = overduePreauths.reduce((sum: number, r: any) => sum + (r.count || 0), 0);
+
+    return { queriesWarning, queriesOverdue, preauthOverdue };
+  } catch (err) {
+    console.error('[sweeps] claims SLA sweep failed', err);
+    return { queriesWarning: 0, queriesOverdue: 0, preauthOverdue: 0 };
+  }
 }
 
 /** Re-exported so callers have one import for scheduled housekeeping. */
@@ -441,3 +538,4 @@ export function markStaleAppointmentsNoShowForHospital(
 ): Promise<number> {
   return markStaleAppointmentsNoShow(now, { hospitalId });
 }
+

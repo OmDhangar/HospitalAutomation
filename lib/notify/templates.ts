@@ -9,7 +9,8 @@ export type TemplateCode =
   | 'queue_skipped'
   | 'appointment_cancelled'
   | 'doctor_delayed'
-  | 'owner_monthly_report';
+  | 'owner_monthly_report'
+  | 'hospital_closure_notice';
 
 /**
  * Meta approves templates per name *and* per language. Submit them all at once.
@@ -246,6 +247,18 @@ export const TEMPLATES: Record<TemplateCode, TemplateDefinition> = {
       en: 'Your hospital summary for {{1}} is ready. A total of {{2}} patients were seen. The median patient wait was {{3}} minutes, and {{4}} patients did not arrive after registering.',
     },
   },
+  /**
+   * Hospital closure notice sent to affected patients and recent active OPD patients.
+   */
+  hospital_closure_notice: {
+    name: 'opd_hospital_closure_notice',
+    variables: ['hospitalName', 'closureDate', 'reason', 'contactPhone'],
+    body: {
+      mr: 'रुग्णालय सूचना: {{1}} हे रुग्णालय {{2}} रोजी बंद राहील (कारण: {{3}}). अधिक माहितीसाठी कृपया {{4}} वर संपर्क साधा.',
+      hi: 'अस्पताल सूचना: {{1}} अस्पताल {{2}} को बंद रहेगा (कारण: {{3}})। अधिक जानकारी के लिए कृपया {{4}} पर संपर्क करें।',
+      en: 'Hospital Notice: {{1}} will be closed on {{2}} due to {{3}}. For assistance or rescheduling please contact {{4}} on phone.',
+    },
+  },
 };
 
 /**
@@ -272,6 +285,8 @@ export const CRITICAL_TEMPLATES: ReadonlySet<TemplateCode> = new Set([
   'queue_skipped',
   // A patient travels for an appointment that no longer exists.
   'appointment_cancelled',
+  // A patient travels to a closed hospital.
+  'hospital_closure_notice',
 ]);
 
 export const isCritical = (code: TemplateCode): boolean => CRITICAL_TEMPLATES.has(code);

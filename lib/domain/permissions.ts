@@ -205,6 +205,12 @@ const PERMISSIONS = {
   'patients.correct_identity': ['owner'],
   /** Merge duplicate patient records of this hospital, and undo a merge. */
   'patients.merge': ['owner'],
+
+  /** Claims & TPA Desk (0066) */
+  'claims.view': ['owner', 'receptionist', 'doctor', 'nurse'],
+  'claims.edit': ['owner', 'receptionist'],
+  'claims.packet': ['owner', 'receptionist', 'doctor'],
+  'claims.admin': ['owner'],
 } as const satisfies Record<string, readonly StaffRole[]>;
 
 export type Permission = keyof typeof PERMISSIONS;

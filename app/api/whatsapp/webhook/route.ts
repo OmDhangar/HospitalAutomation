@@ -1,7 +1,11 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { after, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/db/admin';
 import { notificationOutbox } from '@/lib/db/schema';
+import {
+  handleNoticeInboundOptOut,
+  processNoticeDeliveryStatus,
+} from '@/lib/notify/notice-worker';
 import { getProvider } from '@/lib/notify/provider';
 import {
   parseWebhook,
@@ -64,8 +68,23 @@ export async function POST(request: Request) {
       }
     }
 
-    // 2. Process inbound conversation logic
+    // 2. Process inbound conversation logic & notice opt-out checks
     for (const message of messages) {
+      try {
+        const [res] = await getAdminDb().execute<{ hospital_id: string | null }>(
+          sql`select public.resolve_whatsapp_number(${message.phoneNumberId}) as hospital_id`,
+        );
+        if (res?.hospital_id) {
+          await handleNoticeInboundOptOut({
+            hospitalId: res.hospital_id,
+            fromPhone: message.fromPhone,
+            text: message.text,
+          });
+        }
+      } catch (err) {
+        console.error('failed notice opt-out check', message.messageId, err);
+      }
+
       try {
         await handleInboundMessage(message);
       } catch (error) {
@@ -76,6 +95,15 @@ export async function POST(request: Request) {
 
     // 3. Reconcile delivery receipts
     for (const status of statuses) {
+      try {
+        await processNoticeDeliveryStatus({
+          providerMessageId: status.providerMessageId,
+          status: status.status,
+        });
+      } catch (err) {
+        console.error('notice delivery status update failed', status.providerMessageId, err);
+      }
+
       if (status.status !== 'delivered' && status.status !== 'read') continue;
       try {
         await getAdminDb()

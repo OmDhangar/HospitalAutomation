@@ -2,7 +2,8 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { requireWritableSession } from '@/lib/auth/session';
+import { requireSession, requireWritableSession } from '@/lib/auth/session';
+import { searchPatientsSmart, registerUnidentifiedPatient } from '@/lib/services/patient-search';
 import { parseDepositRupees, parsePayerInput } from '@/lib/domain/payer';
 import { can, type Permission } from '@/lib/domain/permissions';
 import { normalizeStaffPhone } from '@/lib/domain/phone';
@@ -10,11 +11,19 @@ import {
   AdmissionError,
   assignBed,
   cancelAdmission,
+  confirmWardArrival,
   createDirectAdmission,
+  executePatientIntake,
   setDischargeReady,
   transferBed,
   type AdmissionExtras,
+  type PatientIntakePayload,
 } from '@/lib/services/admissions';
+import {
+  acknowledgeClinicalAlert,
+  getActiveAlertsForUser,
+  sweepPendingAlerts,
+} from '@/lib/services/clinical-alerts';
 import { CareEntryError, undoCareEntry, voidCareEntry } from '@/lib/services/care-entries';
 import {
   UndoError,
@@ -1044,6 +1053,155 @@ export async function orderVitalsFrequencyAction(args: {
   revalidatePath(`/ipd/patients/${args.admissionId}`);
   return { ok: true };
 }
+
+/** Executes full unified intake (OPD prefilled or direct walkin) with bed, contacts, consent, MLC and deposit. */
+export async function executePatientIntakeAction(payload: Omit<PatientIntakePayload, 'hospitalId' | 'actorUserId'>) {
+  const session = await requireWritableSession();
+  if (!can(session.role, 'ipd.admit')) {
+    return { ok: false, error: 'Only authorized staff can admit patients' };
+  }
+  try {
+    const result = await executePatientIntake({
+      ...payload,
+      hospitalId: session.hospitalId,
+      branchId: payload.branchId || session.branchId || '',
+      actorUserId: session.userId,
+    });
+    revalidatePath('/ipd');
+    revalidatePath(`/ipd/admissions/${result.admissionId}`);
+    return { ok: true as const, data: result };
+  } catch (err: any) {
+    console.error('[executePatientIntakeAction:error]', err);
+    let cleanMessage = 'Failed to complete patient intake. Please check the form and try again.';
+    const raw = String(err?.message ?? '');
+
+    if (err instanceof AdmissionError || err?.name === 'AdmissionError') {
+      cleanMessage = err.message;
+    } else if (raw.includes('Choose an active doctor')) {
+      cleanMessage = 'Please select an active attending consultant.';
+    } else if (raw.includes('already occupied') || raw.includes('Every bed is taken')) {
+      cleanMessage = 'Selected bed is no longer available. Please pick another bed.';
+    } else if (raw.includes('backdate') || raw.includes('backdating')) {
+      cleanMessage = 'Arrival time was over 15 minutes in the past. Please enter a brief backdate reason.';
+    } else if (raw.includes('document_sequences') || raw.includes('Failed query')) {
+      cleanMessage = 'System could not assign admission document number. Please try again.';
+    } else if (err?.message && !raw.includes('insert into') && !raw.includes('select ') && !raw.includes('Failed query')) {
+      cleanMessage = err.message;
+    }
+
+    return { ok: false as const, error: cleanMessage };
+  }
+}
+
+/** Confirms physical ward arrival, starts the clinical clock and notifies the doctor. */
+export async function confirmWardArrivalAction(args: {
+  admissionId: string;
+  arrivedAt?: string | null;
+  backdateReason?: string | null;
+}) {
+  const session = await requireWritableSession();
+  if (!can(session.role, 'ipd.admit') && !can(session.role, 'queue.mutate')) {
+    return { ok: false, error: 'Not authorized to confirm ward arrival' };
+  }
+  try {
+    const result = await confirmWardArrival({
+      hospitalId: session.hospitalId,
+      admissionId: args.admissionId,
+      actorUserId: session.userId,
+      arrivedAt: args.arrivedAt ? new Date(args.arrivedAt) : null,
+      backdateReason: args.backdateReason,
+    });
+    revalidatePath('/ipd');
+    revalidatePath(`/ipd/admissions/${args.admissionId}`);
+    return { ok: true, data: result };
+  } catch (err: any) {
+    return { ok: false, error: err.message || 'Failed to confirm ward arrival' };
+  }
+}
+
+/** Acknowledges a clinical alert for surveillance. */
+export async function acknowledgeClinicalAlertAction(alertId: string) {
+  const session = await requireWritableSession();
+  try {
+    await acknowledgeClinicalAlert({
+      hospitalId: session.hospitalId,
+      alertId,
+      actorUserId: session.userId,
+    });
+    revalidatePath('/ipd');
+    revalidatePath('/dashboard');
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err.message || 'Failed to acknowledge alert' };
+  }
+}
+
+/** Fetches active/escalated clinical alerts for current user/role surveillance. */
+export async function getActiveClinicalAlertsAction() {
+  const session = await requireSession();
+  try {
+    const alerts = await getActiveAlertsForUser({
+      hospitalId: session.hospitalId,
+      userId: session.userId,
+      role: session.role,
+    });
+    return { ok: true, data: alerts };
+  } catch (err: any) {
+    return { ok: false, error: err.message || 'Failed to fetch clinical alerts' };
+  }
+}
+
+/** Sweeps pending clinical alerts and escalates those exceeding escalation window. */
+export async function sweepClinicalAlertsAction() {
+  const session = await requireWritableSession();
+  try {
+    const result = await sweepPendingAlerts(session.hospitalId);
+    return { ok: true, data: result };
+  } catch (err: any) {
+    return { ok: false, error: err.message || 'Failed to sweep clinical alerts' };
+  }
+}
+
+/** Predictive smart search across phone, QID, MRN, and patient name. */
+export async function searchPatientsSmartAction(query: string) {
+  const session = await requireSession();
+  try {
+    const results = await searchPatientsSmart({
+      hospitalId: session.hospitalId,
+      query,
+      actorUserId: session.userId,
+    });
+    return { ok: true, data: results };
+  } catch (err: any) {
+    return { ok: false, error: err.message || 'Search failed' };
+  }
+}
+
+/** Registers an unidentified patient in casualty/emergency with a temporary hospital MRN. */
+export async function registerUnidentifiedAction(args: {
+  gender?: string | null;
+  approxAge?: number | null;
+  descriptiveNote?: string | null;
+}) {
+  const session = await requireWritableSession();
+  if (!can(session.role, 'ipd.admit')) {
+    return { ok: false, error: 'Only authorized staff can register emergency patients' };
+  }
+  try {
+    const result = await registerUnidentifiedPatient({
+      hospitalId: session.hospitalId,
+      branchId: session.branchId || '',
+      gender: args.gender,
+      approxAge: args.approxAge,
+      descriptiveNote: args.descriptiveNote,
+      actorUserId: session.userId,
+    });
+    return { ok: true, data: result };
+  } catch (err: any) {
+    return { ok: false, error: err.message || 'Registration failed' };
+  }
+}
+
 
 
 
