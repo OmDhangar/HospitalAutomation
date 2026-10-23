@@ -123,7 +123,9 @@ export default async function WhatsAppNoticesPage() {
                       </span>
                     </td>
                     <td className="py-3 px-4 font-medium text-ink-700">
-                      {c.closureDate || '—'}
+                      {c.closureEndDate && c.closureEndDate !== c.closureDate
+                        ? `${c.closureDate} – ${c.closureEndDate}`
+                        : (c.closureDate || '—')}
                       {c.closureDuration ? (
                         <span className="block text-[10px] text-ink-400">
                           {c.closureDuration}

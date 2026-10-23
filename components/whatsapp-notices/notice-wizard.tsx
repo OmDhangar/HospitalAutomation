@@ -36,7 +36,9 @@ export function NoticeWizard({ hospitalId, hospitalName, defaultPhone }: NoticeW
   // Step 2: Details
   const [details, setDetails] = useState<NoticeDetailsData>({
     title: `Hospital Closure Notice - ${tomorrow.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}`,
+    isDateRange: false,
     closureDate: defaultDateStr,
+    closureEndDate: defaultDateStr,
     closureDuration: 'Full day',
     reason: 'unforeseen maintenance and repairs',
     rescheduleInstructions: 'Appointments will be rescheduled for the next available clinic day.',
@@ -65,6 +67,8 @@ export function NoticeWizard({ hospitalId, hospitalName, defaultPhone }: NoticeW
   const handleStep2Next = async () => {
     setErrorMessage(null);
     try {
+      const closureEndDate = details.isDateRange ? (details.closureEndDate || details.closureDate) : details.closureDate;
+
       // Create or update draft campaign
       const res = await fetch(`/api/hospitals/${hospitalId}/whatsapp-notices`, {
         method: 'POST',
@@ -73,6 +77,7 @@ export function NoticeWizard({ hospitalId, hospitalName, defaultPhone }: NoticeW
           noticeType,
           title: details.title,
           closureDate: details.closureDate,
+          closureEndDate,
           closureDuration: details.closureDuration,
           reason: details.reason,
           rescheduleInstructions: details.rescheduleInstructions,
@@ -87,7 +92,8 @@ export function NoticeWizard({ hospitalId, hospitalName, defaultPhone }: NoticeW
       }
 
       const data = await res.json();
-      setCampaignId(data.id);
+      const draftId = data.campaignId || data.id;
+      setCampaignId(draftId);
       setCurrentStep(3);
     } catch (err: any) {
       setErrorMessage(err.message || 'Error saving notice draft');
@@ -95,14 +101,47 @@ export function NoticeWizard({ hospitalId, hospitalName, defaultPhone }: NoticeW
   };
 
   const handleStep3Next = async () => {
-    if (!campaignId) return;
     setErrorMessage(null);
     setIsLoadingPreview(true);
-    setCurrentStep(4);
 
     try {
+      let activeCampaignId = campaignId;
+      const closureEndDate = details.isDateRange ? (details.closureEndDate || details.closureDate) : details.closureDate;
+
+      // If draft not yet created, create it now
+      if (!activeCampaignId) {
+        const draftRes = await fetch(`/api/hospitals/${hospitalId}/whatsapp-notices`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            noticeType,
+            title: details.title,
+            closureDate: details.closureDate,
+            closureEndDate,
+            closureDuration: details.closureDuration,
+            reason: details.reason,
+            rescheduleInstructions: details.rescheduleInstructions,
+            contactPhone: details.contactPhone,
+            templateCode: details.templateCode,
+          }),
+        });
+
+        if (!draftRes.ok) {
+          const err = await draftRes.json().catch(() => ({}));
+          throw new Error(err.error || 'Failed to save notice draft');
+        }
+
+        const draftData = await draftRes.json();
+        activeCampaignId = draftData.campaignId || draftData.id;
+        setCampaignId(activeCampaignId);
+      }
+
+      if (!activeCampaignId) {
+        throw new Error('Unable to create or locate notice campaign draft');
+      }
+
       // 1. Save mandatory list
-      const saveRes = await fetch(`/api/whatsapp-notices/${campaignId}/recipients/mandatory`, {
+      const saveRes = await fetch(`/api/whatsapp-notices/${activeCampaignId}/recipients/mandatory`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -120,8 +159,9 @@ export function NoticeWizard({ hospitalId, hospitalName, defaultPhone }: NoticeW
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          campaignId,
+          campaignId: activeCampaignId,
           closureDate: details.closureDate,
+          closureEndDate,
           mandatoryRecipients: recipientMode === 'recent_only' ? [] : mandatoryList,
         }),
       });
@@ -133,6 +173,7 @@ export function NoticeWizard({ hospitalId, hospitalName, defaultPhone }: NoticeW
 
       const prevResult: NoticeSelectionResult = await prevRes.json();
       setPreviewData(prevResult);
+      setCurrentStep(4);
     } catch (err: any) {
       setErrorMessage(err.message || 'Error generating preview');
     } finally {
@@ -247,6 +288,7 @@ export function NoticeWizard({ hospitalId, hospitalName, defaultPhone }: NoticeW
         <NoticeRecipientsStep
           hospitalId={hospitalId}
           closureDate={details.closureDate}
+          closureEndDate={details.isDateRange ? details.closureEndDate : details.closureDate}
           mode={recipientMode}
           onModeChange={setRecipientMode}
           mandatoryList={mandatoryList}
@@ -260,6 +302,7 @@ export function NoticeWizard({ hospitalId, hospitalName, defaultPhone }: NoticeW
         <NoticePreviewStep
           hospitalName={hospitalName}
           closureDate={details.closureDate}
+          closureEndDate={details.isDateRange ? details.closureEndDate : details.closureDate}
           previewData={previewData}
           isLoading={isLoadingPreview}
           isConfirming={isConfirming}

@@ -11,6 +11,7 @@ interface CampaignDetails {
   noticeType: string;
   status: 'draft' | 'scheduled' | 'processing' | 'completed' | 'partially_completed' | 'cancelled' | 'failed';
   closureDate: string | null;
+  closureEndDate: string | null;
   closureDuration: string | null;
   reason: string | null;
   rescheduleInstructions: string | null;
@@ -186,8 +187,11 @@ export function CampaignProgressView({
             </span>
           </div>
           <p className="text-xs text-ink-500 mt-0.5">
-            Notice Date: {campaign.closureDate || 'N/A'} · Template:{' '}
-            <span className="font-mono">{campaign.templateCode}</span> · Contact:{' '}
+            Notice Date:{' '}
+            {campaign.closureEndDate && campaign.closureEndDate !== campaign.closureDate
+              ? `${campaign.closureDate} to ${campaign.closureEndDate}`
+              : (campaign.closureDate || 'N/A')}{' '}
+            · Template: <span className="font-mono">{campaign.templateCode}</span> · Contact:{' '}
             <span className="font-mono">{campaign.contactPhone}</span>
           </p>
         </div>

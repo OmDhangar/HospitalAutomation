@@ -59,6 +59,7 @@ function assertCanManageNotices(actor: NoticeActor, targetHospitalId: string) {
 export async function loadHospitalCandidates(params: {
   hospitalId: string;
   closureDate?: string;
+  closureEndDate?: string;
 }): Promise<RecipientCandidate[]> {
   const db = getAdminDb();
 
@@ -80,7 +81,9 @@ export async function loadHospitalCandidates(params: {
       lastInboundAt: whatsappConversations.lastInboundAt,
       latestAppointmentAt: sql<Date | null>`max(${appointments.createdAt})`,
       hasAffectedAppointment: params.closureDate
-        ? sql<boolean>`bool_or(${appointments.serviceDate} = ${params.closureDate}::date and ${appointments.status} not in ('COMPLETED', 'CANCELLED', 'NO_SHOW', 'EXPIRED'))`
+        ? params.closureEndDate && params.closureEndDate !== params.closureDate
+          ? sql<boolean>`bool_or(${appointments.serviceDate} >= ${params.closureDate}::date and ${appointments.serviceDate} <= ${params.closureEndDate}::date and ${appointments.status} not in ('COMPLETED', 'CANCELLED', 'NO_SHOW', 'EXPIRED'))`
+          : sql<boolean>`bool_or(${appointments.serviceDate} = ${params.closureDate}::date and ${appointments.status} not in ('COMPLETED', 'CANCELLED', 'NO_SHOW', 'EXPIRED'))`
         : sql<boolean>`false`,
     })
     .from(patients)
@@ -153,6 +156,7 @@ export async function createNoticeCampaignDraft(params: {
   noticeType: NoticeType;
   title: string;
   closureDate?: string;
+  closureEndDate?: string;
   closureDuration?: string;
   reason?: string;
   rescheduleInstructions?: string;
@@ -172,6 +176,7 @@ export async function createNoticeCampaignDraft(params: {
       status: 'draft',
       title: params.title,
       closureDate: params.closureDate,
+      closureEndDate: params.closureEndDate || params.closureDate || null,
       closureDuration: params.closureDuration,
       reason: params.reason,
       rescheduleInstructions: params.rescheduleInstructions,
@@ -295,6 +300,7 @@ export async function previewNoticeSelection(params: {
   actor: NoticeActor;
   campaignId?: string;
   closureDate?: string;
+  closureEndDate?: string;
   mandatoryRecipients?: MandatoryInput[];
 }): Promise<NoticeSelectionResult> {
   assertCanManageNotices(params.actor, params.hospitalId);
@@ -304,10 +310,28 @@ export async function previewNoticeSelection(params: {
   // 1. Get capacity
   const capacity = await getAccountCapacity(params.hospitalId);
 
+  // If campaignId given and dates not provided, retrieve from campaign
+  let closureDate = params.closureDate;
+  let closureEndDate = params.closureEndDate;
+  if (params.campaignId && (!closureDate || !closureEndDate)) {
+    const [existing] = await db
+      .select({
+        closureDate: noticeCampaigns.closureDate,
+        closureEndDate: noticeCampaigns.closureEndDate,
+      })
+      .from(noticeCampaigns)
+      .where(eq(noticeCampaigns.id, params.campaignId));
+    if (existing) {
+      closureDate = closureDate ?? (existing.closureDate ?? undefined);
+      closureEndDate = closureEndDate ?? (existing.closureEndDate ?? undefined);
+    }
+  }
+
   // 2. Load candidates
   const candidates = await loadHospitalCandidates({
     hospitalId: params.hospitalId,
-    closureDate: params.closureDate,
+    closureDate,
+    closureEndDate,
   });
 
   // 3. Load mandatory recipients from campaign if campaignId provided
@@ -388,6 +412,7 @@ export async function confirmNoticeCampaign(params: {
     const candidates = await loadHospitalCandidates({
       hospitalId: params.hospitalId,
       closureDate: campaign.closureDate ?? undefined,
+      closureEndDate: campaign.closureEndDate ?? undefined,
     });
 
     const savedMandatory = await tx
@@ -492,6 +517,7 @@ export async function listNoticeCampaigns(params: {
       status: noticeCampaigns.status,
       title: noticeCampaigns.title,
       closureDate: noticeCampaigns.closureDate,
+      closureEndDate: noticeCampaigns.closureEndDate,
       closureDuration: noticeCampaigns.closureDuration,
       totalTargetRecipients: noticeCampaigns.totalTargetRecipients,
       sentCount: noticeCampaigns.sentCount,
@@ -528,6 +554,7 @@ export async function getNoticeCampaignDetails(params: {
       status: noticeCampaigns.status,
       title: noticeCampaigns.title,
       closureDate: noticeCampaigns.closureDate,
+      closureEndDate: noticeCampaigns.closureEndDate,
       closureDuration: noticeCampaigns.closureDuration,
       reason: noticeCampaigns.reason,
       rescheduleInstructions: noticeCampaigns.rescheduleInstructions,

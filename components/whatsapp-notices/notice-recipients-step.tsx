@@ -16,6 +16,7 @@ export type RecipientMode = 'both' | 'recent_only' | 'mandatory_only';
 interface NoticeRecipientsStepProps {
   hospitalId: string;
   closureDate: string;
+  closureEndDate?: string;
   mode: RecipientMode;
   onModeChange: (mode: RecipientMode) => void;
   mandatoryList: MandatoryItem[];
@@ -34,6 +35,7 @@ interface PatientSearchResult {
 export function NoticeRecipientsStep({
   hospitalId,
   closureDate,
+  closureEndDate,
   mode,
   onModeChange,
   mandatoryList,
@@ -55,6 +57,16 @@ export function NoticeRecipientsStep({
   const [previewStats, setPreviewStats] = useState<NoticeSelectionResult | null>(null);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleNextClick = async () => {
+    setIsSubmitting(true);
+    try {
+      await onNext();
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   // Fetch live preview calculation from backend
   const fetchPreview = useCallback(async () => {
@@ -66,6 +78,7 @@ export function NoticeRecipientsStep({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           closureDate: closureDate || undefined,
+          closureEndDate: closureEndDate || undefined,
           mandatoryRecipients: mode === 'recent_only' ? [] : mandatoryList,
         }),
       });
@@ -82,7 +95,7 @@ export function NoticeRecipientsStep({
     } finally {
       setIsLoadingPreview(false);
     }
-  }, [hospitalId, closureDate, mode, mandatoryList]);
+  }, [hospitalId, closureDate, closureEndDate, mode, mandatoryList]);
 
   // Update preview on changes
   useEffect(() => {
@@ -108,7 +121,7 @@ export function NoticeRecipientsStep({
         );
         if (res.ok) {
           const data = await res.json();
-          setSearchResults(data.patients || []);
+          setSearchResults(data.patients || data.results || []);
         }
       } catch {
         setSearchResults([]);
@@ -371,7 +384,7 @@ export function NoticeRecipientsStep({
               <div className="relative">
                 <Input
                   type="text"
-                  placeholder="Search by patient name or phone number..."
+                  placeholder="Search by patient name (similar names matched) or phone..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
@@ -382,7 +395,7 @@ export function NoticeRecipientsStep({
 
               {/* Search dropdown results */}
               {searchResults.length > 0 && (
-                <div className="max-h-48 overflow-y-auto rounded-lg border border-ink-200 bg-white shadow-sm divide-y divide-ink-100">
+                <div className="max-h-56 overflow-y-auto rounded-lg border border-ink-200 bg-white shadow-sm divide-y divide-ink-100">
                   {searchResults.map((patient) => {
                     const isAdded = mandatoryList.some(
                       (m) => m.phoneE164 === patient.phoneE164 || m.patientId === patient.id,
@@ -393,7 +406,18 @@ export function NoticeRecipientsStep({
                         className="flex items-center justify-between p-2.5 hover:bg-ink-50 transition-colors"
                       >
                         <div className="min-w-0 pr-2">
-                          <p className="text-sm font-medium text-ink-900 truncate">{patient.name}</p>
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-medium text-ink-900 truncate">{patient.name}</p>
+                            {patient.whatsappOptInAt ? (
+                              <span className="inline-flex items-center px-1.5 py-0.2 text-[10px] font-medium rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                Consented
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-1.5 py-0.2 text-[10px] font-medium rounded bg-amber-50 text-amber-700 border border-amber-200">
+                                No Opt-In
+                              </span>
+                            )}
+                          </div>
                           <p className="text-xs text-ink-500">{maskPhone(patient.phoneE164)}</p>
                         </div>
                         <Button
@@ -508,13 +532,14 @@ export function NoticeRecipientsStep({
         </Button>
         <Button
           variant="primary"
-          onClick={onNext}
+          onClick={handleNextClick}
+          isLoading={isSubmitting}
           disabled={
             hasTooManyMandatory ||
             (mode === 'mandatory_only' && mandatoryList.length === 0) ||
-            isLoadingPreview
+            isSubmitting
           }
-          className="min-w-36"
+          className="min-w-36 font-semibold"
         >
           Preview Final Recipients →
         </Button>

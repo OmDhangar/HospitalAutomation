@@ -4645,6 +4645,7 @@ export const noticeCampaigns = pgTable(
     status: text('status').$type<CampaignStatus>().notNull().default('draft'),
     title: text('title').notNull(),
     closureDate: date('closure_date'),
+    closureEndDate: date('closure_end_date'),
     closureDuration: text('closure_duration'),
     reason: text('reason'),
     rescheduleInstructions: text('reschedule_instructions'),

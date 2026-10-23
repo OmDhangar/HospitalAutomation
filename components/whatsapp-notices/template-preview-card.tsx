@@ -6,18 +6,32 @@ import { Card } from '@/components/ui';
 export function TemplatePreviewCard({
   hospitalName,
   closureDate,
+  closureEndDate,
   reason,
   contactPhone,
   templateCode,
 }: {
   hospitalName: string;
   closureDate?: string;
+  closureEndDate?: string;
   reason?: string;
   contactPhone?: string;
   templateCode: string;
 }) {
   const displayHospital = hospitalName || 'Hospital';
-  const displayDate = closureDate || 'DD-MM-YYYY';
+
+  const formatSingleDate = (d?: string) => {
+    if (!d) return 'DD-MM-YYYY';
+    const parsed = new Date(d);
+    if (isNaN(parsed.getTime())) return d;
+    return parsed.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  };
+
+  const isRange = Boolean(closureEndDate && closureEndDate !== closureDate);
+  const displayDate = isRange
+    ? `${formatSingleDate(closureDate)} to ${formatSingleDate(closureEndDate)}`
+    : formatSingleDate(closureDate);
+
   const displayReason = reason || 'unforeseen circumstances';
   const displayContact = contactPhone || '+91 98765 43210';
 

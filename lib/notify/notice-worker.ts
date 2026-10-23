@@ -155,6 +155,7 @@ export async function drainNoticeCampaignOutbox(
         templateVariables: noticeCampaigns.templateVariables,
         contactPhone: noticeCampaigns.contactPhone,
         closureDate: noticeCampaigns.closureDate,
+        closureEndDate: noticeCampaigns.closureEndDate,
         reason: noticeCampaigns.reason,
         phoneNumberId: whatsappNumbers.phoneNumberId,
         patientLocale: patients.locale,
@@ -227,9 +228,15 @@ export async function drainNoticeCampaignOutbox(
 
     let variables: string[];
     if (templateCode === 'hospital_closure_notice') {
+      const dateText =
+        templateVarsObj.closureDateText ??
+        (row.closureEndDate && row.closureEndDate !== row.closureDate
+          ? `${row.closureDate} to ${row.closureEndDate}`
+          : (row.closureDate ?? ''));
+
       variables = [
         String(templateVarsObj.hospitalName ?? row.hospitalName),
-        String(templateVarsObj.closureDate ?? row.closureDate ?? ''),
+        String(dateText),
         String(templateVarsObj.reason ?? row.reason ?? 'unforeseen circumstance'),
         String(templateVarsObj.contactPhone ?? row.contactPhone ?? ''),
       ];

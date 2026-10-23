@@ -13,6 +13,7 @@ const createNoticeSchema = z.object({
   noticeType: z.enum(['hospital_closure', 'doctor_schedule_change', 'appointment_change']),
   title: z.string().min(1).max(200),
   closureDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  closureEndDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   closureDuration: z.string().max(100).optional(),
   reason: z.string().max(500).optional(),
   rescheduleInstructions: z.string().max(500).optional(),
@@ -86,6 +87,7 @@ export async function POST(
       noticeType: parsed.data.noticeType as NoticeType,
       title: parsed.data.title,
       closureDate: parsed.data.closureDate,
+      closureEndDate: parsed.data.closureEndDate,
       closureDuration: parsed.data.closureDuration,
       reason: parsed.data.reason,
       rescheduleInstructions: parsed.data.rescheduleInstructions,
@@ -94,7 +96,10 @@ export async function POST(
       templateVariables: parsed.data.templateVariables,
     });
 
-    return NextResponse.json(result, { status: 201 });
+    return NextResponse.json({
+      campaignId: result.campaignId,
+      id: result.campaignId,
+    }, { status: 201 });
   } catch (error) {
     if (error && typeof error === 'object' && 'digest' in error) throw error;
     if (error instanceof NoticeAuthError) {

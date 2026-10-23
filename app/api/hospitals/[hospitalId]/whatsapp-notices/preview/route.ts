@@ -9,6 +9,7 @@ import {
 const previewSchema = z.object({
   campaignId: z.string().uuid().optional(),
   closureDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  closureEndDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   mandatoryRecipients: z
     .array(
       z.object({
@@ -51,6 +52,7 @@ export async function POST(
       },
       campaignId: parsed.data.campaignId,
       closureDate: parsed.data.closureDate,
+      closureEndDate: parsed.data.closureEndDate,
       mandatoryRecipients: parsed.data.mandatoryRecipients,
     });
 

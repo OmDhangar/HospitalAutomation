@@ -8,6 +8,7 @@ import type { NoticeSelectionResult, SelectedRecipient } from '@/lib/domain/noti
 interface NoticePreviewStepProps {
   hospitalName: string;
   closureDate: string;
+  closureEndDate?: string;
   previewData: NoticeSelectionResult | null;
   isLoading: boolean;
   isConfirming: boolean;
@@ -20,6 +21,7 @@ const PAGE_SIZE = 15;
 export function NoticePreviewStep({
   hospitalName,
   closureDate,
+  closureEndDate,
   previewData,
   isLoading,
   isConfirming,
@@ -90,6 +92,9 @@ export function NoticePreviewStep({
         <h2 className="text-lg font-bold text-ink-900">Step 4 — Review Recipient Selection</h2>
         <p className="mt-1 text-sm text-ink-600">
           Carefully review the recipients and capacity allocation before dispatching. Messages will be sent through the hospital&apos;s verified WhatsApp Cloud API.
+        </p>
+        <p className="mt-1 text-xs font-semibold text-brand-700">
+          📅 Closure Scope: {closureEndDate && closureEndDate !== closureDate ? `${closureDate} to ${closureEndDate}` : closureDate}
         </p>
       </div>
 

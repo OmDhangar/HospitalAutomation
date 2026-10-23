@@ -1,5 +1,8 @@
 -- 0068_whatsapp_notices.sql — Hospital WhatsApp Notices, priority-based recipient selection, capacity reservations, opt-out suppression, and webhook deduplication.
 
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE EXTENSION IF NOT EXISTS fuzzystrmatch;
+
 CREATE TABLE IF NOT EXISTS notice_campaigns (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   hospital_id UUID NOT NULL REFERENCES hospitals(id) ON DELETE CASCADE,
@@ -7,6 +10,7 @@ CREATE TABLE IF NOT EXISTS notice_campaigns (
   status TEXT NOT NULL DEFAULT 'draft',
   title TEXT NOT NULL,
   closure_date DATE,
+  closure_end_date DATE,
   closure_duration TEXT,
   reason TEXT,
   reschedule_instructions TEXT,
