@@ -655,4 +655,18 @@ the print shows DRAFT; the doctor signs from the banner; the print is clean.
 **Verified:** typecheck; 924 unit tests; 17 integration tests across `opd-hours.integration.test.ts` (7), `queue.integration.test.ts` (4), `booking.integration.test.ts` (6), `components/__tests__/opd-stop-control.test.tsx` (4); scratch DB rehearsal via `verify-migrations.mts create/drop`.
 **Not applied to production:** 0070 is for the owner to apply (`npm run db:migrate:plan` first).
 
+**Holiday Shutdown & Multi-Day Blackout Engine (24 Oct 2026), migration 0071 (ADR-040):**
+- **Schema & Isolation:** `blackout_periods` table (dates, reopen date, scope, internal and public reasons, revocation metadata) with strict PostgreSQL RLS policies (`tenant_isolation`, `read_only_write`, `read_only_delete`).
+- **Unified OPD Closure Resolver:** Single source of truth `resolveOpdClosureInTx` / `resolveOpdClosure` in `lib/services/opd-hours.ts` consolidating blackout checks (ordering by `end_date DESC, created_at DESC`) and same-day Stop OPD checks with deterministic scope precedence (`doctorId` -> `branchId` -> hospital-wide).
+- **Execution & Disruption Engine:** `lib/services/blackout.ts` with `previewBlackoutDisruption`, `createBlackoutPeriodAndNotify`, and `cancelBlackoutPeriod`. Multi-doctor today lock serializes deterministically (`doctorIds.sort()` via `lockDoctorDay`). State-machine cancellations (`canCancel`) update status atomically, audit transitions in `queue_events`, void draft consultation bill lines (`void_reason: 'blackout'`), and queue WhatsApp cancellation notices.
+- **Intake Gates:** Unified `OpdClosedError` enforced across `createWalkIn`, `bookScheduledSlot`, `getDoctorBookingDetails`, `getDoctorSlotsForDate`, and dashboard actions. Emergency walk-ins bypass closure.
+- **WhatsApp Inbound Bot:** Contextual replies explaining future blackout closures with reopen date and public reason, today's multi-day closures, and same-day stops (offering tomorrow's slot booking link for slot-accepting doctors or directing to tomorrow's live queue).
+- **Worker Canary Protection:** Administrative blackout cancellations excluded from monthly canary message ratio (`ne(notificationOutbox.milestone, 'appointment_cancelled:blackout')`).
+- **Admin UI:** `<HolidaysAndBlackoutsManager />` in Settings > Scheduling with active blackouts table, impact preview step, blackout creation, and revocation modal.
+- **Dashboard Button Lifecycle:** Stop OPD button in `OpdStopControl` rendered only after `sessionStarted === true`.
+
+**Verified:** `npm run typecheck` (0 errors); unit & integration tests 100% green across `blackout.test.ts` (3), `opd-stop-control.test.tsx` (5), `opd-hours.integration.test.ts` (8), `blackout.integration.test.ts` (6), `queue.integration.test.ts` (31), `booking.integration.test.ts` (23), `templates.test.ts` (11), `worker.test.ts` (1), and `holidays-manager.test.tsx` (3).
+**Applied locally:** 0071 applied via `npm run db:migrate`.
+
+
 
