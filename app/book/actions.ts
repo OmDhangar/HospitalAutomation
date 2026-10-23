@@ -4,6 +4,7 @@ import { normalizeIndianPhone } from '@/lib/domain/phone';
 import { isLocale, type Locale } from '@/lib/i18n/patient';
 import { clientIp, consumeThrottle, ipRules } from '@/lib/security/throttle';
 import { bookScheduledSlot, BookingError } from '@/lib/services/web-booking';
+import { OpdClosedError } from '@/lib/domain/queue';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -15,6 +16,9 @@ const bookSlotSchema = z.object({
   phone: z.string().trim().min(10, 'Valid phone number is required'),
   slotDatetimeIso: z.string().datetime(),
   locale: z.string().optional(),
+  isEmergency: z.coerce.boolean().optional(),
+  emergencyReason: z.string().trim().optional(),
+  emergencyNotes: z.string().trim().max(500).optional(),
 });
 
 export type BookSlotResult =
@@ -27,10 +31,13 @@ export type BookSlotResult =
     doctorName: string;
     patientName: string;
     patientAge?: number | null;
+    isEmergency?: boolean;
+    emergencyReason?: string | null;
   }
   | {
     ok: false;
     error: string;
+    opdClosedAt?: string;
   };
 
 export async function submitSlotBooking(formData: FormData): Promise<BookSlotResult> {
@@ -42,6 +49,9 @@ export async function submitSlotBooking(formData: FormData): Promise<BookSlotRes
     phone: formData.get('phone'),
     slotDatetimeIso: formData.get('slotDatetimeIso'),
     locale: formData.get('locale'),
+    isEmergency: formData.get('isEmergency') === 'true',
+    emergencyReason: formData.get('emergencyReason') || undefined,
+    emergencyNotes: formData.get('emergencyNotes') || undefined,
   });
 
   if (!parsed.success) {
@@ -87,6 +97,9 @@ export async function submitSlotBooking(formData: FormData): Promise<BookSlotRes
       phoneE164,
       slotDatetimeIso: parsed.data.slotDatetimeIso,
       locale,
+      isEmergency: parsed.data.isEmergency,
+      emergencyReason: parsed.data.emergencyReason,
+      emergencyNotes: parsed.data.emergencyNotes,
     });
 
     return {
@@ -97,11 +110,20 @@ export async function submitSlotBooking(formData: FormData): Promise<BookSlotRes
       doctorName: result.doctorName,
       patientName: result.patientName,
       patientAge: result.patientAge,
+      isEmergency: result.isEmergency,
+      emergencyReason: result.emergencyReason,
     };
   } catch (err) {
     // Only a refusal written for patients is shown to one. Anything else is
     // logged and answered in general: a raw database error names tables and
     // constraints, and this page is open to anyone.
+    if (err instanceof OpdClosedError) {
+      return {
+        ok: false,
+        error: err.message,
+        opdClosedAt: err.stoppedAt.toISOString(),
+      };
+    }
     if (err instanceof BookingError) return { ok: false, error: err.message };
     console.error('Failed to book slot:', err);
     return { ok: false, error: 'Unable to book this slot. Please try another slot.' };

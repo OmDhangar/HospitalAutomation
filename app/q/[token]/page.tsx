@@ -78,6 +78,26 @@ export default async function PatientQueuePage({
         <Message title={s.resumeDone} hint={s.resumeDoneHint} tone="done" />
       ) : null}
 
+      {view.isEmergency ? (
+        <div className="rounded-2xl border-2 border-red-500 bg-red-50 p-4 text-red-950 shadow-sm animate-in fade-in">
+          <div className="flex items-center gap-2 font-bold text-red-700 text-sm uppercase tracking-wide">
+            <span className="flex size-2.5 rounded-full bg-red-600 animate-ping" />
+            <span>🚨 Emergency Priority Booking</span>
+          </div>
+          {view.emergencyReason ? (
+            <div className="mt-2 text-sm font-semibold text-red-900">
+              Reason: <span className="rounded-md bg-red-100 px-2 py-0.5 text-red-800">{view.emergencyReason}</span>
+            </div>
+          ) : null}
+          {view.emergencyNotes ? (
+            <p className="mt-1 text-xs text-red-700 italic">Notes: &ldquo;{view.emergencyNotes}&rdquo;</p>
+          ) : null}
+          <p className="mt-2 text-xs text-red-600">
+            Please report directly to the clinic reception or emergency desk immediately upon arrival so staff can assist you without delay.
+          </p>
+        </div>
+      ) : null}
+
       {view.status === 'CONFIRMED' && view.sessionKind === 'slot' ? (
         // A booked evening slot: a time, not a place in a line that has not formed yet.
         <Message title={s.slotBooked} hint={s.slotBookedHint} tone="done" />

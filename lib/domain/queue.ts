@@ -17,6 +17,21 @@ export class QueueTransitionError extends Error {
 }
 
 /**
+ * Thrown *only* by the OPD intake gates (createWalkIn, bookScheduledSlot,
+ * getDoctorSlotsForDate) when today's OPD intake has been stopped.
+ *
+ * This is NEVER thrown by advanceQueue or applyQueueAction: patients who
+ * were already issued tokens or booked before the stop continue to move
+ * through the queue normally until completion.
+ */
+export class OpdClosedError extends Error {
+  constructor(public readonly stoppedAt: Date, message?: string) {
+    super(message ?? 'OPD has been closed for today');
+    this.name = 'OpdClosedError';
+  }
+}
+
+/**
  * The full appointment state machine.
  *
  * Note there is no RECALLED state: recalling a skipped patient returns them to

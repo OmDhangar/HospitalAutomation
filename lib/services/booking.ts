@@ -27,6 +27,7 @@ import { getProvider, type InteractiveButton, type ListRow } from '@/lib/notify/
 import { listDoctors } from './hospital';
 import { CapacityError } from './capacity';
 import { createWalkIn, estimateForNewJoiner, getPublicQueueView, getQueueSnapshot } from './queue';
+import { OpdClosedError } from '@/lib/domain/queue';
 import { getPlanAccess } from './subscriptions';
 import { getDoctorSlotsForDate } from './scheduling';
 import { bookScheduledSlot, BookingError } from './web-booking';
@@ -986,6 +987,26 @@ export async function handleInboundMessage(
           confirmationSentInChat: true,
         });
       } catch (error) {
+        if (error instanceof OpdClosedError) {
+          const sent = await provider.sendText({
+            phoneNumberId: inbound.phoneNumberId,
+            toPhoneE164: phoneE164,
+            body: 'The hospital has closed OPD for today. Please try again tomorrow.',
+          });
+          await withTenant(hospitalId, (tx) =>
+            tx.insert(notificationOutbox).values({
+              hospitalId,
+              milestone: 'conversation:opd_closed',
+              templateCode: 'conversation',
+              locale,
+              payload: { doctorId: doctor.id, reason: 'opd_closed' },
+              status: 'sent',
+              providerMessageId: sent.providerMessageId,
+              sentAt: new Date(),
+            }),
+          );
+          break;
+        }
         if (!(error instanceof CapacityError)) throw error;
         // Not open yet, or full: say so in the chat (free), and issue nothing.
         const opensAt = error.opensAt ? formatTimeIn('Asia/Kolkata', error.opensAt) : null;
@@ -1200,6 +1221,26 @@ export async function handleInboundMessage(
           confirmationSentInChat: true,
         });
       } catch (error) {
+        if (error instanceof OpdClosedError) {
+          const sent = await provider.sendText({
+            phoneNumberId: inbound.phoneNumberId,
+            toPhoneE164: phoneE164,
+            body: 'The hospital has closed OPD for today. Please try again tomorrow.',
+          });
+          await withTenant(hospitalId, (tx) =>
+            tx.insert(notificationOutbox).values({
+              hospitalId,
+              milestone: 'conversation:opd_closed',
+              templateCode: 'conversation',
+              locale,
+              payload: { doctorId: doctor.id, reason: 'opd_closed' },
+              status: 'sent',
+              providerMessageId: sent.providerMessageId,
+              sentAt: new Date(),
+            }),
+          );
+          break;
+        }
         if (!(error instanceof BookingError)) throw error;
         // The slot went between showing the list and the tap. Send the booking
         // page rather than silence, so the patient can pick another time.

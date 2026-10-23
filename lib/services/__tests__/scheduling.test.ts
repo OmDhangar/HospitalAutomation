@@ -71,4 +71,23 @@ describe('Doctor Appointment Scheduling Engine', () => {
     expect(breakSlots.length).toBe(2);
     expect(breakSlots.map((s) => s.timeFormatted)).toEqual(['1:00 PM', '1:30 PM']);
   });
+
+  it('15. filters slots at or after opd_stopped_at cutoff', () => {
+    const rawSlots = generateRawSlots({
+      startTime: '09:00',
+      endTime: '17:00',
+      slotMinutes: 60,
+    });
+    // Cutoff at 14:00 (14 * 60 = 840 mins)
+    const stopMinutes = 14 * 60;
+    const activeSlots = rawSlots.filter((s) => s.startMinutes < stopMinutes);
+    expect(activeSlots.length).toBe(5);
+    expect(activeSlots.map((s) => s.time24)).toEqual([
+      '09:00',
+      '10:00',
+      '11:00',
+      '12:00',
+      '13:00',
+    ]);
+  });
 });

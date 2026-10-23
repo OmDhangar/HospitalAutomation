@@ -18,6 +18,8 @@ import { markStaleAppointmentsNoShowForHospital } from '@/lib/services/sweeps';
 import { makeNoPhonePlaceholder } from '@/lib/domain/phone';
 import { serviceDateIn } from '@/lib/domain/time';
 import { insertFixturePatient } from '@/lib/test/patient-fixture';
+import { OpdClosedError } from '@/lib/domain/queue';
+import { stopOpdForDoctor } from '@/lib/services/opd-hours';
 
 const adminUrl = process.env.DATABASE_ADMIN_URL;
 const enabled = Boolean(adminUrl && process.env.DATABASE_URL);
@@ -30,6 +32,7 @@ describe.skipIf(!enabled)('queue engine', () => {
   let hospitalId: string;
   let branchId: string;
   let doctorId: string;
+  let userId: string;
 
   const walkIn = (n: number) =>
     createWalkIn({
@@ -44,6 +47,11 @@ describe.skipIf(!enabled)('queue engine', () => {
     hospitalId = uuid();
     branchId = uuid();
     doctorId = uuid();
+    userId = uuid();
+    await admin`
+      insert into users (id, email, password_hash, name)
+      values (${userId}, ${'doc-' + userId.slice(0, 8) + '@test.com'}, 'hash', 'Test User')
+    `;
     await admin`
       insert into hospitals (id, name, slug)
       values (${hospitalId}, 'Test Hospital', ${'t-' + hospitalId.slice(0, 12)})
@@ -577,4 +585,137 @@ describe.skipIf(!enabled)('queue engine', () => {
       expect(snapshot.rows[1].appointmentId).toBe(first.appointment.id);
     });
   });
+
+  describe('OPD stop gates (cases 8-11)', () => {
+    it('8. createWalkIn throws OpdClosedError when OPD is stopped today', async () => {
+      const now = new Date('2026-10-23T10:00:00+05:30');
+      const today = serviceDateIn(TZ, now);
+
+      await stopOpdForDoctor({
+        hospitalId,
+        doctorId,
+        serviceDate: today,
+        stopAt: now,
+        actorUserId: userId,
+        now,
+      });
+
+      await expect(
+        createWalkIn({
+          hospitalId,
+          branchId,
+          doctorId,
+          timezone: TZ,
+          patient: { phoneE164: '+919900000010', name: 'Patient 10' },
+          now,
+        }),
+      ).rejects.toThrow(OpdClosedError);
+    });
+
+    it('9. createWalkIn succeeds when isEmergency: true despite OPD stop', async () => {
+      const now = new Date('2026-10-23T10:00:00+05:30');
+      const today = serviceDateIn(TZ, now);
+
+      await stopOpdForDoctor({
+        hospitalId,
+        doctorId,
+        serviceDate: today,
+        stopAt: now,
+        actorUserId: userId,
+        now,
+      });
+
+      const res = await createWalkIn({
+        hospitalId,
+        branchId,
+        doctorId,
+        timezone: TZ,
+        patient: { phoneE164: '+919900000077', name: 'Emergency After Stop' },
+        isEmergency: true,
+        now,
+      });
+
+      expect(res.appointment).toBeDefined();
+      expect(res.appointment.isEmergency).toBe(true);
+    });
+
+    it('10. createWalkIn succeeds when stopAt is in the future', async () => {
+      const now = new Date('2026-10-23T10:00:00+05:30');
+      const today = serviceDateIn(TZ, now);
+      const inTwoHours = new Date('2026-10-23T12:00:00+05:30');
+
+      await stopOpdForDoctor({
+        hospitalId,
+        doctorId,
+        serviceDate: today,
+        stopAt: inTwoHours,
+        actorUserId: userId,
+        now,
+      });
+
+      const res = await createWalkIn({
+        hospitalId,
+        branchId,
+        doctorId,
+        timezone: TZ,
+        patient: { phoneE164: '+919900000012', name: 'Patient 12' },
+        now,
+      });
+      expect(res.appointment).toBeDefined();
+    });
+
+    it('11. advanceQueue continues moving WAITING -> CALLED for existing patients after OPD stop', async () => {
+      const baseNow = new Date('2026-10-23T10:00:00+05:30');
+      // 1. Patients join before stop
+      const p1 = await createWalkIn({
+        hospitalId,
+        branchId,
+        doctorId,
+        timezone: TZ,
+        patient: { phoneE164: '+919900000001', name: 'Patient 1' },
+        now: baseNow,
+      });
+      const p2 = await createWalkIn({
+        hospitalId,
+        branchId,
+        doctorId,
+        timezone: TZ,
+        patient: { phoneE164: '+919900000002', name: 'Patient 2' },
+        now: baseNow,
+      });
+
+      // 2. Stop OPD
+      const stopNow = new Date('2026-10-23T11:00:00+05:30');
+      const today = serviceDateIn(TZ, stopNow);
+      await stopOpdForDoctor({
+        hospitalId,
+        doctorId,
+        serviceDate: today,
+        stopAt: stopNow,
+        actorUserId: userId,
+        now: stopNow,
+      });
+
+      // 3. advanceQueue must still work! Existing queue is served.
+      const adv1 = await advanceQueue({
+        hospitalId,
+        doctorId,
+        timezone: TZ,
+        now: stopNow,
+      });
+      const call1 = adv1.transitions.find((t) => t.action === 'call');
+      expect(call1?.appointmentId).toBe(p1.appointment.id);
+      expect(call1?.to).toBe('CALLED');
+
+      const adv2 = await advanceQueue({
+        hospitalId,
+        doctorId,
+        timezone: TZ,
+      });
+      const call2 = adv2.transitions.find((t) => t.action === 'call');
+      expect(call2?.appointmentId).toBe(p2.appointment.id);
+      expect(call2?.to).toBe('CALLED');
+    });
+  });
 });
+

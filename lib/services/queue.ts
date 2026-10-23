@@ -38,6 +38,7 @@ import {
   priorityRank,
   projectedCallNumber,
   tokenLabel,
+  OpdClosedError,
 } from '@/lib/domain/queue';
 import { isMockPhone } from '@/lib/domain/phone';
 import { formatTimeIn, serviceDateIn } from '@/lib/domain/time';
@@ -45,6 +46,7 @@ import type { AppointmentStatus, QueueAction, QueueContext, QueueEntry } from '@
 import { generatePublicToken } from '@/lib/security/tokens';
 import { allocateTokenInTx, getDayCapacityInTx } from './capacity';
 import { lockDoctorDay } from './doctor-day';
+import { getOpdStopStatusInTx } from './opd-hours';
 import { resolvePatientInTx, type PatientInput } from './patients';
 import { resolveScheduledStartInTx } from './scheduling';
 
@@ -83,6 +85,9 @@ export type QueueRow = {
   priority: number;
   /** True if patient was admitted as an emergency. */
   isEmergency?: boolean;
+  emergencyReason?: string | null;
+  emergencyNotes?: string | null;
+  emergencyHandledAt?: Date | null;
   patientName: string;
   patientAge?: number | null;
   patientPhone?: string | null;
@@ -312,6 +317,9 @@ async function loadDayAppointments(
       status: appointments.status,
       priority: appointments.priority,
       isEmergency: appointments.isEmergency,
+      emergencyReason: appointments.emergencyReason,
+      emergencyNotes: appointments.emergencyNotes,
+      emergencyHandledAt: appointments.emergencyHandledAt,
       enqueuedAt: appointments.enqueuedAt,
       calledAt: appointments.calledAt,
       createdAt: appointments.createdAt,
@@ -550,6 +558,16 @@ export async function createWalkIn(args: {
       : 'walk_in';
   return withTenant(args.hospitalId, async (tx) => {
     const t0 = performance.now();
+    const stop = await getOpdStopStatusInTx(tx, {
+      hospitalId: args.hospitalId,
+      doctorId: args.doctorId,
+      serviceDate,
+      now,
+    });
+    if (stop.isStopped && !isEmergency) {
+      throw new OpdClosedError(stop.stoppedAt!);
+    }
+
     // A no-phone placeholder never opts in: nothing is ever sent to it.
     const optedIn = (args.whatsappOptIn ?? true) && !isMockPhone(args.patient.phoneE164);
     // The patient first, then the doctor's day: the lock order every booking path keeps.
@@ -735,6 +753,10 @@ export async function createWalkIn(args: {
       callNumber: null,
       quotaPool: row.appt_quota_pool,
       sessionKind: 'queue',
+      emergencyReason: null,
+      emergencyNotes: null,
+      emergencyHandledAt: null,
+      emergencyHandledByUserId: null,
       createdAt: new Date(row.appt_created_at),
       updatedAt: new Date(row.appt_updated_at),
     };
@@ -1189,6 +1211,30 @@ export async function setEmergency(args: {
       prioritySeq,
       changed,
     };
+  });
+}
+
+/**
+ * Acknowledges or dismisses the emergency banner for an appointment.
+ * Sets emergencyHandledAt and records the staff user who triaged/handled it.
+ */
+export async function markEmergencyHandled(args: {
+  hospitalId: string;
+  appointmentId: string;
+  actorUserId?: string | null;
+  now?: Date;
+}): Promise<{ ok: boolean }> {
+  const now = args.now ?? new Date();
+  return withTenant(args.hospitalId, async (tx) => {
+    await tx
+      .update(appointments)
+      .set({
+        emergencyHandledAt: now,
+        emergencyHandledByUserId: args.actorUserId ?? null,
+        updatedAt: now,
+      })
+      .where(eq(appointments.id, args.appointmentId));
+    return { ok: true };
   });
 }
 
@@ -1773,6 +1819,9 @@ const toQueueRow = (row: Awaited<ReturnType<typeof loadDayAppointments>>[number]
   status: row.status,
   priority: row.priority,
   isEmergency: Boolean(row.isEmergency),
+  emergencyReason: row.emergencyReason,
+  emergencyNotes: row.emergencyNotes,
+  emergencyHandledAt: row.emergencyHandledAt,
   patientName: row.patientName,
   patientAge: row.patientAge,
   patientPhone: row.patientPhone,
@@ -1866,6 +1915,9 @@ export type PublicQueueView = {
   locale: 'mr' | 'hi' | 'en';
   lastUpdatedAt: Date;
   expired: boolean;
+  isEmergency?: boolean;
+  emergencyReason?: string | null;
+  emergencyNotes?: string | null;
 };
 
 /**
@@ -1897,6 +1949,9 @@ export async function getPublicQueueView(
         expiresAt: appointments.publicTokenExpiresAt,
         pausedAt: appointments.pausedAt,
         resumeAt: appointments.resumeAt,
+        isEmergency: appointments.isEmergency,
+        emergencyReason: appointments.emergencyReason,
+        emergencyNotes: appointments.emergencyNotes,
         patientName: patients.name,
         patientLocale: patients.locale,
         doctorName: doctors.name,
@@ -1982,6 +2037,9 @@ export async function getPublicQueueView(
       locale: appointment.patientLocale ?? 'en',
       lastUpdatedAt: now,
       expired,
+      isEmergency: Boolean(appointment.isEmergency),
+      emergencyReason: appointment.emergencyReason ?? null,
+      emergencyNotes: appointment.emergencyNotes ?? null,
       eta: resolvedEta && resolvedEta.state !== 'not_started' ? resolvedEta : null,
       etaState: resolvedEta?.state ?? null,
     };

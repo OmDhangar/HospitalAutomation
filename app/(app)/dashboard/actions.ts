@@ -11,6 +11,8 @@ import {
 import { parseRupeesToPaise, type PaymentStatus } from '@/lib/domain/patient-billing';
 import { can } from '@/lib/domain/permissions';
 import { normalizeStaffPhone } from '@/lib/domain/phone';
+import { OpdClosedError } from '@/lib/domain/queue';
+import { formatTimeIn } from '@/lib/domain/time';
 import type { QueueAction } from '@/lib/domain/types';
 import { canMutateQueue, logout } from '@/lib/services/auth';
 import { EncounterError } from '@/lib/services/encounters';
@@ -29,6 +31,7 @@ import {
   resumeAppointment,
   setDoctorPaused,
   setEmergency,
+  markEmergencyHandled,
   setPriority,
   startSession,
 } from '@/lib/services/queue';
@@ -106,6 +109,7 @@ export async function addWalkInDynamic(args: {
   error?: string;
   warning?: string;
   quotaReached?: boolean;
+  opdClosedAt?: string;
   /** The live queue has closed for today: offer these slots instead. */
   freeSlots?: FreeSlot[];
 }> {
@@ -192,6 +196,14 @@ export async function addWalkInDynamic(args: {
 
     return { ok: true, tokenNumber: appt.tokenNumber, isEmergency: Boolean(args.isEmergency), warning };
   } catch (err: unknown) {
+    if (err instanceof OpdClosedError) {
+      const formatTime = formatTimeIn(timezone, err.stoppedAt);
+      return {
+        ok: false,
+        error: `OPD is closed for today (stopped at ${formatTime}). Emergency patients can still be admitted.`,
+        opdClosedAt: err.stoppedAt.toISOString(),
+      };
+    }
     // After a split day's live queue closes, a walk-in takes a free evening slot.
     const queueClosed = err instanceof CapacityError && err.code === 'QUEUE_CLOSED' && hospitalId !== null;
     return {
@@ -217,7 +229,10 @@ export async function bookSlotWalkInDynamic(args: {
   name: string;
   age?: number | null;
   phone: string;
-}): Promise<{ ok: true; tokenLabel: string; slotTime: string } | { ok: false; error: string }> {
+}): Promise<
+  | { ok: true; tokenLabel: string; slotTime: string }
+  | { ok: false; error: string; opdClosedAt?: string }
+> {
   try {
     const session = await authorize();
     const name = args.name.trim();
@@ -237,6 +252,13 @@ export async function bookSlotWalkInDynamic(args: {
     revalidatePath('/dashboard');
     return { ok: true, tokenLabel: booked.tokenLabel, slotTime: booked.slotTimeFormatted };
   } catch (err: unknown) {
+    if (err instanceof OpdClosedError) {
+      return {
+        ok: false,
+        error: 'OPD is closed for today. Emergency patients can still be admitted.',
+        opdClosedAt: err.stoppedAt.toISOString(),
+      };
+    }
     return {
       ok: false,
       error: err instanceof BookingError || err instanceof Error ? err.message : 'Could not book the slot',
@@ -386,6 +408,24 @@ export async function setEmergencyDynamic(args: {
     return { ok: true, isEmergency: res.isEmergency };
   } catch (err: unknown) {
     return { ok: false, error: err instanceof Error ? err.message : 'Failed to update emergency status' };
+  }
+}
+
+export async function markEmergencyHandledDynamic(args: {
+  appointmentId: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const session = await authorize();
+    await markEmergencyHandled({
+      hospitalId: session.hospitalId,
+      appointmentId: args.appointmentId,
+      actorUserId: session.userId,
+    });
+    notifyQueueMovement(session.hospitalId);
+    revalidatePath('/dashboard');
+    return { ok: true };
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to mark emergency handled' };
   }
 }
 
