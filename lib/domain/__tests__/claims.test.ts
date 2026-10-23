@@ -137,24 +137,42 @@ describe('Claims Domain State Machine & Clocks', () => {
     ).toThrow(InvalidClaimTransitionError);
   });
 
-  it('enforces terminal immutability for settled and partially_settled claims', () => {
-    expect(isTerminalClaimStatus('settled')).toBe(true);
-    expect(isTerminalClaimStatus('partially_settled')).toBe(true);
+  it('enforces that closed_cancelled is terminal and partial settlements do not lock the claim', () => {
+    expect(isTerminalClaimStatus('closed_cancelled')).toBe(true);
+    expect(isTerminalClaimStatus('settled')).toBe(false);
+    expect(isTerminalClaimStatus('partially_settled')).toBe(false);
     expect(isTerminalClaimStatus('draft')).toBe(false);
 
+    // Closed / cancelled claims cannot transition further
     expect(() =>
       validateClaimTransition({
-        currentStatus: 'settled',
-        targetStatus: 'closed_cancelled',
+        currentStatus: 'closed_cancelled',
+        targetStatus: 'draft',
       })
     ).toThrow(ImmutableSettledClaimError);
 
+    // Partially settled claims are not permanently frozen: can transition to settled or appeal
+    expect(() =>
+      validateClaimTransition({
+        currentStatus: 'partially_settled',
+        targetStatus: 'settled',
+      })
+    ).not.toThrow();
+
+    expect(() =>
+      validateClaimTransition({
+        currentStatus: 'partially_settled',
+        targetStatus: 'appeal_in_progress',
+      })
+    ).not.toThrow();
+
+    // Partially settled claims cannot hop back to draft
     expect(() =>
       validateClaimTransition({
         currentStatus: 'partially_settled',
         targetStatus: 'draft',
       })
-    ).toThrow(ImmutableSettledClaimError);
+    ).toThrow(InvalidClaimTransitionError);
   });
 
   it('calculates minute-based SLA deadlines accurately', () => {

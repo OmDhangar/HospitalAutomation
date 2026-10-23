@@ -69,6 +69,7 @@ const STATUS_CONFIG: Record<ClaimStatus, { label: string; bg: string; text: stri
   reimbursement_docs_gathering: { label: 'Gathering Documents', bg: 'bg-amber-100', text: 'text-amber-800' },
   reimbursement_dossier_ready: { label: 'Dossier Ready', bg: 'bg-teal-100', text: 'text-teal-800' },
   dossier_handed_to_patient: { label: 'Dossier Handed to Patient', bg: 'bg-blue-100', text: 'text-blue-800' },
+  closed_settled: { label: 'Closed (Settled)', bg: 'bg-emerald-100', text: 'text-emerald-800' },
   closed_cancelled: { label: 'Closed / Cancelled', bg: 'bg-ink-200', text: 'text-ink-600' },
 };
 

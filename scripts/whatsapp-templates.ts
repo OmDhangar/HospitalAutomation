@@ -49,6 +49,7 @@ const EXAMPLES: Record<string, string[]> = {
   opd_appointment_cancelled: ['Mehta', '24 Sep'],
   opd_doctor_delayed: ['Mehta', '30', '11:15 AM'],
   opd_owner_monthly_report: ['2026-08', '4820', '18', '96'],
+  opd_hospital_closure_notice: ['City Care Hospital', '24 Oct', 'maintenance work', '+919876543210'],
 };
 
 /**

@@ -148,7 +148,7 @@ CREATE TABLE IF NOT EXISTS claim_document_records (
     'discharge_summary', 'final_itemized_bill', 'lab_radiology_reports', 'indoor_case_sheet',
     'tpa_approval_letter', 'query_reply_packet', 'settlement_voucher', 'other'
   )),
-  linked_discharge_summary_id UUID REFERENCES discharge_summaries(id) ON DELETE SET NULL,
+  linked_discharge_summary_id UUID,
   linked_test_order_id UUID,
   is_paper_filed BOOLEAN NOT NULL DEFAULT FALSE,
   paper_filed_at TIMESTAMPTZ,

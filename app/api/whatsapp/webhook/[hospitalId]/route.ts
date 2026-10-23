@@ -2,6 +2,10 @@ import { eq } from 'drizzle-orm';
 import { after, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/db/admin';
 import { notificationOutbox } from '@/lib/db/schema';
+import {
+  handleNoticeInboundOptOut,
+  processNoticeDeliveryStatus,
+} from '@/lib/notify/notice-worker';
 import { getProvider } from '@/lib/notify/provider';
 import { parseWebhook, verifyWebhookSignature } from '@/lib/notify/webhook';
 import { handleInboundMessage } from '@/lib/services/booking';
@@ -97,6 +101,16 @@ export async function POST(request: Request, ctx: RouteContext<'/api/whatsapp/we
 
     for (const message of messages) {
       try {
+        await handleNoticeInboundOptOut({
+          hospitalId,
+          fromPhone: message.fromPhone,
+          text: message.text,
+        });
+      } catch (error) {
+        console.error('notice inbound opt-out failed', message.messageId, error);
+      }
+
+      try {
         /**
          * Routed by phone_number_id through `resolve_whatsapp_number`, exactly
          * as the shared route does — and then required to resolve to the
@@ -113,6 +127,15 @@ export async function POST(request: Request, ctx: RouteContext<'/api/whatsapp/we
     }
 
     for (const status of statuses) {
+      try {
+        await processNoticeDeliveryStatus({
+          providerMessageId: status.providerMessageId,
+          status: status.status,
+        });
+      } catch (error) {
+        console.error('notice status update failed', status.providerMessageId, error);
+      }
+
       if (status.status !== 'delivered' && status.status !== 'read') continue;
       try {
         await getAdminDb()

@@ -30,7 +30,17 @@ import type { AllergyCategory, AllergySeverity, AllergySource, DrugClass } from 
 import type { MedRecDecision, MedRecPhase, MedRecSource } from '@/lib/domain/medrec';
 import type { Complaint, GeneralExam, NoteKind, NoteVitals, SystemicExam } from '@/lib/domain/notes';
 import type { SummaryContent } from '@/lib/domain/discharge-summary';
-import type { ClaimStatus } from '@/lib/domain/claims';
+import type {
+  AuthDecision,
+  AuthType,
+  ClaimStatus,
+  DeadlineType,
+  PaymentMethod,
+  QueryStatus,
+  RemittanceType,
+  SettlementStatus,
+  SubmissionStage,
+} from '@/lib/domain/claims';
 import { APPOINTMENT_STATUSES, QUEUE_ACTIONS } from '@/lib/domain/types';
 
 /**
@@ -4298,6 +4308,16 @@ export const claimCases = pgTable(
     tpaClaimNumber: text('tpa_claim_number'),
     corporateEmpId: text('corporate_emp_id'),
     status: text('status').$type<ClaimStatus>().notNull().default('draft'),
+    interruptedStage: text('interrupted_stage').$type<ClaimStatus>(),
+    settlementStatus: text('settlement_status').$type<SettlementStatus>().notNull().default('unsettled'),
+    legacyReconciliationRequired: boolean('legacy_reconciliation_required').notNull().default(false),
+
+    currentAuthorizedLimitPaise: bigint('current_authorized_limit_paise', { mode: 'number' }).notNull().default(0),
+    adjudicatedPayablePaise: bigint('adjudicated_payable_paise', { mode: 'number' }),
+    totalRemittedPaise: bigint('total_remitted_paise', { mode: 'number' }).notNull().default(0),
+    totalTdsWithheldPaise: bigint('total_tds_withheld_paise', { mode: 'number' }).notNull().default(0),
+    totalDeductionsPaise: bigint('total_deductions_paise', { mode: 'number' }).notNull().default(0),
+    totalDisputedPaise: bigint('total_disputed_paise', { mode: 'number' }).notNull().default(0),
 
     estimatedCostPaise: bigint('estimated_cost_paise', { mode: 'number' }),
     preauthAmountPaise: bigint('preauth_amount_paise', { mode: 'number' }),
@@ -4312,6 +4332,7 @@ export const claimCases = pgTable(
     preauthSubmittedAt: timestamp('preauth_submitted_at', { withTimezone: true }),
     preauthApprovedAt: timestamp('preauth_approved_at', { withTimezone: true }),
     preauthSlaDeadline: timestamp('preauth_sla_deadline', { withTimezone: true }),
+    hospitalInternalDeadline: timestamp('hospital_internal_deadline', { withTimezone: true }),
     finalPacketReadyAt: timestamp('final_packet_ready_at', { withTimezone: true }),
     finalSubmittedAt: timestamp('final_submitted_at', { withTimezone: true }),
     finalSubmittedChannel: text('final_submitted_channel').$type<'portal' | 'email' | 'physical_courier' | 'in_person'>(),
@@ -4327,6 +4348,7 @@ export const claimCases = pgTable(
     uniqueIndex('claim_cases_tenant_key').on(t.hospitalId, t.id),
     uniqueIndex('claim_cases_client_key').on(t.hospitalId, t.clientId),
     index('claim_cases_hospital_status_idx').on(t.hospitalId, t.status).where(sql`voided_at is null`),
+    index('claim_cases_settlement_status_idx').on(t.hospitalId, t.settlementStatus).where(sql`voided_at is null`),
     index('claim_cases_admission_idx').on(t.hospitalId, t.admissionId),
     index('claim_cases_policy_bidx').on(t.hospitalId, t.policyNumberBidx).where(sql`voided_at is null`),
     index('claim_cases_member_bidx').on(t.hospitalId, t.memberIdBidx).where(sql`voided_at is null`),
@@ -4421,12 +4443,16 @@ export const claimQueries = pgTable(
     queryDescription: text('query_description').notNull(),
     receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
     slaDeadlineAt: timestamp('sla_deadline_at', { withTimezone: true }).notNull(),
-    status: text('status').$type<'pending_hospital' | 'replied' | 'accepted_by_tpa' | 'escalated_to_doctor' | 'disputed'>().notNull().default('pending_hospital'),
+    status: text('status').$type<QueryStatus>().notNull().default('pending_hospital'),
+    deadlineType: text('deadline_type').$type<DeadlineType>().notNull().default('hospital_response'),
     replyNotes: text('reply_notes'),
     repliedAt: timestamp('replied_at', { withTimezone: true }),
     repliedByUserId: uuid('replied_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     replyChannel: text('reply_channel').$type<'portal' | 'email' | 'physical_courier'>(),
     replyReference: text('reply_reference'),
+    insurerResolvedAt: timestamp('insurer_resolved_at', { withTimezone: true }),
+    insurerResolutionReference: text('insurer_resolution_reference'),
+    insurerResolutionNotes: text('insurer_resolution_notes'),
     clientId: uuid('client_id').notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -4474,6 +4500,287 @@ export const claimRejections = pgTable(
       columns: [t.hospitalId, t.claimCaseId],
       foreignColumns: [claimCases.hospitalId, claimCases.id],
     }).onDelete('cascade'),
+  ],
+);
+
+/** Tracks initial pre-authorization and sequential enhancements history. (0067) */
+export const claimAuthorizations = pgTable(
+  'claim_authorizations',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    claimCaseId: uuid('claim_case_id').notNull(),
+    authType: text('auth_type').$type<AuthType>().notNull(),
+    sequenceNumber: integer('sequence_number').notNull().default(0),
+    requestedIncrementalPaise: bigint('requested_incremental_paise', { mode: 'number' }),
+    requestedCumulativePaise: bigint('requested_cumulative_paise', { mode: 'number' }).notNull(),
+    approvedIncrementalPaise: bigint('approved_incremental_paise', { mode: 'number' }),
+    approvedCumulativePaise: bigint('approved_cumulative_paise', { mode: 'number' }),
+    decision: text('decision').$type<AuthDecision>().notNull().default('pending'),
+    referenceNumber: text('reference_number'),
+    decisionNotes: text('decision_notes'),
+    requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    decidedByUserId: uuid('decided_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    clientId: uuid('client_id').notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('claim_authorizations_client_key').on(t.hospitalId, t.clientId),
+    uniqueIndex('claim_authorizations_seq_key').on(t.hospitalId, t.claimCaseId, t.authType, t.sequenceNumber),
+    index('claim_authorizations_case_idx').on(t.hospitalId, t.claimCaseId),
+    foreignKey({
+      name: 'claim_authorizations_case_fk',
+      columns: [t.hospitalId, t.claimCaseId],
+      foreignColumns: [claimCases.hospitalId, claimCases.id],
+    }).onDelete('cascade'),
+  ],
+);
+
+/** Immutable snapshot ledger of all dispatched claim submission packets. (0067) */
+export const claimSubmissions = pgTable(
+  'claim_submissions',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    claimCaseId: uuid('claim_case_id').notNull(),
+    submissionNumber: integer('submission_number').notNull().default(1),
+    submissionStage: text('submission_stage').$type<SubmissionStage>().notNull(),
+    isResubmission: boolean('is_resubmission').notNull().default(false),
+    channel: text('channel').$type<'portal' | 'email' | 'physical_courier' | 'in_person'>().notNull(),
+    referenceNumber: text('reference_number').notNull(),
+    claimedAmountPaise: bigint('claimed_amount_paise', { mode: 'number' }),
+    packetHash: text('packet_hash').notNull(),
+    snapshotPayload: jsonb('snapshot_payload').notNull().default(sql`'{}'::jsonb`),
+    submittedAt: timestamp('submitted_at', { withTimezone: true }).notNull().defaultNow(),
+    submittedByUserId: uuid('submitted_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    clientId: uuid('client_id').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('claim_submissions_client_key').on(t.hospitalId, t.clientId),
+    uniqueIndex('claim_submissions_seq_key').on(t.hospitalId, t.claimCaseId, t.submissionNumber),
+    index('claim_submissions_case_idx').on(t.hospitalId, t.claimCaseId),
+    foreignKey({
+      name: 'claim_submissions_case_fk',
+      columns: [t.hospitalId, t.claimCaseId],
+      foreignColumns: [claimCases.hospitalId, claimCases.id],
+    }).onDelete('cascade'),
+  ],
+);
+
+/** Audited multi-receipt remittances, EOB deductions, TDS, and reversals ledger. (0067) */
+export const claimRemittances = pgTable(
+  'claim_remittances',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    claimCaseId: uuid('claim_case_id').notNull(),
+    remittanceType: text('remittance_type').$type<RemittanceType>().notNull(),
+    paymentMethod: text('payment_method').$type<PaymentMethod>(),
+    payerReference: text('payer_reference'),
+    amountPaise: bigint('amount_paise', { mode: 'number' }).notNull(),
+    tdsPaise: bigint('tds_paise', { mode: 'number' }).notNull().default(0),
+    deductionPaise: bigint('deduction_paise', { mode: 'number' }).notNull().default(0),
+    coPayPaise: bigint('co_pay_paise', { mode: 'number' }).notNull().default(0),
+    disputedDeductionPaise: bigint('disputed_deduction_paise', { mode: 'number' }).notNull().default(0),
+    reversalOfRemittanceId: uuid('reversal_of_remittance_id'),
+    reversalReason: text('reversal_reason'),
+    notes: text('notes'),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+    recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    clientId: uuid('client_id').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('claim_remittances_client_key').on(t.hospitalId, t.clientId),
+    index('claim_remittances_case_idx').on(t.hospitalId, t.claimCaseId),
+    foreignKey({
+      name: 'claim_remittances_case_fk',
+      columns: [t.hospitalId, t.claimCaseId],
+      foreignColumns: [claimCases.hospitalId, claimCases.id],
+    }).onDelete('cascade'),
+  ],
+);
+
+/* -------------------------------------------------------- WhatsApp Notices */
+
+export type NoticeType = 'hospital_closure' | 'doctor_schedule_change' | 'appointment_change';
+export type CampaignStatus =
+  | 'draft'
+  | 'scheduled'
+  | 'processing'
+  | 'completed'
+  | 'partially_completed'
+  | 'failed'
+  | 'cancelled';
+export type NoticeRecipientStatus =
+  | 'pending'
+  | 'queued'
+  | 'sending'
+  | 'sent'
+  | 'delivered'
+  | 'read'
+  | 'failed'
+  | 'suppressed'
+  | 'pending_capacity'
+  | 'cancelled';
+export type CapacityReservationStatus = 'active' | 'committed' | 'released' | 'expired';
+
+export const noticeCampaigns = pgTable(
+  'notice_campaigns',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    noticeType: text('notice_type').$type<NoticeType>().notNull(),
+    status: text('status').$type<CampaignStatus>().notNull().default('draft'),
+    title: text('title').notNull(),
+    closureDate: date('closure_date'),
+    closureDuration: text('closure_duration'),
+    reason: text('reason'),
+    rescheduleInstructions: text('reschedule_instructions'),
+    contactPhone: text('contact_phone'),
+    templateCode: text('template_code').notNull(),
+    templateVariables: jsonb('template_variables').$type<Record<string, unknown>>().notNull().default({}),
+    totalTargetRecipients: integer('total_target_recipients').notNull().default(0),
+    mandatoryRecipientsCount: integer('mandatory_recipients_count').notNull().default(0),
+    recentRecipientsCount: integer('recent_recipients_count').notNull().default(0),
+    displacedRecipientsCount: integer('displaced_recipients_count').notNull().default(0),
+    ineligibleRecipientsCount: integer('ineligible_recipients_count').notNull().default(0),
+    sentCount: integer('sent_count').notNull().default(0),
+    deliveredCount: integer('delivered_count').notNull().default(0),
+    readCount: integer('read_count').notNull().default(0),
+    failedCount: integer('failed_count').notNull().default(0),
+    suppressedCount: integer('suppressed_count').notNull().default(0),
+    pendingCapacityCount: integer('pending_capacity_count').notNull().default(0),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+    confirmedByUserId: uuid('confirmed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index('notice_campaigns_hospital_idx').on(t.hospitalId, t.createdAt),
+    index('notice_campaigns_status_idx').on(t.hospitalId, t.status),
+  ],
+);
+
+export const noticeCampaignMandatoryRecipients = pgTable(
+  'notice_campaign_mandatory_recipients',
+  {
+    id: id(),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => noticeCampaigns.id, { onDelete: 'cascade' }),
+    patientId: uuid('patient_id').references(() => patients.id, { onDelete: 'set null' }),
+    phoneE164: text('phone_e164').notNull(),
+    patientName: text('patient_name'),
+    isEligible: boolean('is_eligible').notNull().default(true),
+    ineligibleReason: text('ineligible_reason'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('notice_campaign_mandatory_recipients_key').on(t.campaignId, t.phoneE164),
+    index('notice_campaign_mandatory_recipients_campaign_idx').on(t.campaignId),
+  ],
+);
+
+export const noticeCampaignRecipients = pgTable(
+  'notice_campaign_recipients',
+  {
+    id: id(),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => noticeCampaigns.id, { onDelete: 'cascade' }),
+    patientId: uuid('patient_id').references(() => patients.id, { onDelete: 'set null' }),
+    phoneE164: text('phone_e164').notNull(),
+    patientName: text('patient_name'),
+    priority: smallint('priority').notNull().default(0),
+    selectionReason: text('selection_reason').notNull(),
+    lastActivityAt: timestamp('last_activity_at', { withTimezone: true }),
+    activityType: text('activity_type'),
+    status: text('status').$type<NoticeRecipientStatus>().notNull().default('pending'),
+    attempts: smallint('attempts').notNull().default(0),
+    scheduledFor: timestamp('scheduled_for', { withTimezone: true }).notNull().defaultNow(),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    providerMessageId: text('provider_message_id'),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+    deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+    readAt: timestamp('read_at', { withTimezone: true }),
+    failedReason: text('failed_reason'),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('notice_campaign_recipients_campaign_phone_key').on(t.campaignId, t.phoneE164),
+    index('notice_campaign_recipients_drain_idx').on(t.status, t.scheduledFor, t.priority),
+    index('notice_campaign_recipients_campaign_status_idx').on(t.campaignId, t.status),
+    index('notice_campaign_recipients_provider_msg_idx').on(t.providerMessageId),
+  ],
+);
+
+export const whatsappCapacityReservations = pgTable(
+  'whatsapp_capacity_reservations',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    phoneNumberId: text('phone_number_id').notNull(),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => noticeCampaigns.id, { onDelete: 'cascade' }),
+    reservedSlots: integer('reserved_slots').notNull(),
+    consumedSlots: integer('consumed_slots').notNull().default(0),
+    releasedSlots: integer('released_slots').notNull().default(0),
+    status: text('status').$type<CapacityReservationStatus>().notNull().default('active'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('whatsapp_capacity_reservations_phone_active_idx').on(t.phoneNumberId, t.status, t.expiresAt),
+    index('whatsapp_capacity_reservations_campaign_idx').on(t.campaignId),
+  ],
+);
+
+export const whatsappOptOuts = pgTable(
+  'whatsapp_opt_outs',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    phoneE164: text('phone_e164').notNull(),
+    reason: text('reason').notNull().default('patient_opt_out'),
+    optedOutAt: timestamp('opted_out_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('whatsapp_opt_outs_hospital_phone_key').on(t.hospitalId, t.phoneE164),
+    index('whatsapp_opt_outs_hospital_idx').on(t.hospitalId),
+  ],
+);
+
+export const webhookEventDedup = pgTable(
+  'webhook_event_dedup',
+  {
+    id: id(),
+    eventId: text('event_id').notNull(),
+    processedAt: timestamp('processed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('webhook_event_dedup_event_id_key').on(t.eventId),
+    index('webhook_event_dedup_processed_at_idx').on(t.processedAt),
   ],
 );
 

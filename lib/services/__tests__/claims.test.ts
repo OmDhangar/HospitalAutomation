@@ -34,6 +34,9 @@ describe('Claims Core Service Operations', () => {
     const events: any[] = [];
     const queries: any[] = [];
     const accessLogs: any[] = [];
+    const remittances: any[] = [];
+    const authorizations: any[] = [];
+    const submissions: any[] = [];
 
     const tx: any = {
       select: vi.fn().mockImplementation((fields) => {
@@ -41,6 +44,19 @@ describe('Claims Core Service Operations', () => {
           from: vi.fn().mockImplementation((table) => {
             return {
               where: vi.fn().mockImplementation(() => {
+                // If querying rollups from remittances
+                if (fields && 'totalRemitted' in fields) {
+                  const totalRemitted = remittances.reduce((sum, r) => sum + (r.amountPaise || 0), 0);
+                  const totalTds = remittances.reduce((sum, r) => sum + (r.tdsPaise || 0), 0);
+                  const totalDeductions = remittances.reduce((sum, r) => sum + (r.deductionPaise || 0), 0);
+                  const totalDisputed = remittances.reduce((sum, r) => sum + (r.disputedDeductionPaise || 0), 0);
+                  const res = [{ totalRemitted, totalTds, totalDeductions, totalDisputed }];
+                  return {
+                    limit: vi.fn().mockReturnValue(res),
+                    orderBy: vi.fn().mockReturnValue(res),
+                    then: (resolve: any) => resolve(res),
+                  };
+                }
                 return {
                   limit: vi.fn().mockImplementation(() => (storedClaim ? [storedClaim] : [])),
                   orderBy: vi.fn().mockReturnValue(storedClaim ? [storedClaim] : []),
@@ -67,6 +83,28 @@ describe('Claims Core Service Operations', () => {
             }
             if (data.queryDescription) {
               queries.push(data);
+              return {
+                returning: vi.fn().mockReturnValue([data]),
+                then: (resolve: any) => resolve([data]),
+              };
+            }
+            if (data.remittanceType) {
+              const rem = { ...data, id: data.id || 'rem-1' };
+              remittances.push(rem);
+              return {
+                returning: vi.fn().mockReturnValue([rem]),
+                then: (resolve: any) => resolve([rem]),
+              };
+            }
+            if (data.authType) {
+              authorizations.push(data);
+              return {
+                returning: vi.fn().mockReturnValue([data]),
+                then: (resolve: any) => resolve([data]),
+              };
+            }
+            if (data.submissionStage) {
+              submissions.push(data);
               return {
                 returning: vi.fn().mockReturnValue([data]),
                 then: (resolve: any) => resolve([data]),
@@ -100,6 +138,7 @@ describe('Claims Core Service Operations', () => {
       _getStoredClaim: () => storedClaim,
       _getEvents: () => events,
       _getQueries: () => queries,
+      _getRemittances: () => remittances,
       _getAccessLogs: () => accessLogs,
     };
 
@@ -233,7 +272,7 @@ describe('Claims Core Service Operations', () => {
       clientId: 'client-5',
     });
 
-    expect(settled.status).toBe('partially_settled');
+    expect(settled.settlementStatus).toBe('settled');
     expect(settled.settledAmountPaise).toBe(4000000);
     expect(settled.deductionAmountPaise).toBe(500000);
     expect(settled.dischargeBillId).toBe('bill-1');

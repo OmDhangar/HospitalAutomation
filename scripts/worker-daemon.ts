@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { closeAdminDb } from '@/lib/db/admin';
+import { drainNoticeCampaignOutbox } from '@/lib/notify/notice-worker';
 import { drainOutbox } from '@/lib/notify/worker';
 import { runSweeps } from '@/lib/services/sweeps';
 
@@ -18,6 +19,19 @@ async function main() {
       if (outbox.sent > 0 || outbox.failed > 0 || outbox.suppressed > 0) {
         console.log(
           `[outbox] Sent: ${outbox.sent}, Failed: ${outbox.failed}, Suppressed: ${outbox.suppressed}`,
+        );
+      }
+
+      // 1b. Drain pending notice campaigns
+      const noticeOutbox = await drainNoticeCampaignOutbox();
+      if (
+        noticeOutbox.sent > 0 ||
+        noticeOutbox.failed > 0 ||
+        noticeOutbox.suppressed > 0 ||
+        noticeOutbox.cancelled > 0
+      ) {
+        console.log(
+          `[notices] Sent: ${noticeOutbox.sent}, Failed: ${noticeOutbox.failed}, Suppressed: ${noticeOutbox.suppressed}, Cancelled: ${noticeOutbox.cancelled}`,
         );
       }
 

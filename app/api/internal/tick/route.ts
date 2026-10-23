@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { drainNoticeCampaignOutbox } from '@/lib/notify/notice-worker';
 import { drainOutbox } from '@/lib/notify/worker';
 import { safeEqual } from '@/lib/security/tokens';
 import { drainAllHospitalsIpdEmarOutbox } from '@/lib/services/ipd-emar-outbox';
@@ -44,6 +45,13 @@ async function handleTick(request: Request) {
 
   const result = await drainOutbox();
 
+  let notices = { processed: 0, sent: 0, failed: 0, suppressed: 0, cancelled: 0 };
+  try {
+    notices = await drainNoticeCampaignOutbox();
+  } catch (err) {
+    console.error('[tick] WhatsApp notice outbox drain failed:', err);
+  }
+
   let ipdEmar = { processed: 0, pendingPricing: 0, failed: 0, recoveredStuckClaims: 0 };
   try {
     ipdEmar = await drainAllHospitalsIpdEmarOutbox();
@@ -56,7 +64,7 @@ async function handleTick(request: Request) {
    */
   const sweeps = await runSweeps();
 
-  return NextResponse.json({ ...result, ipdEmar, sweeps });
+  return NextResponse.json({ ...result, notices, ipdEmar, sweeps });
 }
 
 export async function POST(request: Request) {

@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { closeAdminDb } from '@/lib/db/admin';
+import { drainNoticeCampaignOutbox } from '@/lib/notify/notice-worker';
 import { drainOutbox } from '@/lib/notify/worker';
 import { runSweeps } from '@/lib/services/sweeps';
 
@@ -14,6 +15,11 @@ async function main() {
   const result = await drainOutbox();
   console.log(
     `sent ${result.sent}, failed ${result.failed}, suppressed ${result.suppressed}`,
+  );
+
+  const noticeResult = await drainNoticeCampaignOutbox();
+  console.log(
+    `notices: processed ${noticeResult.processed}, sent ${noticeResult.sent}, failed ${noticeResult.failed}, suppressed ${noticeResult.suppressed}, cancelled ${noticeResult.cancelled}`,
   );
 
   // After the drain, not before: expiring a stale appointment must never

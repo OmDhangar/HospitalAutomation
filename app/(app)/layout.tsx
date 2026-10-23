@@ -70,6 +70,10 @@ async function AppHeader() {
     navItems.push({ label: 'Reports', href: '/reports' });
   }
 
+  if (can(session.role, 'hospital.configure') || session.role === 'receptionist') {
+    navItems.push({ label: 'WhatsApp Notices', href: '/whatsapp-notices' });
+  }
+
   if (can(session.role, 'hospital.configure')) {
     navItems.push(
       { label: 'Subscription', href: '/subscription' },
