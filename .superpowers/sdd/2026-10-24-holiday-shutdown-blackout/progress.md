@@ -12,4 +12,5 @@
 - Task 4: complete (commits 3ae7bde..73224d4, tests: npx vitest run lib/services/__tests__/opd-hours.integration.test.ts → 8/8 pass)
 - Task 5: complete (commits 73224d4..bc07ed1, tests: npx vitest run lib/services/__tests__/blackout.integration.test.ts → 6/6 pass)
 - Task 6: complete (commits bc07ed1..87852c5, tests: npx vitest run lib/services/__tests__/queue.integration.test.ts → 31/31 pass)
-- Task 7: complete (tests: npx vitest run lib/notify/__tests__/templates.test.ts lib/notify/__tests__/worker.test.ts lib/services/__tests__/booking.integration.test.ts → 35/35 pass)
+- Task 7: complete (commits 87852c5..9ad0e09, tests: npx vitest run lib/notify/__tests__/templates.test.ts lib/notify/__tests__/worker.test.ts lib/services/__tests__/booking.integration.test.ts → 35/35 pass)
+- Task 8: complete (tests: npx vitest run "app/(app)/settings/scheduling/__tests__/holidays-manager.test.tsx" → 3/3 pass, npm run typecheck → 0 errors)
