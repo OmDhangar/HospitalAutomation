@@ -60,6 +60,14 @@ const EXAMPLES: Record<string, string[]> = {
     'Our hospital is organizing a Free Cardiac & Diabetes Checkup Camp this Sunday from 9:00 AM to 2:00 PM. Prior registration is recommended.',
     '+919876543210',
   ],
+  opd_facility_service_update: [
+    'City Care Hospital',
+    'Specialist OPD Consultations',
+    'Sunday from 9:00 AM to 2:00 PM',
+    'Consultations are arranged at the main OPD counter.',
+    '+919876543210',
+  ],
+  opd_blackout_cancellation: ['Mehta', '24 Oct', '26 Oct', 'administrative maintenance'],
 };
 
 /**

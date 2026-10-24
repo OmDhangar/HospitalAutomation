@@ -12,6 +12,7 @@ export type TemplateCode =
   | 'owner_monthly_report'
   | 'hospital_closure_notice'
   | 'general_announcement'
+  | 'facility_service_update'
   | 'blackout_cancellation';
 
 /**
@@ -282,6 +283,21 @@ export const TEMPLATES: Record<TemplateCode, TemplateDefinition> = {
     },
   },
   /**
+   * Generalized operational service advisory / administrative notice.
+   * Registered as UTILITY with Meta to allow health camp and clinic schedule updates
+   * framed as administrative service bulletins without marketing categorization.
+   */
+  facility_service_update: {
+    name: 'opd_facility_service_update',
+    category: 'UTILITY',
+    variables: ['hospitalName', 'serviceSubject', 'schedule', 'operationalDetails', 'contactPhone'],
+    body: {
+      mr: 'प्रशासकीय सूचना: {{1}} कडून {{2}} संदर्भात: वेळ {{3}} निश्चित केली आहे। {{4}} अधिक माहितीसाठी, टोल फ्री नंबर {{5}} वर संपर्क साधा।',
+      hi: 'प्रशासनिक सूचना: {{1}} से {{2}} के संबंध में: समय {{3}} निर्धारित है। {{4}} पूछताछ के लिए, टोल फ्री नंबर {{5}} पर संपर्क करें।',
+      en: 'Administrative update from {{1}} regarding {{2}}: Scheduled for {{3}}. {{4}} For queries, contact {{5}} as toll free number.',
+    },
+  },
+  /**
    * Dedicated template for administrative holiday and multi-day closures (ADR-040).
    * In review with Meta; ships pending approval while interim cancellations use opd_appointment_cancelled.
    */
@@ -328,6 +344,7 @@ export const CRITICAL_TEMPLATES: ReadonlySet<TemplateCode> = new Set([
   // A patient travels to a closed hospital.
   'hospital_closure_notice',
   'general_announcement',
+  'facility_service_update',
   'blackout_cancellation',
 ]);
 
