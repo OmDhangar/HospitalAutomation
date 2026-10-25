@@ -1,39 +1,16 @@
 import { notFound } from 'next/navigation';
-import {
-  Alert,
-  Button,
-  Card,
-  CardHeader,
-  EmptyState,
-  Field,
-  Input,
-  cn,
-} from '@/components/ui';
+import { Alert } from '@/components/ui';
 import { requirePlatformAdmin } from '@/lib/auth/platform';
-import { supportLabel } from '@/lib/domain/entitlements';
 import {
-  LAPSE_GRACE_DAYS,
-  SUBSCRIPTION_STATUSES,
   TRIAL_MAX_DAYS,
   TRIAL_MIN_DAYS,
-  type PlanAccess,
 } from '@/lib/domain/subscription';
 import { getAccountDetail } from '@/lib/services/platform-accounts';
 import { listAssignableTiers } from '@/lib/services/custom-plans';
 import { activeRevokeReason, getPlanAccess } from '@/lib/services/subscriptions';
 import { getBindingView } from '@/lib/services/whatsapp-byo';
-import {
-  BackLink,
-  ConfirmWord,
-  DefinitionRow,
-  EntitlementMeter,
-  StandingPill,
-  TermLabel,
-  UsageMeter,
-  dateTime,
-  rupees,
-  shortDate,
-} from '../../ui';
+import { listAuditLogs, type AuditRow } from '@/lib/services/audit';
+import { groupConsecutiveEvents } from '@/lib/domain/audit';
 import {
   addStaffAction,
   changePlanAction,
@@ -59,21 +36,9 @@ import { WhatsAppStatusCard } from './components/whatsapp-status-card';
 import { LoginsTable } from './components/logins-table';
 import { ProfileCard } from './components/profile-card';
 import { DangerZoneCard } from './components/danger-zone-card';
+import { ActivityPanel } from './components/activity-panel';
 
 export const metadata = { title: 'Account · Platform' };
-
-/** The capability axes a tier can withhold, in the order the rate card lists them. */
-const FEATURES = [
-  { key: 'hasDisplayBoard', label: 'Display board' },
-  { key: 'hasOwnerReport', label: 'Owner report' },
-  { key: 'hasAdvancedReports', label: 'Advanced reports' },
-  { key: 'hasDataExport', label: 'Data export' },
-  { key: 'hasAuditLog', label: 'Audit log' },
-] as const;
-
-const SELECT_CLASS =
-  'block w-full rounded-lg border-0 bg-white px-3 py-2.5 text-sm text-ink-900 ' +
-  'ring-1 ring-inset ring-ink-300 focus:ring-2 focus:ring-inset focus:ring-brand-600 focus:outline-none';
 
 export default async function AccountDetailPage({
   params,
@@ -83,21 +48,47 @@ export default async function AccountDetailPage({
   const { hospitalId } = await params;
   const query = await searchParams;
 
-  const [detail, tiers, binding, access, revokeReason] = await Promise.all([
+  const [detail, tiers, binding, access, revokeReason, auditLogs] = await Promise.all([
     getAccountDetail(hospitalId),
     listAssignableTiers().catch(() => []),
     getBindingView(hospitalId).catch(() => null),
     getPlanAccess(hospitalId),
     activeRevokeReason(hospitalId),
+    listAuditLogs({ hospitalId, limit: 200 }).catch(() => [] as AuditRow[]),
   ]);
 
   if (!detail) notFound();
   const { account } = detail;
 
   const currentTerm = detail.subscriptionHistory.find((row) => row.supersededAt === null);
-  const owners = detail.users.filter(
-    (user) => user.role === 'owner' && user.membershipActive && user.userActive,
-  );
+
+  // Group and filter audit logs
+  const events = auditLogs.length > 0 ? auditLogs : (detail.audit ?? []);
+  const allGroups = groupConsecutiveEvents(events);
+
+  const activeTab = typeof query.tab === 'string' ? query.tab : 'activity';
+  const activeCategory = typeof query.category === 'string' ? query.category : 'all';
+  const activeActor = typeof query.actor === 'string' ? query.actor : 'all';
+  const searchQuery = typeof query.q === 'string' ? query.q.trim().toLowerCase() : '';
+
+  const filteredAuditGroups = allGroups.filter((group) => {
+    if (activeCategory !== 'all') {
+      if (activeCategory === 'destructive') {
+        if (!group.isDestructive) return false;
+      } else if (group.category !== activeCategory) {
+        return false;
+      }
+    }
+    if (activeActor !== 'all') {
+      if (group.actorName !== activeActor) return false;
+    }
+    if (searchQuery) {
+      const matchesAction = group.action.toLowerCase().includes(searchQuery);
+      const matchesActor = group.actorName?.toLowerCase().includes(searchQuery);
+      if (!matchesAction && !matchesActor) return false;
+    }
+    return true;
+  });
 
   return (
     <div className="space-y-5">
@@ -109,18 +100,17 @@ export default async function AccountDetailPage({
 
       <Notices query={query} />
 
-      <AccountKpiStrip
-        account={account}
-        currentTerm={currentTerm}
-        dailyCapacity={detail.dailyCapacity}
-        whatsapp={detail.whatsapp}
-        binding={binding}
-      />
-
-      {/* ---------------------------------------------------------- plan */}
-
-      {/* ---------------------------------------------------------- subscription & capacity */}
       <div className="grid gap-5 lg:grid-cols-12 lg:items-start">
+        <div className="lg:col-span-12">
+          <AccountKpiStrip
+            account={account}
+            currentTerm={currentTerm}
+            dailyCapacity={detail.dailyCapacity}
+            whatsapp={detail.whatsapp}
+            binding={binding}
+          />
+        </div>
+
         <div className="lg:col-span-7 space-y-5">
           <PlanSummaryCard account={account} currentTerm={currentTerm} access={access} />
           <PlanActionsCard
@@ -151,126 +141,36 @@ export default async function AccountDetailPage({
             number={detail.whatsapp}
           />
         </div>
+
         <div className="lg:col-span-7">
           <LoginsTable hospitalId={account.hospitalId} users={detail.users} />
         </div>
         <div className="lg:col-span-5">
           <ProfileCard account={account} branches={detail.branches} />
         </div>
-      </div>
 
-      {/* --------------------------------------------------- money & log */}
-
-      <div className="grid gap-5 lg:grid-cols-2">
-        <Card>
-          <CardHeader title="Payments" hint="Newest first" />
-          {detail.payments.length === 0 ? (
-            <EmptyState title="No payments recorded" />
-          ) : (
-            <ul className="divide-y divide-ink-200">
-              {detail.payments.map((payment) => (
-                <li key={payment.id} className="flex items-baseline justify-between gap-3 px-5 py-2.5">
-                  <div className="min-w-0">
-                    <p className="text-sm text-ink-900">
-                      <span className="capitalize">{payment.purpose.replace(/_/g, ' ')}</span>
-                      <span
-                        className={cn(
-                          'ml-2 text-xs font-medium',
-                          payment.status === 'paid'
-                            ? 'text-emerald-700'
-                            : payment.status === 'failed'
-                              ? 'text-rose-700'
-                              : 'text-ink-500',
-                        )}
-                      >
-                        {payment.status}
-                      </span>
-                    </p>
-                    <p className="text-xs text-ink-400">
-                      {dateTime(payment.paidAt ?? payment.createdAt)}
-                      {payment.failureReason ? ` · ${payment.failureReason}` : ''}
-                    </p>
-                  </div>
-                  <span className="numeric shrink-0 text-sm font-medium text-ink-900">
-                    {rupees(payment.amountPaise + payment.taxPaise)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-
-        <Card>
-          <CardHeader title="Recent activity" hint="This hospital’s audit log, including our access" />
-          {detail.audit.length === 0 ? (
-            <EmptyState title="Nothing logged yet" />
-          ) : (
-            <ul className="divide-y divide-ink-200">
-              {detail.audit.map((entry) => (
-                <li key={entry.id} className="px-5 py-2.5">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <p
-                      className={cn(
-                        'text-sm',
-                        entry.action.startsWith('support.') || entry.action.startsWith('platform.')
-                          ? 'font-medium text-violet-800'
-                          : 'text-ink-800',
-                      )}
-                    >
-                      {entry.action}
-                    </p>
-                    <p className="shrink-0 text-xs text-ink-400">{dateTime(entry.createdAt)}</p>
-                  </div>
-                  <p className="text-xs text-ink-500">{entry.actorName ?? 'system'}</p>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-      </div>
-
-      <Card>
-        <CardHeader title="Subscription history" hint="Every term, newest first" />
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-ink-200 text-left text-xs uppercase tracking-wide text-ink-500">
-                <th className="px-5 py-2.5 font-medium">Tier</th>
-                <th className="px-5 py-2.5 font-medium">Cycle</th>
-                <th className="px-5 py-2.5 font-medium">Status</th>
-                <th className="px-5 py-2.5 text-right font-medium">Price</th>
-                <th className="px-5 py-2.5 font-medium">Term</th>
-                <th className="px-5 py-2.5 font-medium">Why</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-ink-200">
-              {detail.subscriptionHistory.map((row) => (
-                <tr key={row.id} className={cn(row.supersededAt === null && 'bg-brand-50/40')}>
-                  <td className="px-5 py-2.5 capitalize text-ink-900">
-                    {row.planTierCode.replace(/_/g, ' ')}
-                  </td>
-                  <td className="px-5 py-2.5 text-ink-600">{row.billingCycle}</td>
-                  <td className="px-5 py-2.5 capitalize text-ink-600">{row.status}</td>
-                  <td className="numeric px-5 py-2.5 text-right text-ink-900">
-                    {rupees(row.pricePaise)}
-                  </td>
-                  <td className="px-5 py-2.5 text-xs text-ink-600">
-                    {shortDate(row.startsAt)} – {shortDate(row.endsAt)}
-                  </td>
-                  <td className="px-5 py-2.5 text-xs text-ink-500">{row.changeReason ?? '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="lg:col-span-12">
+          <ActivityPanel
+            activeTab={activeTab}
+            activeCategory={activeCategory}
+            activeActor={activeActor}
+            searchQuery={typeof query.q === 'string' ? query.q : ''}
+            auditGroups={filteredAuditGroups}
+            users={detail.users}
+            payments={detail.payments}
+            history={detail.subscriptionHistory}
+            timezone={account.timezone}
+          />
         </div>
-      </Card>
-
-      <DangerZoneCard
-        hospitalId={account.hospitalId}
-        hasCurrentPlan={Boolean(currentTerm)}
-        revokeReason={revokeReason}
-        accountActive={account.active}
-      />
+        <div className="lg:col-span-12">
+          <DangerZoneCard
+            hospitalId={account.hospitalId}
+            hasCurrentPlan={Boolean(currentTerm)}
+            revokeReason={revokeReason}
+            accountActive={account.active}
+          />
+        </div>
+      </div>
     </div>
   );
 }
@@ -341,19 +241,3 @@ function Notices({ query }: { query: Record<string, string | string[] | undefine
   );
 }
 
-/** What the plan means for the hospital's staff right now. */
-function AccessNote({ access }: { access: PlanAccess }) {
-  if (access.state === 'open') return null;
-  if (access.state === 'grace') {
-    return (
-      <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
-        Lapsed · locks {shortDate(access.locksAt)}
-      </span>
-    );
-  }
-  return (
-    <span className="ml-2 rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-800">
-      Staff locked out ({access.reason})
-    </span>
-  );
-}
