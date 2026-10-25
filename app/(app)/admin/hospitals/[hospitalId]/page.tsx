@@ -53,6 +53,10 @@ import { PasswordResetForm } from './password-reset';
 import { WhatsAppCard } from './whatsapp-card';
 import { AccountHeader } from './components/account-header';
 import { AccountKpiStrip } from './components/account-kpi-strip';
+import { PlanSummaryCard } from './components/plan-summary-card';
+import { PlanActionsCard } from './components/plan-actions-card';
+import { EntitlementsCard } from './components/entitlements-card';
+import { UsageThisPeriodCard } from './components/usage-card';
 
 export const metadata = { title: 'Account · Platform' };
 
@@ -113,257 +117,32 @@ export default async function AccountDetailPage({
 
       {/* ---------------------------------------------------------- plan */}
 
-      <div className="grid gap-5 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader
-            title="Subscription"
-            hint={
-              detail.period
-                ? `Billing period ${shortDate(detail.period.start)} – ${shortDate(detail.period.end)}`
-                : 'No plan assigned'
-            }
+      {/* ---------------------------------------------------------- subscription & capacity */}
+      <div className="grid gap-5 lg:grid-cols-12 lg:items-start">
+        <div className="lg:col-span-7 space-y-5">
+          <PlanSummaryCard account={account} currentTerm={currentTerm} access={access} />
+          <PlanActionsCard
+            hospitalId={account.hospitalId}
+            currentTerm={currentTerm}
+            endsAtIso={account.term.endsAt?.toISOString().slice(0, 10)}
+            tiers={tiers}
           />
+        </div>
+        <div className="lg:col-span-5">
+          <EntitlementsCard
+            entitlements={account.entitlements}
+            features={detail.features}
+          />
+        </div>
 
-          {currentTerm ? (
-            <dl className="divide-y divide-ink-200">
-              <DefinitionRow term="Plan">
-                <span className="capitalize">
-                  {account.planName ?? currentTerm.planTierCode.replace(/_/g, ' ')}
-                </span>
-                <span className="ml-2 text-xs text-ink-500">{currentTerm.billingCycle}</span>
-              </DefinitionRow>
-              <DefinitionRow term="Status">
-                <span className="capitalize">{currentTerm.status}</span>
-                <AccessNote access={access} />
-              </DefinitionRow>
-              <DefinitionRow term="Agreed price">
-                {rupees(currentTerm.pricePaise)}
-                <span className="ml-1 text-xs text-ink-500">
-                  / {currentTerm.billingCycle === 'annual' ? 'year' : 'month'}
-                </span>
-              </DefinitionRow>
-              <DefinitionRow term="Normalised MRR">{rupees(account.mrrPaise)}</DefinitionRow>
-              <DefinitionRow term="Term">
-                {shortDate(currentTerm.startsAt)} →{' '}
-                <TermLabel
-                  endsAt={account.term.endsAt}
-                  bucket={account.term.bucket}
-                  daysRemaining={account.term.daysRemaining}
-                />
-              </DefinitionRow>
-              <DefinitionRow term="Daily capacity">
-                {detail.dailyCapacity?.toLocaleString('en-IN') ?? '—'} patients/day
-              </DefinitionRow>
-            </dl>
-          ) : (
-            <EmptyState
-              title="No subscription"
-              hint="This hospital was onboarded but never put on a plan."
-            />
-          )}
-
-          {/* Plan change */}
-          <form
-            action={changePlanAction}
-            className="grid gap-3 border-t border-ink-200 bg-ink-50/50 p-4 sm:grid-cols-4"
-          >
-            <input type="hidden" name="hospitalId" value={account.hospitalId} />
-            <Field label="Move to tier">
-              <select name="tierCode" defaultValue={currentTerm?.planTierCode ?? ''} className={SELECT_CLASS}>
-                {tiers.map((tier) => (
-                  <option key={tier.code} value={tier.code}>
-                    {tier.name} · {rupees(tier.monthlyPricePaise)}/mo
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Cycle">
-              <select
-                name="billingCycle"
-                defaultValue={currentTerm?.billingCycle ?? 'monthly'}
-                className={SELECT_CLASS}
-              >
-                <option value="monthly">Monthly</option>
-                <option value="annual">Annual</option>
-              </select>
-            </Field>
-            <Field label="Reason" hint="Recorded on the new term">
-              <Input name="reason" placeholder="upgrade / negotiated" className="py-2.5 text-sm" />
-            </Field>
-            <div className="flex items-end">
-              <Button type="submit" variant="primary" className="w-full">
-                Apply plan
-              </Button>
-            </div>
-            <p className="text-xs text-ink-500 sm:col-span-4">
-              A change takes effect immediately and opens a new term. Deferred downgrades
-              are not built, so time one for a period boundary rather than mid-month.
-            </p>
-          </form>
-
-          {/* Term controls */}
-          <div className="grid gap-3 border-t border-ink-200 p-4 sm:grid-cols-3">
-            <form action={setSubscriptionStatusAction} className="flex items-end gap-2">
-              <input type="hidden" name="hospitalId" value={account.hospitalId} />
-              <Field label="Set status">
-                <select name="status" defaultValue={currentTerm?.status ?? 'active'} className={SELECT_CLASS}>
-                  {SUBSCRIPTION_STATUSES.map((status) => (
-                    <option key={status} value={status} className="capitalize">
-                      {status}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Button type="submit" size="md">
-                Set
-              </Button>
-            </form>
-
-            <form action={extendTermAction} className="flex items-end gap-2">
-              <input type="hidden" name="hospitalId" value={account.hospitalId} />
-              <Field label="Extend expiry to" hint="Keeps tier, price and cycle">
-                <Input
-                  type="date"
-                  name="endsAt"
-                  defaultValue={account.term.endsAt?.toISOString().slice(0, 10)}
-                  className="py-2.5 text-sm"
-                />
-              </Field>
-              <Button type="submit" size="md">
-                Extend
-              </Button>
-            </form>
-
-            <form action={renewTermAction} className="flex items-end">
-              <input type="hidden" name="hospitalId" value={account.hospitalId} />
-              <Button type="submit" size="md" className="w-full" disabled={!currentTerm}>
-                Renew one more term
-              </Button>
-            </form>
-          </div>
-
-          {/* Free trial of any length */}
-          <form
-            action={startTrialAction}
-            className="grid gap-3 border-t border-ink-200 bg-ink-50/50 p-4 sm:grid-cols-4"
-          >
-            <input type="hidden" name="hospitalId" value={account.hospitalId} />
-            <Field label="Trial on tier" hint="Its limits and features apply">
-              <select
-                name="tierCode"
-                defaultValue={currentTerm?.planTierCode ?? tiers[0]?.code ?? ''}
-                className={SELECT_CLASS}
-              >
-                {tiers.map((tier) => (
-                  <option key={tier.code} value={tier.code}>
-                    {tier.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Days" hint={`${TRIAL_MIN_DAYS}–${TRIAL_MAX_DAYS}, e.g. 15 or 20`}>
-              <Input
-                name="days"
-                type="number"
-                inputMode="numeric"
-                min={TRIAL_MIN_DAYS}
-                max={TRIAL_MAX_DAYS}
-                required
-                placeholder="15"
-                className="py-2.5 text-sm"
-              />
-            </Field>
-            <div className="flex items-end sm:col-span-2">
-              <Button type="submit" variant="secondary" className="w-full">
-                Start free trial
-              </Button>
-            </div>
-            <p className="text-xs text-ink-500 sm:col-span-4">
-              Starts today at ₹0 and replaces the current term. When it ends the hospital gets{' '}
-              {LAPSE_GRACE_DAYS} grace days, then is locked until the owner renews at the tier’s price.
-            </p>
-          </form>
-
-          {/* Revoke / restore */}
-          <div className="border-t border-ink-200 p-4">
-            {revokeReason !== null ? (
-              <form action={restorePlanAction} className="flex flex-wrap items-center justify-between gap-3">
-                <input type="hidden" name="hospitalId" value={account.hospitalId} />
-                <p className="text-sm text-rose-800">
-                  <span className="font-semibold">Plan revoked.</span>{' '}
-                  {revokeReason ? `Reason: ${revokeReason}. ` : ''}Staff are locked out and online booking is off.
-                </p>
-                <Button type="submit" variant="primary">
-                  Restore plan
-                </Button>
-              </form>
-            ) : (
-              <form action={revokePlanAction} className="flex flex-wrap items-end gap-3">
-                <input type="hidden" name="hospitalId" value={account.hospitalId} />
-                <Field label="Revoke plan" hint="Locks staff out now and stops online booking. Restorable.">
-                  <Input name="reason" required placeholder="Reason, e.g. unpaid" className="w-64 py-2.5 text-sm" />
-                </Field>
-                <div className="flex items-center gap-2 pb-0.5">
-                  <ConfirmWord word="REVOKE" name="confirm" />
-                  <Button type="submit" variant="danger" disabled={!currentTerm}>
-                    Revoke plan
-                  </Button>
-                </div>
-              </form>
-            )}
-          </div>
-        </Card>
-
-        {/* ------------------------------------------------ entitlements */}
-
-        <div className="space-y-5">
-          <Card>
-            <CardHeader title="What the plan allows" hint="Counted live against the agreement" />
-            <div className="space-y-4 p-5">
-              {account.entitlements.map((axis) => (
-                <EntitlementMeter key={axis.kind} axis={axis} />
-              ))}
-            </div>
-            {detail.features ? (
-              <div className="border-t border-ink-200 px-5 py-3">
-                <p className="text-xs font-medium text-ink-600">
-                  {supportLabel(detail.features.supportTier)}
-                </p>
-                <ul className="mt-1.5 flex flex-wrap gap-1.5">
-                  {FEATURES.map(({ key, label }) => (
-                    <li
-                      key={key}
-                      className={cn(
-                        'rounded px-1.5 py-0.5 text-xs',
-                        detail.features![key]
-                          ? 'bg-emerald-50 text-emerald-800'
-                          : 'bg-ink-100 text-ink-400 line-through',
-                      )}
-                    >
-                      {label}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-          </Card>
-
-          <Card>
-            <CardHeader
-              title="Usage this period"
-              hint={detail.period ? 'Against this hospital’s own term' : 'No term to measure'}
-            />
-            <div className="space-y-4 p-5">
-              <UsageMeter label="Appointments completed" axis={detail.appointments} />
-              <UsageMeter label="Messages sent" axis={detail.messages} />
-              <p className="text-xs text-ink-400">
-                {detail.appointments.used > 0
-                  ? `${(detail.messages.used / detail.appointments.used).toFixed(2)} messages per appointment`
-                  : 'No completed appointments yet this period.'}
-              </p>
-            </div>
-          </Card>
-
+        <div className="lg:col-span-7">
+          <UsageThisPeriodCard
+            period={detail.period}
+            appointments={detail.appointments}
+            messages={detail.messages}
+          />
+        </div>
+        <div className="lg:col-span-5">
           <WhatsAppCard
             hospitalId={account.hospitalId}
             binding={binding}
@@ -616,6 +395,40 @@ export default async function AccountDetailPage({
               <span className="font-medium">Revoke plan</span> in the Subscription card.
             </p>
           </form>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="Revoke or restore plan"
+            hint="Locks staff out now and stops online booking. Restorable."
+          />
+          <div className="p-5">
+            {revokeReason !== null ? (
+              <form action={restorePlanAction} className="flex flex-wrap items-center justify-between gap-3">
+                <input type="hidden" name="hospitalId" value={account.hospitalId} />
+                <p className="text-sm text-rose-800">
+                  <span className="font-semibold">Plan revoked.</span>{' '}
+                  {revokeReason ? `Reason: ${revokeReason}. ` : ''}Staff are locked out and online booking is off.
+                </p>
+                <Button type="submit" variant="primary">
+                  Restore plan
+                </Button>
+              </form>
+            ) : (
+              <form action={revokePlanAction} className="flex flex-wrap items-end gap-3">
+                <input type="hidden" name="hospitalId" value={account.hospitalId} />
+                <Field label="Revoke plan" hint="Locks staff out now and stops online booking. Restorable.">
+                  <Input name="reason" required placeholder="Reason, e.g. unpaid" className="w-64 py-2.5 text-sm" />
+                </Field>
+                <div className="flex items-center gap-2 pb-0.5">
+                  <ConfirmWord word="REVOKE" name="confirm" />
+                  <Button type="submit" variant="danger" disabled={!currentTerm}>
+                    Revoke plan
+                  </Button>
+                </div>
+              </form>
+            )}
+          </div>
         </Card>
       </div>
 
