@@ -49,14 +49,14 @@ import {
   startTrialAction,
   updateProfileAction,
 } from './actions';
-import { PasswordResetForm } from './password-reset';
-import { WhatsAppCard } from './whatsapp-card';
 import { AccountHeader } from './components/account-header';
 import { AccountKpiStrip } from './components/account-kpi-strip';
 import { PlanSummaryCard } from './components/plan-summary-card';
 import { PlanActionsCard } from './components/plan-actions-card';
 import { EntitlementsCard } from './components/entitlements-card';
 import { UsageThisPeriodCard } from './components/usage-card';
+import { WhatsAppStatusCard } from './components/whatsapp-status-card';
+import { LoginsTable } from './components/logins-table';
 
 export const metadata = { title: 'Account · Platform' };
 
@@ -143,7 +143,7 @@ export default async function AccountDetailPage({
           />
         </div>
         <div className="lg:col-span-5">
-          <WhatsAppCard
+          <WhatsAppStatusCard
             hospitalId={account.hospitalId}
             binding={binding}
             number={detail.whatsapp}
@@ -152,158 +152,7 @@ export default async function AccountDetailPage({
       </div>
 
       {/* --------------------------------------------------------- users */}
-
-      <Card>
-        <CardHeader
-          title="Logins"
-          hint={`${detail.users.length} staff · ${owners.length} active ${owners.length === 1 ? 'owner' : 'owners'}`}
-        />
-        {detail.users.length === 0 ? (
-          <EmptyState title="Nobody can sign in" hint="This hospital has no staff accounts." />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-ink-200 text-left text-xs uppercase tracking-wide text-ink-500">
-                  <th className="px-5 py-2.5 font-medium">Person</th>
-                  <th className="px-5 py-2.5 font-medium">Role</th>
-                  <th className="px-5 py-2.5 font-medium">Last sign-in</th>
-                  <th className="px-5 py-2.5 font-medium">State</th>
-                  <th className="px-5 py-2.5 font-medium">Password</th>
-                  <th className="px-5 py-2.5 text-right font-medium">Access</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-ink-200 align-top">
-                {detail.users.map((user) => {
-                  const locked = !user.userActive || !user.membershipActive;
-
-                  return (
-                    <tr key={user.membershipId ?? user.userId}>
-                      <td className="px-5 py-3">
-                        <p className="font-medium text-ink-900">{user.name}</p>
-                        <p className="text-xs text-ink-500">{user.email}</p>
-                        {user.branchName ? (
-                          <p className="text-xs text-ink-400">{user.branchName}</p>
-                        ) : null}
-                      </td>
-                      <td className="px-5 py-3 capitalize text-ink-700">
-                        {user.role ?? '—'}
-                        {user.isPlatformAdmin ? (
-                          <span className="ml-1.5 rounded bg-violet-50 px-1.5 py-0.5 text-xs font-medium text-violet-800">
-                            operator
-                          </span>
-                        ) : null}
-                      </td>
-                      <td className="px-5 py-3 text-xs text-ink-500">
-                        {dateTime(user.lastLoginAt)}
-                      </td>
-                      <td className="px-5 py-3">
-                        <span
-                          className={cn(
-                            'inline-flex rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset',
-                            locked
-                              ? 'bg-rose-50 text-rose-800 ring-rose-200'
-                              : 'bg-emerald-50 text-emerald-800 ring-emerald-200',
-                          )}
-                        >
-                          {!user.userActive
-                            ? 'Login disabled'
-                            : !user.membershipActive
-                              ? 'No access here'
-                              : 'Active'}
-                        </span>
-                        {user.mustChangePassword ? (
-                          <p className="mt-1 text-xs text-amber-700">Must change password</p>
-                        ) : null}
-                      </td>
-                      <td className="px-5 py-3">
-                        <PasswordResetForm
-                          hospitalId={account.hospitalId}
-                          userId={user.userId}
-                          userName={user.name}
-                        />
-                      </td>
-                      <td className="px-5 py-3">
-                        <div className="flex flex-col items-end gap-2">
-                          <form action={setMembershipActiveAction}>
-                            <input type="hidden" name="hospitalId" value={account.hospitalId} />
-                            <input
-                              type="hidden"
-                              name="membershipId"
-                              value={user.membershipId ?? ''}
-                            />
-                            <input
-                              type="hidden"
-                              name="active"
-                              value={user.membershipActive ? 'false' : 'true'}
-                            />
-                            <button
-                              type="submit"
-                              className="text-xs font-medium text-ink-600 underline-offset-2 hover:underline"
-                            >
-                              {user.membershipActive
-                                ? 'Revoke access here'
-                                : 'Restore access here'}
-                            </button>
-                          </form>
-                          <form action={setUserActiveAction}>
-                            <input type="hidden" name="hospitalId" value={account.hospitalId} />
-                            <input type="hidden" name="userId" value={user.userId} />
-                            <input
-                              type="hidden"
-                              name="active"
-                              value={user.userActive ? 'false' : 'true'}
-                            />
-                            <button
-                              type="submit"
-                              className={cn(
-                                'text-xs font-medium underline-offset-2 hover:underline',
-                                user.userActive ? 'text-rose-700' : 'text-emerald-700',
-                              )}
-                            >
-                              {user.userActive ? 'Disable login' : 'Enable login'}
-                            </button>
-                          </form>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        <form
-          action={addStaffAction}
-          className="grid gap-3 border-t border-ink-200 bg-ink-50/50 p-4 sm:grid-cols-4"
-        >
-          <input type="hidden" name="hospitalId" value={account.hospitalId} />
-          <Field label="Name">
-            <Input name="name" required placeholder="Dr. Anjali Patil" className="py-2.5 text-sm" />
-          </Field>
-          <Field label="Email">
-            <Input name="email" type="email" required placeholder="anjali@hospital.in" className="py-2.5 text-sm" />
-          </Field>
-          <Field label="Role">
-            <select name="role" defaultValue="receptionist" className={SELECT_CLASS}>
-              <option value="owner">Owner</option>
-              <option value="receptionist">Receptionist</option>
-              <option value="doctor">Doctor</option>
-              <option value="nurse">Nurse</option>
-            </select>
-          </Field>
-          <div className="flex items-end">
-            <Button type="submit" className="w-full">
-              Add login
-            </Button>
-          </div>
-          <p className="text-xs text-ink-500 sm:col-span-4">
-            Starts on the default password until reset. Counts against the plan&rsquo;s staff
-            limit, which is checked here exactly as it is for the hospital itself.
-          </p>
-        </form>
-      </Card>
+      <LoginsTable hospitalId={account.hospitalId} users={detail.users} />
 
       {/* ------------------------------------------------- profile & risk */}
 
