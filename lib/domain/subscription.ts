@@ -210,7 +210,7 @@ export const daysUntilExpiry = (endsAt: Date | null, now: Date): number | null =
  * owner who pays a day or two late not to be stopped mid-OPD; short enough
  * that an unpaid plan does end.
  */
-export const LAPSE_GRACE_DAYS = 3;
+export const LAPSE_GRACE_DAYS = 7;
 
 /** A trial is given in days: 15, 20, whatever was agreed. */
 export const TRIAL_MIN_DAYS = 1;
@@ -228,11 +228,13 @@ export function parseTrialDays(input: string): number | null {
 
 type TermForAccess = { status: SubscriptionStatus; startsAt: Date; endsAt: Date };
 
+export type PlanAccessState = 'open' | 'grace' | 'soft_locked' | 'revoked';
+
 export type PlanAccess =
-  | { state: 'open' }
-  /** Lapsed, still working until `locksAt`. */
-  | { state: 'grace'; endedAt: Date; locksAt: Date }
-  | { state: 'locked'; reason: 'revoked' | 'suspended' | 'lapsed'; endedAt: Date | null };
+  | { state: 'open'; hasAssignedPlan: boolean; endsAt: Date | null }
+  | { state: 'grace'; hasAssignedPlan: boolean; endedAt: Date; locksAt: Date }
+  | { state: 'soft_locked'; hasAssignedPlan: boolean; reason: 'lapsed'; endedAt: Date; locksAt: Date }
+  | { state: 'revoked'; hasAssignedPlan: boolean; reason: 'suspended' | 'revoked'; endedAt: Date | null };
 
 /**
  * Whether a hospital's staff may use the product right now.
@@ -240,34 +242,48 @@ export type PlanAccess =
  * `current` is the term covering this instant; `latest` is the furthest term
  * on the books, which is the one that has ended when nothing covers today.
  *
- * A revoked (cancelled) or suspended plan locks at once. A plan that simply
- * ran out, trials included, keeps working for LAPSE_GRACE_DAYS first. A
- * hospital never put on a plan is not locked: that is our omission, not
- * their lapse.
+ * Normal cancellation: A customer who cancelled retains access until `endsAt`,
+ * followed by 7 days of grace, then transitions to `soft_locked`.
+ * Administrative suspension: An explicit suspension (`status === 'suspended'` or
+ * `isAdministrativeSuspension`) takes effect immediately as `revoked`.
+ * Clinical operations are safe-harbored across all states.
  */
 export function planAccess(args: {
   current: TermForAccess | null;
   latest: TermForAccess | null;
   now: Date;
+  isAdministrativeSuspension?: boolean;
 }): PlanAccess {
-  const { current, latest, now } = args;
+  const { current, latest, now, isAdministrativeSuspension } = args;
 
-  if (current) {
-    if (current.status === 'cancelled') return { state: 'locked', reason: 'revoked', endedAt: null };
-    if (current.status === 'suspended') return { state: 'locked', reason: 'suspended', endedAt: null };
-    // Marked expired by hand while its dates still run: the operator ended it.
-    if (current.status === 'expired') return { state: 'locked', reason: 'lapsed', endedAt: now };
-    return { state: 'open' };
+  if (isAdministrativeSuspension) {
+    return {
+      state: 'revoked',
+      hasAssignedPlan: true,
+      reason: 'revoked',
+      endedAt: current?.endsAt ?? latest?.endsAt ?? null,
+    };
   }
 
-  // Nothing ever billed, or only a term that starts later: not a lapse.
-  if (!latest || latest.startsAt > now) return { state: 'open' };
+  if (current) {
+    if (current.status === 'suspended') {
+      return { state: 'revoked', hasAssignedPlan: true, reason: 'suspended', endedAt: null };
+    }
+    // A scheduled cancellation with endsAt in the future remains open until period end.
+    return { state: 'open', hasAssignedPlan: true, endsAt: current.endsAt };
+  }
 
-  if (latest.status === 'cancelled') return { state: 'locked', reason: 'revoked', endedAt: latest.endsAt };
-  if (latest.status === 'suspended') return { state: 'locked', reason: 'suspended', endedAt: latest.endsAt };
+  // Nothing ever billed, or only a term that starts later: unassigned onboarding hospital.
+  if (!latest || latest.startsAt > now) {
+    return { state: 'open', hasAssignedPlan: false, endsAt: null };
+  }
+
+  if (latest.status === 'suspended') {
+    return { state: 'revoked', hasAssignedPlan: true, reason: 'suspended', endedAt: latest.endsAt };
+  }
 
   const locksAt = addDays(latest.endsAt, LAPSE_GRACE_DAYS);
   return now < locksAt
-    ? { state: 'grace', endedAt: latest.endsAt, locksAt }
-    : { state: 'locked', reason: 'lapsed', endedAt: latest.endsAt };
+    ? { state: 'grace', hasAssignedPlan: true, endedAt: latest.endsAt, locksAt }
+    : { state: 'soft_locked', hasAssignedPlan: true, reason: 'lapsed', endedAt: latest.endsAt, locksAt };
 }

@@ -699,16 +699,17 @@ export function clearPlanAccessCache(hospitalId?: string) {
   else accessCache.clear();
 }
 
-/** Whether this hospital's staff may use the product right now (planAccess). */
 export async function getPlanAccess(hospitalId: string, now: Date = new Date()): Promise<PlanAccess> {
   const cached = accessCache.get(hospitalId);
   if (cached && cached.expiresAt > Date.now()) return cached.access;
 
-  const [current, latest] = await Promise.all([
+  const [current, latest, revokeReason] = await Promise.all([
     getCurrentSubscription(hospitalId, now),
     getLatestSubscriptionTerm(hospitalId),
+    activeRevokeReason(hospitalId),
   ]);
-  const access = planAccess({ current, latest, now });
+  const isAdministrativeSuspension = Boolean(revokeReason);
+  const access = planAccess({ current, latest, now, isAdministrativeSuspension });
   accessCache.set(hospitalId, { access, expiresAt: Date.now() + ACCESS_CACHE_TTL });
   return access;
 }

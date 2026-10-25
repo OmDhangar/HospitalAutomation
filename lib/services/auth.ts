@@ -32,6 +32,8 @@ import {
 import { generateSessionToken, hashToken } from '@/lib/security/tokens';
 import { can, type StaffRole } from '@/lib/domain/permissions';
 import { assertCanAdd } from './entitlements';
+import { getPlanAccess } from './subscriptions';
+import { getFeatureDecision } from '@/lib/domain/plan-policy';
 
 const SESSION_TTL_DAYS = 14;
 
@@ -92,7 +94,7 @@ export const IMPERSONATION_TTL_MINUTES = 30;
 
 export class StaffAccountError extends Error {
   constructor(
-    readonly code: 'EMAIL_IN_USE' | 'WEAK_PASSWORD',
+    readonly code: 'EMAIL_IN_USE' | 'WEAK_PASSWORD' | 'PLAN_SOFT_LOCKED',
     message: string,
   ) {
     super(message);
@@ -143,20 +145,24 @@ export async function createStaffUser(args: {
   hospitalId: string;
   role: StaffRole;
   branchId?: string | null;
+  emergencyClinicalReason?: string;
 }) {
   const db = getDb();
   const email = args.email.toLowerCase().trim();
 
-  /**
-   * The password given here is someone else's to replace, never theirs to
-   * keep: the person adding the account knows it. So it is always marked
-   * must-change, and with none given the account gets one that nobody knows,
-   * to be replaced through an operator-issued temporary password.
-   *
-   * There used to be a fixed default ("Staff@123") that was never forced to
-   * change — a password anyone could guess for any account created without
-   * one.
-   */
+  // Enforce staff onboarding feature entitlement under soft-lock
+  const access = await getPlanAccess(args.hospitalId);
+  const decision = getFeatureDecision({ access, feature: 'hospital.staff_onboard' });
+  const isClinicalRole = args.role === 'doctor' || args.role === 'nurse';
+  const isEmergencyOverride = Boolean(args.emergencyClinicalReason?.trim() && isClinicalRole);
+
+  if (decision === 'blocked' && !isEmergencyOverride) {
+    throw new StaffAccountError(
+      'PLAN_SOFT_LOCKED',
+      'Staff onboarding is paused while plan is inactive. Hospital owners may onboard essential doctors or nurses with an emergency clinical continuity reason.',
+    );
+  }
+
   if (args.password !== undefined) {
     const problem = passwordProblem(args.password);
     if (problem) {
@@ -186,7 +192,7 @@ export async function createStaffUser(args: {
 
   // `users` has no RLS, but `staff_memberships` does — it is the row that binds
   // a person to a hospital, so it has to be written inside that tenant's scope.
-  let membership;
+  let membership: typeof staffMemberships.$inferSelect;
   try {
     [membership] = await withTenant(args.hospitalId, (tx) =>
       tx
@@ -200,6 +206,22 @@ export async function createStaffUser(args: {
         })
         .returning(),
     );
+
+    if (isEmergencyOverride) {
+      await withTenant(args.hospitalId, (tx) =>
+        tx.insert(auditLogs).values({
+          hospitalId: args.hospitalId,
+          actorUserId: user.id,
+          action: 'staff.emergency_onboard',
+          objectType: 'staff_membership',
+          objectId: membership.id,
+          metadata: {
+            reason: args.emergencyClinicalReason,
+            role: args.role,
+          },
+        }),
+      );
+    }
   } catch (error) {
     // Two connections, so not one transaction. Without this a failed
     // membership would leave a login with no hospital, and the email could

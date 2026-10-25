@@ -49,7 +49,7 @@ describe.skipIf(!enabled)('plan access', () => {
     const trial = await startTrial({ hospitalId, tierCode: 'solo', days: 15, startsAt });
     expect(trial).toMatchObject({ status: 'trial', pricePaise: 0, setupFeePaise: 0, planTierCode: 'solo' });
     expect(trial.endsAt.getTime()).toBe(addDays(startsAt, 15).getTime());
-    expect(await access()).toEqual({ state: 'open' });
+    expect(await access()).toMatchObject({ state: 'open', hasAssignedPlan: true });
   });
 
   it('refuses a trial of no days or more than ninety', async () => {
@@ -66,7 +66,10 @@ describe.skipIf(!enabled)('plan access', () => {
     expect(row.status).toBe('expired');
 
     expect((await access()).state).toBe('grace');
-    expect(await access(addDays(new Date(), LAPSE_GRACE_DAYS))).toMatchObject({ state: 'locked', reason: 'lapsed' });
+    expect(await access(addDays(new Date(), LAPSE_GRACE_DAYS))).toMatchObject({
+      state: 'soft_locked',
+      reason: 'lapsed',
+    });
   });
 
   it('renews a trial at the tier price, not at the trial’s nil', async () => {
@@ -81,7 +84,7 @@ describe.skipIf(!enabled)('plan access', () => {
 
     await expect(revokeSubscription({ hospitalId, reason: ' ' })).rejects.toBeInstanceOf(SubscriptionAdminError);
     await revokeSubscription({ hospitalId, reason: 'Trial misuse' });
-    expect(await access()).toMatchObject({ state: 'locked', reason: 'revoked' });
+    expect(await access()).toMatchObject({ state: 'revoked', reason: 'revoked' });
     await expect(revokeSubscription({ hospitalId, reason: 'Again' })).rejects.toBeInstanceOf(SubscriptionAdminError);
 
     const [audit] = await admin`
@@ -91,7 +94,7 @@ describe.skipIf(!enabled)('plan access', () => {
     await restoreSubscription({ hospitalId });
     const [row] = await admin`select status, cancelled_at from subscriptions where hospital_id = ${hospitalId}`;
     expect(row).toMatchObject({ status: 'trial', cancelled_at: null });
-    expect(await access()).toEqual({ state: 'open' });
+    expect((await access()).state).toBe('open');
     await expect(restoreSubscription({ hospitalId })).rejects.toBeInstanceOf(SubscriptionAdminError);
   });
 
@@ -112,6 +115,6 @@ describe.skipIf(!enabled)('plan access', () => {
   });
 
   it('never locks a hospital that was never put on a plan', async () => {
-    expect(await access()).toEqual({ state: 'open' });
+    expect(await access()).toMatchObject({ state: 'open', hasAssignedPlan: false });
   });
 });

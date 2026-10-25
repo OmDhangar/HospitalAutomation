@@ -15,6 +15,7 @@ import {
 import { enqueueSlotSessionBookings } from '@/lib/services/sweeps';
 import { BookingError, bookScheduledSlot, bookSlotForWalkIn } from '@/lib/services/web-booking';
 import { serviceDateIn, zonedTimeToUtc } from '@/lib/domain/time';
+import { clearPlanAccessCache } from '@/lib/services/subscriptions';
 
 const adminUrl = process.env.DATABASE_ADMIN_URL;
 const enabled = Boolean(adminUrl && process.env.DATABASE_URL);
@@ -86,6 +87,14 @@ describe.skipIf(!enabled)('pace and the hybrid queue + slot day', () => {
     await admin`
       insert into doctors (id, hospital_id, branch_id, name, default_consult_minutes)
       values (${doctorId}, ${hospitalId}, ${branchId}, 'Dr Deshmukh', 10)
+    `;
+
+    clearPlanAccessCache();
+    const [tier] = await admin<{ code: string }[]>`select code from plan_tiers limit 1`;
+    await admin`
+      insert into subscriptions (hospital_id, plan_tier_code, price_paise, daily_appointment_capacity,
+                                 included_appointments, included_messages, starts_at, ends_at, status)
+      values (${hospitalId}, ${tier.code}, 0, 50, 1000, 1000, now() - interval '30 days', now() + interval '60 days', 'active')
     `;
   });
 

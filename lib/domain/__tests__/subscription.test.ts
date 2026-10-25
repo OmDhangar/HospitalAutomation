@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addDays,
   addMonthsClamped,
   billingPeriod,
   daysUntilExpiry,
   expiryBucket,
-  renewalNoticeBucket,
   isServing,
+  LAPSE_GRACE_DAYS,
+  planAccess,
+  renewalNoticeBucket,
   setupFeePaise,
   subscriptionEnd,
   subscriptionPricePaise,
@@ -209,3 +212,101 @@ describe('status', () => {
     }
   });
 });
+
+describe('planAccess', () => {
+  const now = new Date('2026-10-25T12:00:00.000Z');
+
+  it('evaluates active term as open with hasAssignedPlan: true', () => {
+    const current = {
+      status: 'active' as const,
+      startsAt: addDays(now, -10),
+      endsAt: addDays(now, 20),
+    };
+    expect(planAccess({ current, latest: current, now })).toEqual({
+      state: 'open',
+      hasAssignedPlan: true,
+      endsAt: current.endsAt,
+    });
+  });
+
+  it('evaluates term expired 3 days ago as grace with 7-day grace window', () => {
+    const latest = {
+      status: 'active' as const,
+      startsAt: addDays(now, -33),
+      endsAt: addDays(now, -3),
+    };
+    const expectedLocksAt = addDays(latest.endsAt, 7);
+    expect(planAccess({ current: null, latest, now })).toEqual({
+      state: 'grace',
+      hasAssignedPlan: true,
+      endedAt: latest.endsAt,
+      locksAt: expectedLocksAt,
+    });
+  });
+
+  it('evaluates term expired 8 days ago as soft_locked with reason: lapsed', () => {
+    const latest = {
+      status: 'active' as const,
+      startsAt: addDays(now, -38),
+      endsAt: addDays(now, -8),
+    };
+    expect(planAccess({ current: null, latest, now })).toEqual({
+      state: 'soft_locked',
+      hasAssignedPlan: true,
+      reason: 'lapsed',
+      endedAt: latest.endsAt,
+      locksAt: addDays(latest.endsAt, 7),
+    });
+  });
+
+  it('treats scheduled cancellation with endsAt in future as open until period end', () => {
+    const current = {
+      status: 'cancelled' as const,
+      startsAt: addDays(now, -10),
+      endsAt: addDays(now, 5),
+    };
+    expect(planAccess({ current, latest: current, now })).toEqual({
+      state: 'open',
+      hasAssignedPlan: true,
+      endsAt: current.endsAt,
+    });
+  });
+
+  it('treats normally cancelled term expired 8 days ago as soft_locked, not revoked', () => {
+    const latest = {
+      status: 'cancelled' as const,
+      startsAt: addDays(now, -38),
+      endsAt: addDays(now, -8),
+    };
+    expect(planAccess({ current: null, latest, now })).toEqual({
+      state: 'soft_locked',
+      hasAssignedPlan: true,
+      reason: 'lapsed',
+      endedAt: latest.endsAt,
+      locksAt: addDays(latest.endsAt, 7),
+    });
+  });
+
+  it('treats administrative suspension as revoked immediately', () => {
+    const current = {
+      status: 'suspended' as const,
+      startsAt: addDays(now, -5),
+      endsAt: addDays(now, 25),
+    };
+    expect(planAccess({ current, latest: current, now })).toEqual({
+      state: 'revoked',
+      hasAssignedPlan: true,
+      reason: 'suspended',
+      endedAt: null,
+    });
+  });
+
+  it('treats unassigned onboarding hospital as open with hasAssignedPlan: false', () => {
+    expect(planAccess({ current: null, latest: null, now })).toEqual({
+      state: 'open',
+      hasAssignedPlan: false,
+      endsAt: null,
+    });
+  });
+});
+

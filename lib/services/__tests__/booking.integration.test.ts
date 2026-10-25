@@ -20,6 +20,7 @@ import { getDoctorSlotsForDate } from '@/lib/services/scheduling';
 import { OpdClosedError } from '@/lib/domain/queue';
 import { stopOpdForDoctor } from '@/lib/services/opd-hours';
 import { serviceDateIn } from '@/lib/domain/time';
+import { clearPlanAccessCache } from '@/lib/services/subscriptions';
 
 const adminUrl = process.env.DATABASE_ADMIN_URL;
 const enabled = Boolean(adminUrl && process.env.DATABASE_URL);
@@ -116,6 +117,14 @@ describe.skipIf(!enabled)('whatsapp booking', () => {
       insert into doctor_schedules (hospital_id, doctor_id, weekday, mode, start_time, end_time, effective_from)
       select ${hospitalId}, ${doctorId}, s.d::smallint, 'both', '09:00', '17:00', '2026-01-01'
       from generate_series(0, 6) as s(d)
+    `;
+
+    clearPlanAccessCache();
+    const [tier] = await admin<{ code: string }[]>`select code from plan_tiers limit 1`;
+    await admin`
+      insert into subscriptions (hospital_id, plan_tier_code, price_paise, daily_appointment_capacity,
+                                 included_appointments, included_messages, starts_at, ends_at, status)
+      values (${hospitalId}, ${tier.code}, 0, 50, 1000, 1000, now() - interval '30 days', now() + interval '60 days', 'active')
     `;
   });
 

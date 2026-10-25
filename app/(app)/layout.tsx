@@ -13,6 +13,7 @@ import { countEscalatedTests, myServicePoints } from '@/lib/services/test-orders
 import { switchUserAction } from '../ward-device/actions';
 import { signOutAction } from './dashboard/actions';
 import { GlobalSurveillanceBanner } from '@/components/ipd/global-surveillance-banner';
+import { PlanStatusBanner } from '@/components/plan-status-banner';
 
 /**
  * The header reads the session cookie to display user info and role-based
@@ -224,6 +225,10 @@ export default function AppLayout({ children }: LayoutProps<'/'>) {
 
         <Suspense fallback={null}>
           <SupportNotice />
+        </Suspense>
+
+        <Suspense fallback={null}>
+          <PlanStatusBanner />
         </Suspense>
 
         <GlobalSurveillanceBanner />

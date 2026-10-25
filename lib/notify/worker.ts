@@ -15,6 +15,8 @@ import type { Locale } from '@/lib/i18n/patient';
 import { isTemplateUnderReview, ProviderError } from './errors';
 import { getProvider } from './provider';
 import { isCritical, type TemplateCode } from './templates';
+import { getPlanAccess } from '@/lib/services/subscriptions';
+import { getFeatureDecision } from '@/lib/domain/plan-policy';
 
 const BATCH_SIZE = 25;
 const MAX_ATTEMPTS = 5;
@@ -195,6 +197,21 @@ export async function drainOutbox(now: Date = new Date()): Promise<DrainResult> 
       row.tokenNumber != null
         ? tokenLabel(row.sessionKind, row.tokenNumber)
         : String(payload.tokenNumber ?? payload.token ?? '');
+
+    if (templateCode === 'slot_reminder') {
+      const access = await getPlanAccess(row.hospitalId);
+      if (getFeatureDecision({ access, feature: 'messaging.reminders' }) === 'blocked') {
+        await db
+          .update(notificationOutbox)
+          .set({
+            status: 'suppressed',
+            failedReason: 'PLAN_EXPIRED_SUPPRESSED',
+          })
+          .where(eq(notificationOutbox.id, id));
+        result.suppressed += 1;
+        continue;
+      }
+    }
 
     let variables: string[];
     if (templateCode === 'queue_link') {
