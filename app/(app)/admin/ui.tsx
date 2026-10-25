@@ -199,3 +199,58 @@ export function ConfirmWord({ word, name }: { word: string; name: string }) {
     />
   );
 }
+
+export function KpiTile({
+  label,
+  value,
+  hint,
+  tone = 'default',
+  pill,
+  progress,
+}: {
+  label: string;
+  value?: ReactNode;
+  hint?: ReactNode;
+  tone?: 'default' | 'brand' | 'warn' | 'danger';
+  pill?: ReactNode;
+  progress?: { used: number; limit: number };
+}) {
+  const toneClass =
+    tone === 'brand'
+      ? 'text-brand-700'
+      : tone === 'warn'
+        ? 'text-amber-700'
+        : tone === 'danger'
+          ? 'text-rose-700'
+          : 'text-ink-900';
+
+  const percent =
+    progress && progress.limit > 0 ? (progress.used / progress.limit) * 100 : 0;
+
+  return (
+    <div className="rounded-xl border border-ink-200 bg-white p-4">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+        {label}
+      </div>
+      <div className="mt-1 flex items-baseline justify-between gap-2">
+        {value !== undefined && (
+          <div className={cn('truncate text-lg font-semibold', toneClass)}>{value}</div>
+        )}
+        {pill ? <div className="shrink-0">{pill}</div> : null}
+      </div>
+      {progress ? (
+        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-ink-100">
+          <div
+            className={cn(
+              'h-1.5 rounded-full transition-[width]',
+              percent >= 90 ? 'bg-rose-500' : percent >= 70 ? 'bg-amber-500' : 'bg-brand-500',
+            )}
+            style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
+          />
+        </div>
+      ) : null}
+      {hint ? <p className="mt-1 text-xs text-ink-500">{hint}</p> : null}
+    </div>
+  );
+}
+
