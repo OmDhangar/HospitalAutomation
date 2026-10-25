@@ -279,7 +279,12 @@ export function BookSlotForm({
         </div>
 
         <form onSubmit={handleSubmit} className="p-5 space-y-6">
-          {isClosed ? (
+          {details.isOnlineBookingBlocked ? (
+            <Alert tone="warn">
+              {details.maintenanceNotice ??
+                'Online appointment booking is temporarily paused for system maintenance. Clinic OPD is operating normally — please call the clinic directly to book.'}
+            </Alert>
+          ) : isClosed ? (
             <Alert tone="warn">
               <div className="space-y-2">
                 <p>
@@ -582,17 +587,25 @@ export function BookSlotForm({
             variant={isEmergency ? 'danger' : 'primary'}
             size="lg"
             className={cn('w-full', isEmergency && 'bg-red-600 hover:bg-red-700 font-bold')}
-            disabled={isPending || !selectedSlot || isClosed}
+            disabled={isPending || !selectedSlot || isClosed || details.isOnlineBookingBlocked}
             isLoading={isPending}
-            title={isClosed ? 'OPD closed today — book tomorrow instead.' : undefined}
+            title={
+              details.isOnlineBookingBlocked
+                ? 'Online booking is temporarily paused for system maintenance.'
+                : isClosed
+                  ? 'OPD closed today — book tomorrow instead.'
+                  : undefined
+            }
           >
-            {isClosed
-              ? 'OPD closed today — book tomorrow instead.'
-              : isPending
-                ? 'Scheduling Appointment...'
-                : isEmergency
-                  ? `🚨 Confirm Emergency Visit for ${formatTabLabel(details.serviceDate)}`
-                  : `Confirm Appointment for ${formatTabLabel(details.serviceDate)}`}
+            {details.isOnlineBookingBlocked
+              ? 'Online Booking Paused (Call Clinic to Book)'
+              : isClosed
+                ? 'OPD closed today — book tomorrow instead.'
+                : isPending
+                  ? 'Scheduling Appointment...'
+                  : isEmergency
+                    ? `🚨 Confirm Emergency Visit for ${formatTabLabel(details.serviceDate)}`
+                    : `Confirm Appointment for ${formatTabLabel(details.serviceDate)}`}
           </Button>
         </form>
       </Card>

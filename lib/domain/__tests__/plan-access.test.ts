@@ -10,41 +10,91 @@ const term = (status: 'trial' | 'active' | 'expired' | 'cancelled' | 'suspended'
 
 describe('planAccess', () => {
   it('lets a hospital with a live plan or trial in', () => {
-    expect(planAccess({ current: term('active', addDays(now, 10)), latest: null, now })).toEqual({ state: 'open' });
-    expect(planAccess({ current: term('trial', addDays(now, 2)), latest: null, now })).toEqual({ state: 'open' });
+    const activeTerm = term('active', addDays(now, 10));
+    expect(planAccess({ current: activeTerm, latest: null, now })).toEqual({
+      state: 'open',
+      hasAssignedPlan: true,
+      endsAt: activeTerm.endsAt,
+    });
+
+    const trialTerm = term('trial', addDays(now, 2));
+    expect(planAccess({ current: trialTerm, latest: null, now })).toEqual({
+      state: 'open',
+      hasAssignedPlan: true,
+      endsAt: trialTerm.endsAt,
+    });
   });
 
-  it('locks a revoked or suspended plan at once', () => {
-    const revoked = term('cancelled', addDays(now, 10));
-    expect(planAccess({ current: revoked, latest: revoked, now })).toMatchObject({ state: 'locked', reason: 'revoked' });
+  it('revokes an administratively suspended plan at once', () => {
     const suspended = term('suspended', addDays(now, 10));
-    expect(planAccess({ current: suspended, latest: suspended, now })).toMatchObject({ state: 'locked', reason: 'suspended' });
+    expect(planAccess({ current: suspended, latest: suspended, now })).toEqual({
+      state: 'revoked',
+      hasAssignedPlan: true,
+      reason: 'suspended',
+      endedAt: null,
+    });
+
+    expect(planAccess({ current: null, latest: null, now, isAdministrativeSuspension: true })).toEqual({
+      state: 'revoked',
+      hasAssignedPlan: true,
+      reason: 'revoked',
+      endedAt: null,
+    });
   });
 
-  it(`gives a plan that ran out ${LAPSE_GRACE_DAYS} days of grace, then locks it`, () => {
+  it(`gives a plan that ran out ${LAPSE_GRACE_DAYS} days of grace, then transitions to soft_locked`, () => {
     const endedYesterday = term('expired', addDays(now, -1));
     expect(planAccess({ current: null, latest: endedYesterday, now })).toEqual({
       state: 'grace',
+      hasAssignedPlan: true,
       endedAt: endedYesterday.endsAt,
       locksAt: addDays(endedYesterday.endsAt, LAPSE_GRACE_DAYS),
     });
 
     const endedLongAgo = term('expired', addDays(now, -(LAPSE_GRACE_DAYS + 1)));
-    expect(planAccess({ current: null, latest: endedLongAgo, now })).toMatchObject({ state: 'locked', reason: 'lapsed' });
+    expect(planAccess({ current: null, latest: endedLongAgo, now })).toEqual({
+      state: 'soft_locked',
+      hasAssignedPlan: true,
+      reason: 'lapsed',
+      endedAt: endedLongAgo.endsAt,
+      locksAt: addDays(endedLongAgo.endsAt, LAPSE_GRACE_DAYS),
+    });
   });
 
   it('treats a trial that ended exactly like a paid plan that ended', () => {
     const trial = term('trial', addDays(now, -(LAPSE_GRACE_DAYS + 1)));
-    expect(planAccess({ current: null, latest: trial, now })).toMatchObject({ state: 'locked', reason: 'lapsed' });
+    expect(planAccess({ current: null, latest: trial, now })).toEqual({
+      state: 'soft_locked',
+      hasAssignedPlan: true,
+      reason: 'lapsed',
+      endedAt: trial.endsAt,
+      locksAt: addDays(trial.endsAt, LAPSE_GRACE_DAYS),
+    });
   });
 
-  it('locks a revoked plan even inside the grace days', () => {
-    const revoked = term('cancelled', addDays(now, -1));
-    expect(planAccess({ current: null, latest: revoked, now })).toMatchObject({ state: 'locked', reason: 'revoked' });
+  it('treats scheduled cancellation as open until endsAt, then grace and soft_locked', () => {
+    const activeCancelled = term('cancelled', addDays(now, 5));
+    expect(planAccess({ current: activeCancelled, latest: activeCancelled, now })).toEqual({
+      state: 'open',
+      hasAssignedPlan: true,
+      endsAt: activeCancelled.endsAt,
+    });
+
+    const endedCancelled = term('cancelled', addDays(now, -1));
+    expect(planAccess({ current: null, latest: endedCancelled, now })).toEqual({
+      state: 'grace',
+      hasAssignedPlan: true,
+      endedAt: endedCancelled.endsAt,
+      locksAt: addDays(endedCancelled.endsAt, LAPSE_GRACE_DAYS),
+    });
   });
 
   it('never locks a hospital that was never put on a plan', () => {
-    expect(planAccess({ current: null, latest: null, now })).toEqual({ state: 'open' });
+    expect(planAccess({ current: null, latest: null, now })).toEqual({
+      state: 'open',
+      hasAssignedPlan: false,
+      endsAt: null,
+    });
   });
 });
 

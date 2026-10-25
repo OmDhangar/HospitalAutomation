@@ -11,6 +11,7 @@ import { createStaffUser, StaffAccountError } from '@/lib/services/auth';
 import { createHospital } from '@/lib/services/platform';
 import { getDoctorSlotsForDate } from '@/lib/services/scheduling';
 import { bookScheduledSlot, BookingError } from '@/lib/services/web-booking';
+import { clearPlanAccessCache } from '@/lib/services/subscriptions';
 
 const adminUrl = process.env.DATABASE_ADMIN_URL;
 const enabled = Boolean(adminUrl && process.env.DATABASE_URL);
@@ -129,6 +130,16 @@ describe.skipIf(!enabled)('security fixes', () => {
   });
 
   describe('public booking', () => {
+    beforeEach(async () => {
+      clearPlanAccessCache(hospitalId);
+      const [tier] = await admin<{ code: string }[]>`select code from plan_tiers limit 1`;
+      await admin`
+        insert into subscriptions (hospital_id, plan_tier_code, price_paise, daily_appointment_capacity,
+                                   included_appointments, included_messages, starts_at, ends_at, status)
+        values (${hospitalId}, ${tier.code}, 0, 50, 1000, 1000, now(), now() + interval '30 days', 'active')
+      `;
+    });
+
     const book = (slotDatetimeIso: string, phone = '+919800000001') =>
       bookScheduledSlot({
         hospitalId,

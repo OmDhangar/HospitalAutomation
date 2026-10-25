@@ -96,23 +96,23 @@ const planAccessFor = cache((hospitalId: string) => getPlanAccess(hospitalId));
  */
 export async function isPlanLocked(session: Session): Promise<boolean> {
   if (session.isPlatformAdmin || session.impersonatedByUserId !== null) return false;
-  return (await planAccessFor(session.hospitalId)).state === 'locked';
+  const access = await planAccessFor(session.hospitalId);
+  return access.state === 'soft_locked' || access.state === 'revoked';
 }
 
 /**
  * For pages that must not render at all without a signed-in staff member.
  *
- * Also where a revoked or lapsed plan takes effect. Every page and every
- * server action passes through here, so a locked hospital is stopped at the
- * door rather than by hiding links.
+ * Enforces valid user session, device/screen locks, and pending compliance
+ * notices. Clinical safe-harbor routes are always permitted, while specific
+ * paid growth capabilities are gated at their feature boundaries.
  */
-export async function requireSession(options: SessionOptions = {}): Promise<Session> {
+export async function requireSession(_options: SessionOptions = {}): Promise<Session> {
   const session = await getSessionState();
   if (!session) redirect('/login');
   // A locked ward-tablet session goes back to "Who is recording?"; a locked phone to its unlock screen.
   if (session.locked) redirect(session.channel === 'ward_device' ? '/ward-device' : '/unlock');
   if (session.noticePending) redirect('/notice');
-  if (!options.allowInactivePlan && (await isPlanLocked(session))) redirect('/plan-inactive');
   return session;
 }
 

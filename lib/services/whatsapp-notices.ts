@@ -28,6 +28,8 @@ import {
   reserveCampaignCapacityInTx,
 } from './notice-capacity';
 import { drainNoticeCampaignOutbox } from '@/lib/notify/notice-worker';
+import { getPlanAccess } from './subscriptions';
+import { getFeatureDecision } from '@/lib/domain/plan-policy';
 
 export type NoticeActor = {
   userId: string;
@@ -165,6 +167,11 @@ export async function createNoticeCampaignDraft(params: {
   templateVariables?: Record<string, unknown>;
 }): Promise<{ campaignId: string }> {
   assertCanManageNotices(params.actor, params.hospitalId);
+
+  const access = await getPlanAccess(params.hospitalId);
+  if (getFeatureDecision({ access, feature: 'messaging.campaigns' }) === 'blocked') {
+    throw new NoticeAuthError('WhatsApp broadcast campaigns are paused while plan is inactive.');
+  }
 
   const db = getAdminDb();
 
@@ -378,6 +385,11 @@ export async function confirmNoticeCampaign(params: {
   confirmedRecipientsCount: number;
 }> {
   assertCanManageNotices(params.actor, params.hospitalId);
+
+  const access = await getPlanAccess(params.hospitalId);
+  if (getFeatureDecision({ access, feature: 'messaging.campaigns' }) === 'blocked') {
+    throw new NoticeAuthError('WhatsApp broadcast campaigns are paused while plan is inactive.');
+  }
 
   const adminDb = getAdminDb();
 

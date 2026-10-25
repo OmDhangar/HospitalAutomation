@@ -20,6 +20,7 @@ import {
   getHourlyLoad,
   getMonthlyUsage,
 } from '@/lib/services/reports';
+import { getPlanAccess } from '@/lib/services/subscriptions';
 
 export const metadata = { title: 'Reports · OPD Queue' };
 
@@ -34,9 +35,10 @@ export default async function ReportsPage() {
   }
   const today = serviceDateIn(session.timezone);
 
-  const [hospital, branches] = await Promise.all([
+  const [hospital, branches, access] = await Promise.all([
     getHospital(session.hospitalId),
     listBranches(session.hospitalId),
+    getPlanAccess(session.hospitalId),
   ]);
 
   const [usage, dayStats, trend, hourly] = await Promise.all([
@@ -110,6 +112,18 @@ export default async function ReportsPage() {
           </Link>
         ) : null}
       </div>
+
+      {access.state === 'soft_locked' ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs sm:text-sm text-amber-900 shadow-2xs">
+          <p className="font-semibold">Historical Reports View Mode</p>
+          <p className="mt-1 text-amber-800">
+            Viewing historical queue trends is available. Advanced analytics exports are paused while the hospital plan is overdue.{' '}
+            <Link href="/subscription" className="font-semibold underline hover:text-amber-950">
+              Renew plan to restore all exports
+            </Link>.
+          </p>
+        </div>
+      ) : null}
 
       {!hasHistory ? (
         <Card>

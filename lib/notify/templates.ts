@@ -308,7 +308,7 @@ export const TEMPLATES: Record<TemplateCode, TemplateDefinition> = {
     body: {
       mr: 'डॉ. {{1}} यांच्यासोबत {{2}} रोजीची तुमची अपॉइंटमेंट रद्द करण्यात आली आहे, कारण {{4}} मुळे ओपीडी बंद राहील. सेवा {{3}} रोजी पुन्हा सुरू होईल.',
       hi: 'डॉ. {{1}} के साथ {{2}} की आपकी अपॉइंटमेंट रद्द कर दी गई है, क्योंकि {{4}} के कारण ओपीडी बंद रहेगी। सेवाएं {{3}} को पुनः शुरू होंगी।',
-      en: 'Your appointment with Dr. {{1}} on {{2}} has been cancelled as OPD will remain closed due to {{4}}. Services will resume on {{3}}.',
+      en: 'Your appointment with Dr. {{1}} on {{2}} has been cancelled as OPD will remain closed due to {{4}}. Clinic services will resume on {{3}} as scheduled.',
     },
     urlButton: {
       label: { mr: 'नवीन वेळ निवडा', hi: 'नया समय चुनें', en: 'Book a new time' },

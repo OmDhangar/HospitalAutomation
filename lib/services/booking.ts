@@ -29,6 +29,7 @@ import { CapacityError } from './capacity';
 import { createWalkIn, estimateForNewJoiner, getPublicQueueView, getQueueSnapshot } from './queue';
 import { OpdClosedError } from '@/lib/domain/queue';
 import { getPlanAccess } from './subscriptions';
+import { getFeatureDecision } from '@/lib/domain/plan-policy';
 import { getDoctorSlotsForDate } from './scheduling';
 import { bookScheduledSlot, BookingError } from './web-booking';
 
@@ -653,9 +654,9 @@ export async function handleInboundMessage(
       signing_hospital: options.expectedHospitalId,
     });
   }
-  // A revoked or lapsed plan stops WhatsApp booking, without a reply: the
-  // staff are locked out of the queue it would join.
-  if ((await getPlanAccess(hospitalId)).state === 'locked') {
+  // A revoked or soft-locked plan stops WhatsApp online booking, without a reply
+  const access = await getPlanAccess(hospitalId);
+  if (getFeatureDecision({ access, feature: 'public.web_booking' }) === 'blocked') {
     return dropped(inbound, 'plan_inactive', { hospitalId });
   }
 

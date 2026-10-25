@@ -22,6 +22,7 @@ import { getOpdStopStatusInTx, resolveOpdClosure, resolveOpdClosureInTx, type Op
 import { resolvePatientInTx, type PatientInput } from './patients';
 import { getDoctorSlotsForDate, type GeneratedSlot } from './scheduling';
 import { getPlanAccess } from './subscriptions';
+import { getFeatureDecision } from '@/lib/domain/plan-policy';
 
 export type TimeSlot = {
   timeStr: string;
@@ -54,6 +55,11 @@ export type DoctorBookingDetails = {
   isOnlineOpen?: boolean;
   isClosed?: boolean;
   closedAt?: string | null;
+  closureType?: 'none' | 'blackout' | 'stop_today';
+  reopenDate?: string | null;
+  publicReason?: string | null;
+  isOnlineBookingBlocked?: boolean;
+  maintenanceNotice?: string | null;
 };
 
 /** A booking refused for a reason the patient can be told. */
@@ -220,6 +226,18 @@ export async function getDoctorBookingDetails(args: {
       closureType: closure.closureType,
       reopenDate: closure.reopenDate ?? null,
       publicReason: closure.publicReason ?? null,
+      isOnlineBookingBlocked:
+        getFeatureDecision({
+          access: await getPlanAccess(args.hospitalId, now),
+          feature: 'public.web_booking',
+        }) === 'blocked',
+      maintenanceNotice:
+        getFeatureDecision({
+          access: await getPlanAccess(args.hospitalId, now),
+          feature: 'public.web_booking',
+        }) === 'blocked'
+          ? 'Online appointment booking is temporarily paused for system maintenance. Clinic OPD is operating normally — please call the clinic directly to book.'
+          : null,
     };
   });
 }
@@ -253,12 +271,12 @@ export async function bookScheduledSlot(args: {
 
   const now = args.now ?? new Date();
 
-  // A revoked or lapsed plan stops online booking: the staff who would see
-  // this patient are locked out of the queue it joins.
-  if ((await getPlanAccess(args.hospitalId, now)).state === 'locked') {
+  // A revoked or soft-locked plan stops new online bookings:
+  const access = await getPlanAccess(args.hospitalId, now);
+  if (getFeatureDecision({ access, feature: 'public.web_booking' }) === 'blocked') {
     throw new BookingError(
       'NOT_TAKING_BOOKINGS',
-      'This hospital is not taking online bookings right now. Please call the hospital.',
+      'Online appointment booking is temporarily paused for system maintenance. Clinic OPD is operating normally — please call the clinic directly to book.',
     );
   }
 

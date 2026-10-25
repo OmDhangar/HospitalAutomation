@@ -39,7 +39,8 @@ export default async function PlanInactivePage({ searchParams }: PageProps<'/pla
   // Renewed, restored, or never locked: back to work.
   if (access.state === 'open' || session.isPlatformAdmin) redirect(homePathFor(session.role));
 
-  const lapsed = access.state === 'grace' || access.reason === 'lapsed';
+  const lapsed =
+    access.state === 'grace' || (access.state === 'soft_locked' && access.reason === 'lapsed');
   const isOwner = canConfigureHospital(session.role);
   const canRenew = isOwner && lapsed;
   const pay = typeof params.pay === 'string' ? params.pay : null;
@@ -83,10 +84,10 @@ export default async function PlanInactivePage({ searchParams }: PageProps<'/pla
 
           <p className="text-sm text-ink-700">
             {access.state === 'grace'
-              ? `The hospital’s plan ended on ${ended}. Everything keeps working until ${day(access.locksAt)}; after that staff are signed out of the queue, IPD and records until it is renewed.`
-              : access.reason === 'lapsed'
-                ? `The hospital’s plan ended${ended ? ` on ${ended}` : ''}. The queue, IPD and records open again as soon as it is renewed. Nothing has been deleted.`
-                : 'QuriioHQ has stopped this hospital’s plan. Your records are safe and nothing has been deleted. Contact your QuriioHQ representative to restore it.'}
+              ? `The hospital’s plan ended on ${ended}. Everything keeps working until ${day(access.locksAt)}; after that paid growth features pause until it is renewed.`
+              : access.state === 'soft_locked' && access.reason === 'lapsed'
+                ? `The hospital’s plan ended${ended ? ` on ${ended}` : ''}. Clinical care (OPD & IPD) remains active. Public online booking, WhatsApp campaigns, and analytics exports pause until renewed. Nothing has been deleted.`
+                : 'QuriioHQ has paused this hospital’s plan. Your clinical records and patient care remain safe. Contact your QuriioHQ representative to restore external services.'}
           </p>
 
           {canRenew ? (
@@ -118,20 +119,18 @@ export default async function PlanInactivePage({ searchParams }: PageProps<'/pla
             <p className="text-sm text-ink-500">Ask the hospital owner to renew the plan.</p>
           ) : null}
 
-          {access.state === 'grace' ? (
-            <Link
-              href={homePathFor(session.role)}
-              className="flex min-h-11 w-full items-center justify-center rounded-lg text-sm font-semibold text-ink-700 ring-1 ring-inset ring-ink-300 hover:bg-ink-50"
-            >
-              Continue to work
-            </Link>
-          ) : (
-            <form action={signOutAction}>
-              <Button type="submit" variant="ghost" className="w-full justify-center">
-                Sign out
-              </Button>
-            </form>
-          )}
+          <Link
+            href={homePathFor(session.role)}
+            className="flex min-h-11 w-full items-center justify-center rounded-lg text-sm font-semibold text-ink-700 ring-1 ring-inset ring-ink-300 hover:bg-ink-50"
+          >
+            Return to clinical care
+          </Link>
+
+          <form action={signOutAction}>
+            <Button type="submit" variant="ghost" className="w-full justify-center">
+              Sign out
+            </Button>
+          </form>
         </div>
       </div>
     </main>
