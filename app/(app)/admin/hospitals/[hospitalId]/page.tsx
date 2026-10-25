@@ -51,6 +51,8 @@ import {
 } from './actions';
 import { PasswordResetForm } from './password-reset';
 import { WhatsAppCard } from './whatsapp-card';
+import { AccountHeader } from './components/account-header';
+import { AccountKpiStrip } from './components/account-kpi-strip';
 
 export const metadata = { title: 'Account · Platform' };
 
@@ -93,39 +95,21 @@ export default async function AccountDetailPage({
 
   return (
     <div className="space-y-5">
-      <BackLink href="/admin/hospitals">All accounts</BackLink>
+      <AccountHeader
+        account={account}
+        branches={detail.branches}
+        canImpersonate={true}
+      />
 
       <Notices query={query} />
 
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <h2 className="text-lg font-bold text-ink-900">{account.name}</h2>
-            <StandingPill standing={account.standing} />
-            {account.active ? null : (
-              <span className="rounded-full bg-ink-800 px-2 py-0.5 text-xs font-semibold text-white">
-                Switched off
-              </span>
-            )}
-          </div>
-          <p className="mt-0.5 text-xs text-ink-500">
-            {account.slug} · {account.timezone} · onboarded {shortDate(account.createdAt)}
-          </p>
-        </div>
-
-        <form action={startImpersonationAction} className="flex items-end gap-2">
-          <input type="hidden" name="hospitalId" value={account.hospitalId} />
-          <label className="w-56">
-            <span className="mb-1 block text-xs font-medium text-ink-600">
-              Support access (read-only, 30 min)
-            </span>
-            <Input name="reason" required placeholder="Ticket or reason" className="py-2 text-sm" />
-          </label>
-          <Button type="submit" variant="secondary">
-            View as hospital
-          </Button>
-        </form>
-      </div>
+      <AccountKpiStrip
+        account={account}
+        currentTerm={currentTerm}
+        dailyCapacity={detail.dailyCapacity}
+        whatsapp={detail.whatsapp}
+        binding={binding}
+      />
 
       {/* ---------------------------------------------------------- plan */}
 
