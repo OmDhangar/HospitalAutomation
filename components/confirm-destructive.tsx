@@ -107,6 +107,9 @@ export function ConfirmDestructiveModal({
         onClose();
       }
     } catch (err: unknown) {
+      if (err instanceof Error && err.message.includes('NEXT_REDIRECT')) {
+        throw err;
+      }
       setError(err instanceof Error ? err.message : 'An error occurred.');
     } finally {
       setIsPending(false);
@@ -322,6 +325,9 @@ export function ConfirmModal({
         onClose();
       }
     } catch (err: unknown) {
+      if (err instanceof Error && err.message.includes('NEXT_REDIRECT')) {
+        throw err;
+      }
       setError(err instanceof Error ? err.message : 'An error occurred.');
     } finally {
       setIsPending(false);

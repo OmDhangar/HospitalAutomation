@@ -57,6 +57,8 @@ import { EntitlementsCard } from './components/entitlements-card';
 import { UsageThisPeriodCard } from './components/usage-card';
 import { WhatsAppStatusCard } from './components/whatsapp-status-card';
 import { LoginsTable } from './components/logins-table';
+import { ProfileCard } from './components/profile-card';
+import { DangerZoneCard } from './components/danger-zone-card';
 
 export const metadata = { title: 'Account · Platform' };
 
@@ -149,136 +151,12 @@ export default async function AccountDetailPage({
             number={detail.whatsapp}
           />
         </div>
-      </div>
-
-      {/* --------------------------------------------------------- users */}
-      <LoginsTable hospitalId={account.hospitalId} users={detail.users} />
-
-      {/* ------------------------------------------------- profile & risk */}
-
-      <div className="grid gap-5 lg:grid-cols-2">
-        <Card>
-          <CardHeader title="Profile" hint="Branches, contact and commercial terms" />
-          <form action={updateProfileAction} className="grid gap-3 p-5 sm:grid-cols-2">
-            <input type="hidden" name="hospitalId" value={account.hospitalId} />
-            <Field label="Hospital name">
-              <Input name="name" defaultValue={account.name} className="py-2.5 text-sm" />
-            </Field>
-            <Field label="Owner WhatsApp" hint="Where the monthly summary goes">
-              <Input
-                name="ownerPhoneE164"
-                defaultValue={account.ownerPhoneE164 ?? ''}
-                placeholder="+919876543210"
-                className="py-2.5 text-sm"
-              />
-            </Field>
-            <Field label="Timezone">
-              <Input name="timezone" defaultValue={account.timezone} className="py-2.5 text-sm" />
-            </Field>
-            <Field label="Discount %" hint="Founding-customer or negotiated rate">
-              <Input
-                name="discountPercent"
-                type="number"
-                min={0}
-                max={100}
-                className="py-2.5 text-sm"
-              />
-            </Field>
-            <div className="sm:col-span-2">
-              <Button type="submit" variant="primary">
-                Save profile
-              </Button>
-            </div>
-          </form>
-
-          <div className="border-t border-ink-200 px-5 py-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-ink-500">Branches</p>
-            <ul className="mt-1.5 space-y-1">
-              {detail.branches.map((branch) => (
-                <li key={branch.id} className="text-sm text-ink-700">
-                  {branch.name}
-                  {branch.active ? null : (
-                    <span className="ml-1.5 text-xs text-ink-400">(inactive)</span>
-                  )}
-                  {branch.address ? (
-                    <span className="ml-1.5 text-xs text-ink-400">{branch.address}</span>
-                  ) : null}
-                </li>
-              ))}
-              {detail.branches.length === 0 ? (
-                <li className="text-sm text-ink-400">None</li>
-              ) : null}
-            </ul>
-          </div>
-        </Card>
-
-        <Card>
-          <CardHeader
-            title={account.active ? 'Suspend this account' : 'Reactivate this account'}
-            hint="Switches the hospital itself off, separately from the subscription"
-          />
-          <form action={setHospitalActiveAction} className="space-y-3 p-5">
-            <input type="hidden" name="hospitalId" value={account.hospitalId} />
-            <input type="hidden" name="active" value={account.active ? 'false' : 'true'} />
-            <Field
-              label="Reason"
-              hint="Goes in the hospital’s own audit log, where their owner can read it"
-            >
-              <Input name="reason" required placeholder="Non-payment, 60 days overdue" className="py-2.5 text-sm" />
-            </Field>
-            {account.active ? (
-              <div className="flex items-center gap-2">
-                <ConfirmWord word="SUSPEND" name="confirm" />
-                <Button type="submit" variant="danger">
-                  Suspend account
-                </Button>
-              </div>
-            ) : (
-              <Button type="submit" variant="primary">
-                Reactivate account
-              </Button>
-            )}
-            <p className="text-xs leading-relaxed text-ink-500">
-              Suspending hides the hospital from the portfolio and from onboarding lists.
-              It does not sign their staff out or stop the queue — for that, use{' '}
-              <span className="font-medium">Revoke plan</span> in the Subscription card.
-            </p>
-          </form>
-        </Card>
-
-        <Card>
-          <CardHeader
-            title="Revoke or restore plan"
-            hint="Locks staff out now and stops online booking. Restorable."
-          />
-          <div className="p-5">
-            {revokeReason !== null ? (
-              <form action={restorePlanAction} className="flex flex-wrap items-center justify-between gap-3">
-                <input type="hidden" name="hospitalId" value={account.hospitalId} />
-                <p className="text-sm text-rose-800">
-                  <span className="font-semibold">Plan revoked.</span>{' '}
-                  {revokeReason ? `Reason: ${revokeReason}. ` : ''}Staff are locked out and online booking is off.
-                </p>
-                <Button type="submit" variant="primary">
-                  Restore plan
-                </Button>
-              </form>
-            ) : (
-              <form action={revokePlanAction} className="flex flex-wrap items-end gap-3">
-                <input type="hidden" name="hospitalId" value={account.hospitalId} />
-                <Field label="Revoke plan" hint="Locks staff out now and stops online booking. Restorable.">
-                  <Input name="reason" required placeholder="Reason, e.g. unpaid" className="w-64 py-2.5 text-sm" />
-                </Field>
-                <div className="flex items-center gap-2 pb-0.5">
-                  <ConfirmWord word="REVOKE" name="confirm" />
-                  <Button type="submit" variant="danger" disabled={!currentTerm}>
-                    Revoke plan
-                  </Button>
-                </div>
-              </form>
-            )}
-          </div>
-        </Card>
+        <div className="lg:col-span-7">
+          <LoginsTable hospitalId={account.hospitalId} users={detail.users} />
+        </div>
+        <div className="lg:col-span-5">
+          <ProfileCard account={account} branches={detail.branches} />
+        </div>
       </div>
 
       {/* --------------------------------------------------- money & log */}
@@ -386,6 +264,13 @@ export default async function AccountDetailPage({
           </table>
         </div>
       </Card>
+
+      <DangerZoneCard
+        hospitalId={account.hospitalId}
+        hasCurrentPlan={Boolean(currentTerm)}
+        revokeReason={revokeReason}
+        accountActive={account.active}
+      />
     </div>
   );
 }
