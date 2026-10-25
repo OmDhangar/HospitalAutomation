@@ -39,9 +39,11 @@ export function ConfirmDestructiveModal({
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const reasonInputRef = useRef<HTMLInputElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (isOpen) {
+      previousFocusRef.current = document.activeElement as HTMLElement | null;
       setReason('');
       setTyped('');
       setError(null);
@@ -50,6 +52,8 @@ export function ConfirmDestructiveModal({
       setTimeout(() => {
         reasonInputRef.current?.focus();
       }, 50);
+    } else if (previousFocusRef.current) {
+      previousFocusRef.current.focus();
     }
   }, [isOpen]);
 
@@ -247,9 +251,11 @@ export function ConfirmModal({
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (isOpen) {
+      previousFocusRef.current = document.activeElement as HTMLElement | null;
       setReason('');
       setError(null);
       setIsPending(false);
@@ -263,6 +269,8 @@ export function ConfirmModal({
           focusable?.focus();
         }
       }, 50);
+    } else if (previousFocusRef.current) {
+      previousFocusRef.current.focus();
     }
   }, [isOpen]);
 
