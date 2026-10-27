@@ -37,7 +37,14 @@ import { formatUndoToken, idList, isId, parseUndoToken } from '@/lib/domain/undo
 import { PatientBillingError } from '@/lib/services/patient-billing';
 import { DoctorIpdError, orderTests } from '@/lib/services/doctor-ipd';
 import { withTenant } from '@/lib/db';
-import { admissions, doctors, vitalsReadings, intakeOutput, clinicalAuditLogs } from '@/lib/db/schema';
+import { admissions, doctors, vitalsReadings, intakeOutput, clinicalAuditLogs, type PharmacyReturnItem } from '@/lib/db/schema';
+import {
+  updateMedicalClearance,
+  recordPharmacyClearance,
+  updateNursingClearance,
+  issueDischargeGatePass,
+  ClearanceGateError,
+} from '@/lib/services/ipd-clearance';
 import { eq, and } from 'drizzle-orm';
 import {
   recordAllergyAssessment,
@@ -1199,6 +1206,137 @@ export async function registerUnidentifiedAction(args: {
     return { ok: true, data: result };
   } catch (err: any) {
     return { ok: false, error: err.message || 'Registration failed' };
+  }
+}
+
+/**
+ * Consultant certifies clinical readiness & discharge type.
+ */
+export async function updateMedicalClearanceAction(args: {
+  admissionId: string;
+  dischargeType: 'regular' | 'lama' | 'dama' | 'transfer' | 'absconded' | 'death';
+  clinicalStabilityNotes?: string;
+  ready: boolean;
+}): Promise<{ ok: boolean; error?: string }> {
+  const session = await requireWritableSession();
+  if (!can(session.role, 'ipd.dischargeReady')) {
+    return { ok: false, error: 'You do not have permission to update medical clearance.' };
+  }
+  try {
+    await updateMedicalClearance({
+      hospitalId: session.hospitalId,
+      admissionId: args.admissionId,
+      actorUserId: session.userId,
+      dischargeType: args.dischargeType,
+      clinicalStabilityNotes: args.clinicalStabilityNotes,
+      ready: args.ready,
+    });
+    revalidatePath(`/ipd/patients/${args.admissionId}/discharge`);
+    revalidatePath(`/ipd/patients/${args.admissionId}`);
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to update medical clearance' };
+  }
+}
+
+/**
+ * Pharmacy records bedside returns, credit adjustment, and take-home counseling.
+ */
+export async function recordPharmacyClearanceAction(args: {
+  admissionId: string;
+  returnItems: PharmacyReturnItem[];
+  creditNoteNo?: string;
+  creditAmountPaise?: number;
+  takeHomeCounseled: boolean;
+  takeHomeCounselingNotes?: string;
+  cleared: boolean;
+}): Promise<{ ok: boolean; error?: string }> {
+  const session = await requireWritableSession();
+  if (!can(session.role, 'ipd.administer') && session.role !== 'nurse' && session.role !== 'owner') {
+    return { ok: false, error: 'You do not have permission to record pharmacy clearance.' };
+  }
+  try {
+    await recordPharmacyClearance({
+      hospitalId: session.hospitalId,
+      admissionId: args.admissionId,
+      actorUserId: session.userId,
+      returnItems: args.returnItems,
+      creditNoteNo: args.creditNoteNo,
+      creditAmountPaise: args.creditAmountPaise,
+      takeHomeCounseled: args.takeHomeCounseled,
+      takeHomeCounselingNotes: args.takeHomeCounselingNotes,
+      cleared: args.cleared,
+    });
+    revalidatePath(`/ipd/patients/${args.admissionId}/discharge`);
+    revalidatePath(`/ipd/patients/${args.admissionId}`);
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to record pharmacy clearance' };
+  }
+}
+
+/**
+ * Ward nurse confirms line removal safety checklist and belongings handover.
+ */
+export async function updateNursingClearanceAction(args: {
+  admissionId: string;
+  ivCannulaRemoved: boolean;
+  foleyCatheterRemoved: boolean;
+  drainsRemoved: boolean;
+  woundDressingDone: boolean;
+  belongingsAndReportsHandedOver: boolean;
+  dischargeVitalsTaken: boolean;
+  nursingHandoverNotes?: string;
+  cleared: boolean;
+}): Promise<{ ok: boolean; error?: string }> {
+  const session = await requireWritableSession();
+  if (!can(session.role, 'ipd.chart') && session.role !== 'nurse' && session.role !== 'owner') {
+    return { ok: false, error: 'You do not have permission to update nursing clearance.' };
+  }
+  try {
+    await updateNursingClearance({
+      hospitalId: session.hospitalId,
+      admissionId: args.admissionId,
+      actorUserId: session.userId,
+      ivCannulaRemoved: args.ivCannulaRemoved,
+      foleyCatheterRemoved: args.foleyCatheterRemoved,
+      drainsRemoved: args.drainsRemoved,
+      woundDressingDone: args.woundDressingDone,
+      belongingsAndReportsHandedOver: args.belongingsAndReportsHandedOver,
+      dischargeVitalsTaken: args.dischargeVitalsTaken,
+      nursingHandoverNotes: args.nursingHandoverNotes,
+      cleared: args.cleared,
+    });
+    revalidatePath(`/ipd/patients/${args.admissionId}/discharge`);
+    revalidatePath(`/ipd/patients/${args.admissionId}`);
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to update nursing clearance' };
+  }
+}
+
+/**
+ * Generates and issues official Discharge Gate Pass with hard clearance gating.
+ */
+export async function issueDischargeGatePassAction(args: {
+  admissionId: string;
+}): Promise<{ ok: boolean; data?: { gatePassNumber: string; issuedAt: Date }; error?: string }> {
+  const session = await requireWritableSession();
+  if (!can(session.role, 'billing.collect') && !can(session.role, 'ipd.discharge')) {
+    return { ok: false, error: 'You do not have permission to issue discharge gate pass.' };
+  }
+  try {
+    const res = await issueDischargeGatePass({
+      hospitalId: session.hospitalId,
+      admissionId: args.admissionId,
+      actorUserId: session.userId,
+    });
+    revalidatePath(`/ipd/patients/${args.admissionId}/discharge`);
+    revalidatePath(`/ipd/patients/${args.admissionId}`);
+    revalidatePath('/ipd');
+    return { ok: true, data: res };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to issue gate pass' };
   }
 }
 
