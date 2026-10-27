@@ -3,11 +3,13 @@ import { withTenant, type Tx } from '@/lib/db';
 import {
   admissions,
   auditLogs,
+  doctors,
   documentSequences,
   ipdDischargeClearances,
   ipdDischargeSummaries,
   ipdMedicationOrders,
   ipdTakeHomePrescriptions,
+  patients,
   users,
   type DischargeClearanceStatus,
   type IpdDischargeClearanceRow,
@@ -138,11 +140,13 @@ export async function getDischargeClearance(
       const [admission] = await tx
         .select({
           status: admissions.status,
-          patientName: admissions.patientName,
-          doctorName: admissions.doctorName,
           dischargeReadyAt: admissions.dischargeReadyAt,
+          patientName: patients.name,
+          doctorName: doctors.name,
         })
         .from(admissions)
+        .leftJoin(patients, eq(patients.id, admissions.patientId))
+        .leftJoin(doctors, eq(doctors.id, admissions.admittingDoctorId))
         .where(and(eq(admissions.hospitalId, hospitalId), eq(admissions.id, admissionId)))
         .limit(1);
 

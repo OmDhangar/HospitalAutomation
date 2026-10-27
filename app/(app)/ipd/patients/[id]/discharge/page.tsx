@@ -10,6 +10,7 @@ import {
   getLatestDischargeSummary,
   listHomeMedications,
 } from '@/lib/services/ipd-discharge-summary';
+import { getDischargeClearance } from '@/lib/services/ipd-clearance';
 import { withTenant } from '@/lib/db';
 import { doctors } from '@/lib/db/schema';
 
@@ -18,10 +19,12 @@ export default async function DischargePage({ params }: { params: Promise<any> }
   const resolvedParams = await params;
   const id = resolvedParams?.id as string;
 
-  if (session.role === 'nurse') {
-    redirect(`/ipd/patients/${id}/emar`);
-  }
-  if (!can(session.role, 'ipd.dischargeReady') && !can(session.role, 'ipd.discharge')) {
+  if (
+    !can(session.role, 'ipd.dischargeReady') &&
+    !can(session.role, 'ipd.discharge') &&
+    !can(session.role, 'ipd.chart') &&
+    session.role !== 'nurse'
+  ) {
     redirect(homePathFor(session.role));
   }
 
@@ -31,14 +34,17 @@ export default async function DischargePage({ params }: { params: Promise<any> }
   let dischargeSummary: any = null;
   let homeMedications: any[] = [];
   let attendingDoctor: any = null;
+  let clearanceView: any = null;
 
   try {
-    const [summary, homeMeds] = await Promise.all([
-      getLatestDischargeSummary(session.hospitalId, id),
-      listHomeMedications(session.hospitalId, id),
+    const [summary, homeMeds, clearanceData] = await Promise.all([
+      getLatestDischargeSummary(session.hospitalId, id).catch(() => null),
+      listHomeMedications(session.hospitalId, id).catch(() => []),
+      getDischargeClearance(session.hospitalId, id).catch(() => null),
     ]);
     dischargeSummary = summary;
     homeMedications = homeMeds;
+    clearanceView = clearanceData;
   } catch {
     // Graceful fallback
   }
@@ -80,11 +86,16 @@ export default async function DischargePage({ params }: { params: Promise<any> }
         dischargeReadyAt={admission.dischargeReadyAt}
         doctorName={admission.doctorName ?? attendingDoctor?.name ?? undefined}
         patientName={admission.patientName}
+        mrn={admission.mrn ?? undefined}
+        ipdNumber={admission.ipdNumber != null ? String(admission.ipdNumber) : undefined}
         bedLabel={admission.bed?.label}
         wardName={admission.bed?.wardName}
         dischargeSummary={dischargeSummary}
         homeMedications={homeMedications}
         attendingDoctor={attendingDoctor}
+        initialClearance={clearanceView?.clearance}
+        activeMedicationLines={clearanceView?.activeMedicationLines ?? []}
+        medRecCompleted={clearanceView?.medRecCompleted ?? false}
         onToggleDischargeReady={handleToggleReady}
       />
     </div>
