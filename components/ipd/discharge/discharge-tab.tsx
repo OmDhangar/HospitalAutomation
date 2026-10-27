@@ -19,7 +19,7 @@ import {
   issueDischargeGatePassAction,
 } from '@/app/(app)/ipd/actions';
 import type { IpdDischargeClearanceRow, PharmacyReturnItem } from '@/lib/db/schema';
-import { computeClearanceStatus } from '@/lib/services/ipd-clearance';
+import { computeClearanceStatus } from '@/lib/domain/discharge-clearance';
 
 export interface DischargeTabProps {
   admissionId: string;

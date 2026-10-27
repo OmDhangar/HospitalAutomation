@@ -17,6 +17,9 @@ import {
 } from '@/lib/db/schema';
 import { getLatestDischargeSummary } from '@/lib/services/ipd-discharge-summary';
 import { getMedRec } from '@/lib/services/medrec';
+import { computeClearanceStatus } from '@/lib/domain/discharge-clearance';
+
+export { computeClearanceStatus };
 
 export class ClearanceGateError extends Error {
   constructor(message: string) {
@@ -45,48 +48,6 @@ export interface DischargeClearanceCockpitView {
   }[];
 }
 
-/**
- * Pure evaluation function for computing clearance gate status across all 5 departments.
- */
-export function computeClearanceStatus(args: {
-  clearance?: Partial<IpdDischargeClearanceRow> | null;
-  isSummaryFinalized: boolean;
-  isBillingSettled: boolean;
-}): DischargeClearanceStatus {
-  const c = args.clearance ?? {};
-
-  const isMedicalCleared = Boolean(c.clinicalFitAt);
-  const isPharmacyCleared = Boolean(c.pharmacyReturnedAt);
-  const isNursingCleared = Boolean(
-    c.nursingClearedAt && c.ivCannulaRemoved && c.belongingsAndReportsHandedOver,
-  );
-  const isSummaryFinalized = Boolean(args.isSummaryFinalized);
-  const isBillingCleared = Boolean(args.isBillingSettled || c.billingClearedAt);
-
-  const canIssueGatePass =
-    isMedicalCleared &&
-    isPharmacyCleared &&
-    isNursingCleared &&
-    isSummaryFinalized &&
-    isBillingCleared;
-
-  let completedCount = 0;
-  if (isMedicalCleared) completedCount++;
-  if (isPharmacyCleared) completedCount++;
-  if (isNursingCleared) completedCount++;
-  if (isSummaryFinalized) completedCount++;
-  if (isBillingCleared) completedCount++;
-
-  return {
-    isMedicalCleared,
-    isPharmacyCleared,
-    isNursingCleared,
-    isSummaryFinalized,
-    isBillingCleared,
-    canIssueGatePass,
-    completedCount,
-  };
-}
 
 /**
  * Fetches the clearance state for an admission, creating an empty record if one does not exist.
