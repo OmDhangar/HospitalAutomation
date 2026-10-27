@@ -49,7 +49,7 @@ export default async function DepositsPage({ searchParams }: PageProps<'/ipd/dep
             {alerts.map((a) => (
               <li key={a.admissionId} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm sm:px-5">
                 <span className="min-w-0">
-                  <Link href={`/ipd/admissions/${a.admissionId}`} className="font-semibold text-ink-900 hover:underline">
+                  <Link href={`/ipd/patients/${a.admissionId}/summary`} className="font-semibold text-ink-900 hover:underline">
                     {a.patientName}
                   </Link>
                   <span className="text-ink-500"> · {a.bed ?? 'IPD'}</span>

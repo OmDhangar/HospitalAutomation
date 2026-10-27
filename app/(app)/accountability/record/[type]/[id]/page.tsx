@@ -64,7 +64,7 @@ export default async function RecordHistoryPage({ params }: PageProps<'/accounta
         </Link>
         {admission ? (
           <Link
-            href={`/ipd/admissions/${admission.admissionId}${type === 'chart_entry' ? '/tpr' : ''}`}
+            href={type === 'chart_entry' ? `/ipd/admissions/${admission.admissionId}/tpr` : `/ipd/patients/${admission.admissionId}/summary`}
             className="inline-flex min-h-11 items-center text-sm font-semibold text-brand-700 hover:text-brand-900"
           >
             Open the patient file →

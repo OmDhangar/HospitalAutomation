@@ -8,14 +8,14 @@ interface AdmissionPageProps {
 }
 
 /**
- * Admission route: directs nurses to their bedside treatment workspace,
- * and doctors/administrators to the clinical summary cockpit.
+ * Admission route: directs authenticated users directly to the patient summary cockpit
+ * (or bedside eMAR for nurses). Unauthenticated users are redirected to login by requireSession.
  */
 export default async function AdmissionPage({ params }: AdmissionPageProps) {
   const session = await requireSession();
   const { id } = await params;
   if (session.role === 'nurse') {
-    redirect(`/ipd/admissions/${id}/treatment`);
+    redirect(`/ipd/patients/${id}/emar`);
   }
   redirect(`/ipd/patients/${id}/summary`);
 }

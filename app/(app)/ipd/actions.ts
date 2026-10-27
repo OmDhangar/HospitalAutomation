@@ -151,7 +151,7 @@ export async function assignBedAction(form: FormData) {
     if (isActionError(err)) go(sheet, { error: (err as Error).message });
     throw err;
   }
-  go(`/ipd/admissions/${admissionId}`, {
+  go(`/ipd/patients/${admissionId}/summary`, {
     saved: 'Admitted. The bed is on the ward grid.',
     undo: formatUndoToken('assign', admissionId, depositId),
   });
@@ -170,7 +170,7 @@ export async function transferBedAction(form: FormData) {
     if (isActionError(err)) go(page, { error: (err as Error).message });
     throw err;
   }
-  go(`/ipd/admissions/${admissionId}`, {
+  go(`/ipd/patients/${admissionId}/summary`, {
     saved: 'Moved to the new bed. Everything recorded stays with the stay.',
     ...(previousBedId ? { undo: formatUndoToken('transfer', admissionId, previousBedId) } : {}),
   });
@@ -187,10 +187,10 @@ export async function cancelAdmissionAction(form: FormData) {
       actorUserId: session.userId,
     });
   } catch (err) {
-    if (isActionError(err)) go(`/ipd/admissions/${admissionId}`, { error: (err as Error).message });
+    if (isActionError(err)) go(`/ipd/patients/${admissionId}/summary`, { error: (err as Error).message });
     throw err;
   }
-  go(`/ipd/admissions/${admissionId}`, {
+  go(`/ipd/patients/${admissionId}/summary`, {
     saved: 'Admission cancelled.',
     undo: formatUndoToken('cancel', admissionId),
   });
@@ -240,7 +240,7 @@ export async function createDirectAdmissionAction(form: FormData) {
     if (isActionError(err)) back((err as Error).message);
     throw err;
   }
-  go(`/ipd/admissions/${admissionId}`, {
+  go(`/ipd/patients/${admissionId}/summary`, {
     saved: text(form, 'bedId') ? 'Admitted.' : 'Admitted. Assign a bed when one is free.',
     undo: formatUndoToken('direct', admissionId, depositId),
   });
@@ -251,8 +251,8 @@ export async function setDischargeReadyAction(form: FormData) {
   const session = await authorize('ipd.dischargeReady');
   const admissionId = text(form, 'admissionId');
   const ready = text(form, 'ready') === 'true';
-  const back = text(form, 'back') || `/ipd/admissions/${admissionId}`;
-  const safeBack = back.startsWith('/ipd') ? back : `/ipd/admissions/${admissionId}`;
+  const back = text(form, 'back') || `/ipd/patients/${admissionId}/summary`;
+  const safeBack = back.startsWith('/ipd') ? back : `/ipd/patients/${admissionId}/summary`;
   try {
     await setDischargeReady({ hospitalId: session.hospitalId, admissionId, ready, actorUserId: session.userId });
   } catch (err) {
@@ -278,10 +278,10 @@ export async function voidCareEntryAction(form: FormData) {
       actorUserId: session.userId,
     });
   } catch (err) {
-    if (err instanceof CareEntryError) go(`/ipd/admissions/${admissionId}`, { error: err.message });
+    if (err instanceof CareEntryError) go(`/ipd/patients/${admissionId}/summary`, { error: err.message });
     throw err;
   }
-  go(`/ipd/admissions/${admissionId}`, {
+  go(`/ipd/patients/${admissionId}/summary`, {
     saved: 'Entry removed. Its bill line is voided with your reason.',
     undo: formatUndoToken('void-entry', entryId),
   });
