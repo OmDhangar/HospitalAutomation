@@ -29,14 +29,14 @@ export default async function TransferBedPage({ params, searchParams }: PageProp
   }
   const admission = await getAdmissionSummary(session.hospitalId, id);
   if (!admission) notFound();
-  if (admission.status !== 'admitted' && admission.status !== 'discharge_ready') redirect(`/ipd/admissions/${id}`);
+  if (admission.status !== 'admitted' && admission.status !== 'discharge_ready') redirect(`/ipd/patients/${id}/summary`);
 
   const freeWards = await listFreeBeds({ hospitalId: session.hospitalId, branchId: admission.branchId });
 
   return (
     <form action={transferBedAction} className="mx-auto max-w-3xl space-y-4 pb-28 sm:pb-6">
       <input type="hidden" name="admissionId" value={admission.admissionId} />
-      <Link href={`/ipd/admissions/${id}`} className="inline-flex min-h-11 items-center text-sm text-ink-500 hover:text-ink-800">
+      <Link href={`/ipd/patients/${id}/summary`} className="inline-flex min-h-11 items-center text-sm text-ink-500 hover:text-ink-800">
         ← Back to {admission.patientName}
       </Link>
       <PatientHeader

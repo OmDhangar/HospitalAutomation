@@ -126,7 +126,7 @@ export default async function IpdHomePage({ searchParams }: PageProps<'/ipd'>) {
                     beds={ward.beds}
                     timezone={session.timezone}
                     now={now}
-                    hrefFor={(bed) => `/ipd/admissions/${bed.occupant!.admissionId}`}
+                    hrefFor={(bed) => `/ipd/patients/${bed.occupant!.admissionId}/summary`}
                     emptyHrefFor={
                       canAdmit && census.awaitingBed.length > 0
                         ? (bed) => `/ipd?tab=awaiting&bed=${bed.id}`
@@ -263,7 +263,7 @@ function AwaitingBed({
                       </Button>
                     </Link>
                   ) : (
-                    <Link href={`/ipd/admissions/${patient.admissionId}`} className="block">
+                    <Link href={`/ipd/patients/${patient.admissionId}/summary`} className="block">
                       <Button size="lg" className="w-full">
                         Open
                       </Button>
@@ -317,7 +317,7 @@ function DischargeReady({
             </div>
             <div className="border-t border-ink-200 p-3">
               <Link
-                href={canDischarge ? `/ipd/admissions/${patient.admissionId}/bill` : `/ipd/admissions/${patient.admissionId}`}
+                href={canDischarge ? `/ipd/patients/${patient.admissionId}/discharge` : `/ipd/patients/${patient.admissionId}/summary`}
                 className="block"
               >
                 <Button variant={canDischarge ? 'primary' : 'secondary'} size="lg" className="w-full">

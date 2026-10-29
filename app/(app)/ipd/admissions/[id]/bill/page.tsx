@@ -69,7 +69,7 @@ export default async function DischargeBillPage({ params, searchParams }: PagePr
 
   return (
     <div className="mx-auto max-w-5xl space-y-4">
-      <Link href={`/ipd/admissions/${id}`} className="inline-flex min-h-11 items-center text-sm text-ink-500 hover:text-ink-800">
+      <Link href={`/ipd/patients/${id}/summary`} className="inline-flex min-h-11 items-center text-sm text-ink-500 hover:text-ink-800">
         ← Back to {view.admission.patientName}
       </Link>
 

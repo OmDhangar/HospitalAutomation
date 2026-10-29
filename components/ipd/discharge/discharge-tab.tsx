@@ -2,9 +2,24 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { StatusBadge } from '@/components/ipd/status-badge';
 import { DischargeSummaryDrawer } from './discharge-summary-drawer';
-import { CheckIcon, FileTextIcon, PrinterIcon } from '@/components/icons';
+import { MedicalClearanceModal } from './drawers/medical-clearance-modal';
+import { PharmacyReturnDrawer } from './drawers/pharmacy-return-drawer';
+import { GatePassModal } from './drawers/gate-pass-modal';
+import { MedicalClearanceCard } from './cards/medical-clearance-card';
+import { PharmacyClearanceCard } from './cards/pharmacy-clearance-card';
+import { NursingClearanceCard } from './cards/nursing-clearance-card';
+import { SummaryClearanceCard } from './cards/summary-clearance-card';
+import { BillingGatePassCard } from './cards/billing-gate-pass-card';
+import { PrinterIcon } from '@/components/icons';
+import {
+  updateMedicalClearanceAction,
+  recordPharmacyClearanceAction,
+  updateNursingClearanceAction,
+  issueDischargeGatePassAction,
+} from '@/app/(app)/ipd/actions';
+import type { IpdDischargeClearanceRow, PharmacyReturnItem } from '@/lib/db/schema';
+import { computeClearanceStatus } from '@/lib/domain/discharge-clearance';
 
 export interface DischargeTabProps {
   admissionId: string;
@@ -14,12 +29,23 @@ export interface DischargeTabProps {
   onToggleDischargeReady?: (ready: boolean) => Promise<void>;
   doctorName?: string;
   patientName?: string;
+  mrn?: string;
+  ipdNumber?: string;
   bedLabel?: string;
   wardName?: string;
   dischargeMedicationsCount?: number;
   dischargeSummary?: any;
   homeMedications?: any[];
   attendingDoctor?: any;
+  initialClearance?: IpdDischargeClearanceRow | null;
+  activeMedicationLines?: {
+    id: string;
+    medicineName: string;
+    dose: string;
+    route: string;
+    frequency: string;
+  }[];
+  medRecCompleted?: boolean;
   className?: string;
 }
 
@@ -31,304 +57,364 @@ export function DischargeTab({
   onToggleDischargeReady,
   doctorName,
   patientName,
+  mrn,
+  ipdNumber,
   bedLabel,
   wardName,
   dischargeMedicationsCount = 0,
   dischargeSummary,
   homeMedications,
   attendingDoctor,
+  initialClearance,
+  activeMedicationLines = [],
+  medRecCompleted = false,
   className = '',
 }: DischargeTabProps) {
   const [currentStatus, setCurrentStatus] = useState(status);
+  const [clearance, setClearance] = useState<Partial<IpdDischargeClearanceRow>>(
+    initialClearance || {
+      dischargeType: 'regular',
+      clinicalFitAt: status === 'discharge_ready' ? new Date() : null,
+      pharmacyReturnedAt: null,
+      pharmacyReturnItems: [],
+      nursingClearedAt: null,
+      ivCannulaRemoved: false,
+      foleyCatheterRemoved: false,
+      belongingsAndReportsHandedOver: false,
+      dischargeVitalsTaken: false,
+      billingClearedAt: null,
+      gatePassNumber: null,
+    },
+  );
+
   const [isUpdating, setIsUpdating] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
-  const [pharmacyReturned, setPharmacyReturned] = useState(false);
+
+  // Modal / Drawer visibility states
+  const [isMedicalModalOpen, setIsMedicalModalOpen] = useState(false);
+  const [isPharmacyDrawerOpen, setIsPharmacyDrawerOpen] = useState(false);
   const [isSummaryDrawerOpen, setIsSummaryDrawerOpen] = useState(false);
+  const [isGatePassModalOpen, setIsGatePassModalOpen] = useState(false);
 
-  const isReady = currentStatus === 'discharge_ready';
-  const isDischarged = currentStatus === 'discharged';
+  const isReady = currentStatus === 'discharge_ready' || Boolean(clearance.clinicalFitAt);
+  const isDischarged = currentStatus === 'discharged' || Boolean(clearance.gatePassNumber);
 
-  const handleToggle = async (newReady: boolean) => {
+  // Compute live multi-department clearance gate
+  const clearanceStatus = computeClearanceStatus({
+    clearance,
+    isSummaryFinalized: dischargeSummary?.status === 'finalized',
+    isBillingSettled: Boolean(clearance.billingClearedAt),
+  });
+
+  // Handler: Medical Fit-to-Leave
+  const handleMedicalSave = async (data: {
+    dischargeType: 'regular' | 'lama' | 'dama' | 'transfer' | 'absconded' | 'death';
+    clinicalStabilityNotes: string;
+    ready: boolean;
+  }) => {
     setIsUpdating(true);
     setFeedbackMessage(null);
     try {
+      const res = await updateMedicalClearanceAction({
+        admissionId,
+        dischargeType: data.dischargeType,
+        clinicalStabilityNotes: data.clinicalStabilityNotes,
+        ready: data.ready,
+      });
+      if (!res.ok) throw new Error(res.error);
+
       if (onToggleDischargeReady) {
-        await onToggleDischargeReady(newReady);
+        await onToggleDischargeReady(data.ready);
       }
-      setCurrentStatus(newReady ? 'discharge_ready' : 'admitted');
+
+      setClearance((prev) => ({
+        ...prev,
+        dischargeType: data.dischargeType,
+        clinicalStabilityNotes: data.clinicalStabilityNotes,
+        clinicalFitAt: data.ready ? new Date() : null,
+      }));
+      setCurrentStatus(data.ready ? 'discharge_ready' : 'admitted');
       setFeedbackMessage(
-        newReady
-          ? 'Patient marked ready for discharge.'
-          : 'Discharge readiness cleared. Patient returned to admitted status.',
+        data.ready
+          ? 'Medical clearance certified. Patient is fit for discharge.'
+          : 'Medical clearance revoked. Patient returned to admitted status.',
       );
     } catch (err: any) {
-      setFeedbackMessage(err?.message || 'Failed to update discharge readiness.');
+      setFeedbackMessage(err?.message || 'Failed to update medical clearance.');
     } finally {
       setIsUpdating(false);
     }
   };
 
+  // Handler: Quick toggle medical ready
+  const handleQuickToggle = async (newReady: boolean) => {
+    await handleMedicalSave({
+      dischargeType: (clearance.dischargeType as any) || 'regular',
+      clinicalStabilityNotes: clearance.clinicalStabilityNotes || '',
+      ready: newReady,
+    });
+  };
+
+  // Handler: Pharmacy Returns & Dispensing
+  const handlePharmacySave = async (data: {
+    returnItems: PharmacyReturnItem[];
+    creditNoteNo: string;
+    creditAmountPaise: number;
+    takeHomeCounseled: boolean;
+    takeHomeCounselingNotes: string;
+    cleared: boolean;
+  }) => {
+    const res = await recordPharmacyClearanceAction({
+      admissionId,
+      returnItems: data.returnItems,
+      creditNoteNo: data.creditNoteNo,
+      creditAmountPaise: data.creditAmountPaise,
+      takeHomeCounseled: data.takeHomeCounseled,
+      takeHomeCounselingNotes: data.takeHomeCounselingNotes,
+      cleared: data.cleared,
+    });
+    if (!res.ok) throw new Error(res.error);
+
+    setClearance((prev) => ({
+      ...prev,
+      pharmacyReturnItems: data.returnItems,
+      pharmacyCreditNoteNo: data.creditNoteNo || null,
+      pharmacyCreditAmountPaise: data.creditAmountPaise,
+      takeHomeCounseled: data.takeHomeCounseled,
+      takeHomeCounselingNotes: data.takeHomeCounselingNotes || null,
+      pharmacyReturnedAt: data.cleared ? new Date() : null,
+    }));
+    setFeedbackMessage(
+      data.cleared
+        ? 'Pharmacy clearance recorded with bedside return slip.'
+        : 'Pharmacy returns draft saved.',
+    );
+  };
+
+  // Handler: Nursing Handover & Line Removal
+  const handleNursingUpdate = async (data: {
+    ivCannulaRemoved: boolean;
+    foleyCatheterRemoved: boolean;
+    drainsRemoved: boolean;
+    woundDressingDone: boolean;
+    belongingsAndReportsHandedOver: boolean;
+    dischargeVitalsTaken: boolean;
+    nursingHandoverNotes?: string;
+    cleared: boolean;
+  }) => {
+    const res = await updateNursingClearanceAction({
+      admissionId,
+      ivCannulaRemoved: data.ivCannulaRemoved,
+      foleyCatheterRemoved: data.foleyCatheterRemoved,
+      drainsRemoved: data.drainsRemoved,
+      woundDressingDone: data.woundDressingDone,
+      belongingsAndReportsHandedOver: data.belongingsAndReportsHandedOver,
+      dischargeVitalsTaken: data.dischargeVitalsTaken,
+      nursingHandoverNotes: data.nursingHandoverNotes,
+      cleared: data.cleared,
+    });
+    if (!res.ok) throw new Error(res.error);
+
+    setClearance((prev) => ({
+      ...prev,
+      ivCannulaRemoved: data.ivCannulaRemoved,
+      foleyCatheterRemoved: data.foleyCatheterRemoved,
+      drainsRemoved: data.drainsRemoved,
+      woundDressingDone: data.woundDressingDone,
+      belongingsAndReportsHandedOver: data.belongingsAndReportsHandedOver,
+      dischargeVitalsTaken: data.dischargeVitalsTaken,
+      nursingHandoverNotes: data.nursingHandoverNotes || null,
+      nursingClearedAt: data.cleared ? new Date() : null,
+    }));
+    setFeedbackMessage(
+      data.cleared
+        ? 'Nursing handover & line removal checklist cleared.'
+        : 'Nursing handover checklist saved.',
+    );
+  };
+
+  // Handler: Issue Gate Pass
+  const handleIssueGatePass = async () => {
+    const res = await issueDischargeGatePassAction({ admissionId });
+    if (!res.ok) throw new Error(res.error);
+
+    setClearance((prev) => ({
+      ...prev,
+      gatePassNumber: res.data?.gatePassNumber,
+      gatePassIssuedAt: res.data?.issuedAt,
+      billingClearedAt: prev.billingClearedAt || new Date(),
+    }));
+    setCurrentStatus('discharged');
+    setFeedbackMessage(`Discharge Gate Pass ${res.data?.gatePassNumber} issued successfully.`);
+  };
+
+  const progressPercent = Math.round((clearanceStatus.completedCount / 5) * 100);
+
   return (
     <div className={`space-y-4 ${className}`}>
-      {/* Cockpit Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-ink-200 pb-3">
-        <div>
+      {/* Cockpit Header with Real-Time Progress Bar */}
+      <div className="bg-surface p-4 rounded-xl border border-ink-200/80 shadow-2xs space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-bold text-ink-950">Discharge Clearance Cockpit</h2>
+              <span className="text-2xs font-bold px-2 py-0.5 rounded bg-brand-100 text-brand-800">
+                Discharge Workflow
+              </span>
+              <span className="text-2xs font-semibold px-2 py-0.5 rounded bg-ink-100 text-ink-700">
+                NABH 5-Pillar Clearance
+              </span>
+            </div>
+            <p className="text-xs text-ink-500 mt-0.5">
+              Coordinate medical clearance, audit unconsumed pharmacy returns, confirm nursing line removals, and issue final exit Gate Pass.
+            </p>
+          </div>
+
           <div className="flex items-center gap-2">
-            <h2 className="text-sm font-bold text-ink-950">Discharge Clearance Cockpit</h2>
-            <span className="text-2xs font-semibold px-2 py-0.5 rounded bg-ink-100 text-ink-700">
-              Discharge Workflow
+            <button
+              type="button"
+              onClick={() => setIsGatePassModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded border border-ink-200 text-ink-800 bg-surface hover:bg-ink-50 shadow-2xs"
+            >
+              <PrinterIcon className="size-3.5" />
+              <span>{clearance.gatePassNumber ? 'Print Exit Gate Pass' : 'Gate Pass Checkpoint'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Progress Bar Strip */}
+        <div className="pt-2 border-t border-ink-100 space-y-1.5">
+          <div className="flex items-center justify-between text-2xs">
+            <span className="font-semibold text-ink-700">
+              Clearance Progress: <strong className="text-ink-950">{clearanceStatus.completedCount} of 5 Departments Cleared</strong> ({progressPercent}%)
+            </span>
+            <span className={`font-bold ${clearanceStatus.canIssueGatePass ? 'text-emerald-700' : 'text-amber-700'}`}>
+              {clearanceStatus.canIssueGatePass ? 'Ready for Exit Gate Pass ✓' : 'Clearances in Progress'}
             </span>
           </div>
-          <p className="text-xs text-ink-500">
-            Coordinate medical clearance, return unused pharmacy medicines, settle final bills, and generate discharge summary.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            href={`/print/ipd-bill/draft?admissionId=${admissionId}&report=1`}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded border border-ink-200 text-ink-800 bg-surface hover:bg-ink-50 shadow-2xs"
-          >
-            <PrinterIcon className="size-3.5" />
-            <span>Print Discharge Card</span>
-          </Link>
+          <div className="w-full h-2 rounded-full bg-ink-100 overflow-hidden">
+            <div
+              className={`h-full transition-all duration-300 rounded-full ${
+                progressPercent === 100 ? 'bg-emerald-600' : 'bg-primary'
+              }`}
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
         </div>
       </div>
 
       {feedbackMessage && (
-        <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-md">
+        <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-xl font-medium animate-in fade-in">
           {feedbackMessage}
         </div>
       )}
 
-      {/* 4-Step Clearance Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+      {/* 5-Card Multi-Department Clearance Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Step 1: Medical Clearance */}
-        <div className="bg-surface p-3.5 rounded border border-ink-200/80 shadow-2xs space-y-3">
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="size-5 rounded-full bg-primary/10 text-primary font-bold text-2xs flex items-center justify-center">
-                  1
-                </span>
-                <h3 className="text-xs font-bold text-ink-900">
-                  Medical Clearance &amp; Fit-to-Leave
-                </h3>
-              </div>
-              <p className="text-2xs text-ink-500 mt-1">
-                Doctor certifies the patient is clinically stable and ready to leave the ward.
-              </p>
-            </div>
-            <StatusBadge
-              status={
-                isDischarged
-                  ? 'Discharged'
-                  : isReady
-                    ? 'Ready for discharge'
-                    : 'Admitted'
-              }
-              variant={isDischarged ? 'grey' : isReady ? 'green' : 'blue'}
-            />
-          </div>
+        <MedicalClearanceCard
+          doctorName={doctorName}
+          isReady={isReady}
+          isDischarged={isDischarged}
+          dischargeType={clearance.dischargeType}
+          clinicalFitAt={clearance.clinicalFitAt}
+          clinicalStabilityNotes={clearance.clinicalStabilityNotes}
+          canDischarge={canDischarge}
+          isUpdating={isUpdating}
+          onOpenModal={() => setIsMedicalModalOpen(true)}
+          onQuickToggle={handleQuickToggle}
+        />
 
-          <div className="pt-2 border-t border-ink-100 text-xs text-ink-700 space-y-2">
-            {doctorName && (
-              <div className="text-2xs text-ink-600">
-                Primary Consultant: <span className="font-semibold text-ink-900">{doctorName}</span>
-              </div>
-            )}
+        {/* Step 2: Pharmacy Clearance & Returns */}
+        <PharmacyClearanceCard
+          admissionId={admissionId}
+          isCleared={Boolean(clearance.pharmacyReturnedAt)}
+          pharmacyReturnedAt={clearance.pharmacyReturnedAt}
+          pharmacyCreditNoteNo={clearance.pharmacyCreditNoteNo}
+          pharmacyCreditAmountPaise={clearance.pharmacyCreditAmountPaise ?? 0}
+          returnItems={clearance.pharmacyReturnItems as any}
+          takeHomeCount={dischargeSummary?.takeHomePrescriptions?.length ?? dischargeMedicationsCount}
+          takeHomeCounseled={clearance.takeHomeCounseled}
+          medRecCompleted={medRecCompleted}
+          onOpenDrawer={() => setIsPharmacyDrawerOpen(true)}
+        />
 
-            {!isDischarged && (
-              <div>
-                {isReady ? (
-                  <div className="flex items-center justify-between gap-2 bg-emerald-50/70 p-2 rounded border border-emerald-200/70">
-                    <div className="flex items-center gap-1.5 text-xs text-emerald-800 font-semibold">
-                      <CheckIcon className="size-4 text-emerald-600" />
-                      <span>Patient is marked ready for discharge.</span>
-                    </div>
-                    {canDischarge && (
-                      <button
-                        type="button"
-                        disabled={isUpdating}
-                        onClick={() => handleToggle(false)}
-                        className="px-2.5 py-1 text-2xs font-semibold rounded border border-ink-200 text-ink-700 bg-surface hover:bg-ink-50"
-                      >
-                        {isUpdating ? 'Updating...' : 'Undo Readiness'}
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={isUpdating || !canDischarge}
-                    onClick={() => handleToggle(true)}
-                    className="w-full py-2 text-xs font-semibold rounded bg-emerald-600 text-white hover:bg-emerald-700 shadow-2xs"
-                  >
-                    {isUpdating ? 'Updating...' : 'Mark Ready for Discharge'}
-                  </button>
-                )}
-              </div>
-            )}
+        {/* Step 3: Nursing & Bedside Handover */}
+        <NursingClearanceCard
+          isCleared={Boolean(clearance.nursingClearedAt)}
+          nursingClearedAt={clearance.nursingClearedAt}
+          ivCannulaRemoved={clearance.ivCannulaRemoved}
+          foleyCatheterRemoved={clearance.foleyCatheterRemoved}
+          drainsRemoved={clearance.drainsRemoved}
+          woundDressingDone={clearance.woundDressingDone}
+          belongingsAndReportsHandedOver={clearance.belongingsAndReportsHandedOver}
+          dischargeVitalsTaken={clearance.dischargeVitalsTaken}
+          nursingHandoverNotes={clearance.nursingHandoverNotes}
+          onUpdate={handleNursingUpdate}
+        />
 
-            {isDischarged && (
-              <p className="text-xs text-ink-600 font-medium">
-                This patient stay has been finalized and discharged.
-              </p>
-            )}
-          </div>
-        </div>
+        {/* Step 4: Discharge Summary & Documentation */}
+        <SummaryClearanceCard
+          admissionId={admissionId}
+          dischargeSummary={dischargeSummary}
+          takeHomeMedsCount={dischargeMedicationsCount}
+          onOpenSummaryDrawer={() => setIsSummaryDrawerOpen(true)}
+        />
 
-        {/* Step 2: Pharmacy Reconciliation */}
-        <div className="bg-surface p-3.5 rounded border border-ink-200/80 shadow-2xs space-y-3">
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="size-5 rounded-full bg-primary/10 text-primary font-bold text-2xs flex items-center justify-center">
-                  2
-                </span>
-                <h3 className="text-xs font-bold text-ink-900">
-                  Pharmacy Reconciliation &amp; Return
-                </h3>
-              </div>
-              <p className="text-2xs text-ink-500 mt-1">
-                Return unused medications to pharmacy so patient is not over-billed.
-              </p>
-            </div>
-            <span
-              className={`text-2xs font-bold px-2 py-0.5 rounded ${pharmacyReturned
-                  ? 'bg-emerald-100 text-emerald-800'
-                  : 'bg-amber-100 text-amber-800'
-                }`}
-            >
-              {pharmacyReturned ? 'Returned' : 'Check Bedside'}
-            </span>
-          </div>
-
-          <div className="pt-2 border-t border-ink-100 text-xs text-ink-700 space-y-2">
-            <label className="flex items-start gap-2 text-2xs text-ink-800 cursor-pointer p-2 rounded hover:bg-ink-50 border border-ink-100">
-              <input
-                type="checkbox"
-                checked={pharmacyReturned}
-                onChange={(e) => setPharmacyReturned(e.target.checked)}
-                className="mt-0.5 rounded border-ink-300 text-primary focus:ring-primary size-3.5"
-              />
-              <span>
-                All unconsumed IV ampoules, vials, and oral strips returned to inpatient pharmacy desk.
-              </span>
-            </label>
-            <div className="text-2xs text-ink-500">
-              Bedside stock balance zeroed out.
-            </div>
-          </div>
-        </div>
-
-        {/* Step 3: Final Bill Settlement */}
-        <div className="bg-surface p-3.5 rounded border border-ink-200/80 shadow-2xs space-y-3">
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="size-5 rounded-full bg-primary/10 text-primary font-bold text-2xs flex items-center justify-center">
-                  3
-                </span>
-                <h3 className="text-xs font-bold text-ink-900">
-                  Final Bill Settlement &amp; Clearance
-                </h3>
-              </div>
-              <p className="text-2xs text-ink-500 mt-1">
-                Review bed charges, consumables, tests, and reconcile deposit balance.
-              </p>
-            </div>
-            <span className="text-2xs font-bold px-2 py-0.5 rounded bg-sky-100 text-sky-800">
-              Billing Desk
-            </span>
-          </div>
-
-          <div className="pt-2 border-t border-ink-100 text-xs text-ink-700 space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <Link
-                href={`/ipd/admissions/${admissionId}/bill`}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded bg-primary text-white hover:bg-primary/90 shadow-2xs"
-              >
-                <FileTextIcon className="size-3.5" />
-                <span>Finalize Discharge Bill</span>
-              </Link>
-              <Link
-                href={`/ipd/patients/${admissionId}/billing`}
-                className="text-2xs font-semibold text-primary hover:underline"
-              >
-                View Running Ledger →
-              </Link>
-            </div>
-            <p className="text-2xs text-ink-500">
-              Settlement desk locks bill items and generates final tax invoice.
-            </p>
-          </div>
-        </div>
-
-        {/* Step 4: Discharge Summary & Card */}
-        <div className="bg-surface p-3.5 rounded border border-ink-200/80 shadow-2xs space-y-3">
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="size-5 rounded-full bg-primary/10 text-primary font-bold text-2xs flex items-center justify-center">
-                  4
-                </span>
-                <h3 className="text-xs font-bold text-ink-900">
-                  Discharge Summary &amp; Patient Card
-                </h3>
-              </div>
-              <p className="text-2xs text-ink-500 mt-1">
-                Take-home medications, post-discharge diet, and follow-up consultation dates.
-              </p>
-            </div>
-            <span
-              className={`text-2xs font-bold px-2 py-0.5 rounded ${dischargeSummary?.status === 'finalized'
-                  ? 'bg-emerald-100 text-emerald-800'
-                  : dischargeSummary?.status === 'draft'
-                    ? 'bg-amber-100 text-amber-800'
-                    : 'bg-rose-100 text-rose-800'
-                }`}
-            >
-              {dischargeSummary?.status === 'finalized'
-                ? `Finalized (v${dischargeSummary.version})`
-                : dischargeSummary?.status === 'draft'
-                  ? 'Draft Summary'
-                  : 'Pending Summary'}
-            </span>
-          </div>
-
-          <div className="pt-2 border-t border-ink-100 text-xs text-ink-700 space-y-2">
-            <div className="flex items-center justify-between text-2xs text-ink-600 bg-ink-50/70 p-2 rounded border border-ink-100">
-              <span>Take-Home Prescriptions:</span>
-              <span className="font-bold text-ink-900">
-                {`${dischargeSummary?.takeHomePrescriptions?.length ?? dischargeMedicationsCount} take-home medications`}
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <button
-                type="button"
-                onClick={() => setIsSummaryDrawerOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded bg-brand-600 text-white hover:bg-brand-700 shadow-2xs"
-              >
-                <FileTextIcon className="size-3.5" />
-                <span>{dischargeSummary?.status === 'finalized' ? 'View Final Summary' : 'Edit & Finalize Summary'}</span>
-              </button>
-              <Link
-                href={`/print/ipd-bill/draft?admissionId=${admissionId}&report=1`}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded border border-ink-200 text-ink-800 bg-surface hover:bg-ink-50 shadow-2xs"
-              >
-                <PrinterIcon className="size-3.5" />
-                <span>Print Card</span>
-              </Link>
-            </div>
-          </div>
-        </div>
+        {/* Step 5: Billing Settlement & Gate Pass */}
+        <BillingGatePassCard
+          admissionId={admissionId}
+          isSettled={Boolean(clearance.billingClearedAt)}
+          gatePassNumber={clearance.gatePassNumber}
+          gatePassIssuedAt={clearance.gatePassIssuedAt}
+          canIssueGatePass={clearanceStatus.canIssueGatePass}
+          onOpenGatePassModal={() => setIsGatePassModalOpen(true)}
+        />
       </div>
 
-      {/* Discharge Summary Versioned Drawer */}
+      {/* Drawers and Modals */}
+      <MedicalClearanceModal
+        isOpen={isMedicalModalOpen}
+        onClose={() => setIsMedicalModalOpen(false)}
+        admissionId={admissionId}
+        patientName={patientName}
+        doctorName={doctorName}
+        initialDischargeType={(clearance.dischargeType as any) || 'regular'}
+        initialNotes={clearance.clinicalStabilityNotes}
+        isReady={isReady}
+        onSave={handleMedicalSave}
+      />
+
+      <PharmacyReturnDrawer
+        isOpen={isPharmacyDrawerOpen}
+        onClose={() => setIsPharmacyDrawerOpen(false)}
+        admissionId={admissionId}
+        patientName={patientName}
+        initialItems={clearance.pharmacyReturnItems as any}
+        activeOrders={activeMedicationLines}
+        initialCreditNoteNo={clearance.pharmacyCreditNoteNo}
+        initialCreditAmountPaise={clearance.pharmacyCreditAmountPaise ?? 0}
+        initialCounseled={clearance.takeHomeCounseled}
+        initialCounselingNotes={clearance.takeHomeCounselingNotes}
+        onSave={handlePharmacySave}
+      />
+
+      <GatePassModal
+        isOpen={isGatePassModalOpen}
+        onClose={() => setIsGatePassModalOpen(false)}
+        admissionId={admissionId}
+        patientName={patientName}
+        mrn={mrn}
+        ipdNumber={ipdNumber}
+        bedLabel={bedLabel}
+        wardName={wardName}
+        doctorName={doctorName}
+        gatePassNumber={clearance.gatePassNumber}
+        issuedAt={clearance.gatePassIssuedAt}
+        clearanceStatus={clearanceStatus}
+        onIssue={handleIssueGatePass}
+      />
+
       <DischargeSummaryDrawer
         admissionId={admissionId}
         isOpen={isSummaryDrawerOpen}

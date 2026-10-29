@@ -118,7 +118,7 @@ export function IntakeSuccessModal({ isOpen, onClose, result }: IntakeSuccessMod
             Back to IPD List
           </Button>
 
-          <Link href={`/ipd/admissions/${result.admissionId}`}>
+          <Link href={`/ipd/patients/${result.admissionId}/summary`}>
             <Button variant="primary" size="md" className="gap-2">
               <BedIcon className="size-4" />
               Open Patient Chart

@@ -3517,6 +3517,93 @@ export type NewIpdDischargeSummary = typeof ipdDischargeSummaries.$inferInsert;
 export type IpdTakeHomePrescriptionRow = typeof ipdTakeHomePrescriptions.$inferSelect;
 export type NewIpdTakeHomePrescription = typeof ipdTakeHomePrescriptions.$inferInsert;
 
+export interface PharmacyReturnItem {
+  medicineName: string;
+  batchNumber?: string;
+  dispensedQty: number;
+  returnedQty: number;
+  unitPricePaise?: number;
+  creditPaise?: number;
+  reason?: 'unconsumed' | 'discontinued' | 'changed_dose' | 'other';
+}
+
+export interface DischargeClearanceStatus {
+  isMedicalCleared: boolean;
+  isPharmacyCleared: boolean;
+  isNursingCleared: boolean;
+  isSummaryFinalized: boolean;
+  isBillingCleared: boolean;
+  canIssueGatePass: boolean;
+  completedCount: number;
+}
+
+export const ipdDischargeClearances = pgTable(
+  'ipd_discharge_clearances',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    admissionId: uuid('admission_id')
+      .notNull()
+      .references(() => admissions.id, { onDelete: 'cascade' }),
+
+    // 1. Medical Clearance
+    dischargeType: text('discharge_type')
+      .$type<'regular' | 'lama' | 'dama' | 'transfer' | 'absconded' | 'death'>()
+      .notNull()
+      .default('regular'),
+    clinicalFitAt: timestamp('clinical_fit_at', { withTimezone: true }),
+    clinicalFitByUserId: uuid('clinical_fit_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    clinicalStabilityNotes: text('clinical_stability_notes'),
+
+    // 2. Pharmacy Clearance
+    pharmacyReturnedAt: timestamp('pharmacy_returned_at', { withTimezone: true }),
+    pharmacyReturnedByUserId: uuid('pharmacy_returned_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    pharmacyCreditNoteNo: text('pharmacy_credit_note_no'),
+    pharmacyCreditAmountPaise: integer('pharmacy_credit_amount_paise').default(0),
+    pharmacyReturnItems: jsonb('pharmacy_return_items')
+      .$type<PharmacyReturnItem[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    takeHomeDispensedAt: timestamp('take_home_dispensed_at', { withTimezone: true }),
+    takeHomeCounseled: boolean('take_home_counseled').notNull().default(false),
+    takeHomeCounselingNotes: text('take_home_counseling_notes'),
+
+    // 3. Nursing Clearance
+    nursingClearedAt: timestamp('nursing_cleared_at', { withTimezone: true }),
+    nursingClearedByUserId: uuid('nursing_cleared_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    ivCannulaRemoved: boolean('iv_cannula_removed').notNull().default(false),
+    foleyCatheterRemoved: boolean('foley_catheter_removed').notNull().default(false),
+    drainsRemoved: boolean('drains_removed').notNull().default(false),
+    woundDressingDone: boolean('wound_dressing_done').notNull().default(false),
+    belongingsAndReportsHandedOver: boolean('belongings_and_reports_handed_over').notNull().default(false),
+    dischargeVitalsTaken: boolean('discharge_vitals_taken').notNull().default(false),
+    nursingHandoverNotes: text('nursing_handover_notes'),
+
+    // 4. Diagnostics Clearance
+    diagnosticsClearedAt: timestamp('diagnostics_cleared_at', { withTimezone: true }),
+    diagnosticsClearedByUserId: uuid('diagnostics_cleared_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    diagnosticsNotes: text('diagnostics_notes'),
+
+    // 5. Billing & Gate Pass
+    billingClearedAt: timestamp('billing_cleared_at', { withTimezone: true }),
+    billingClearedByUserId: uuid('billing_cleared_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    gatePassNumber: text('gate_pass_number'),
+    gatePassIssuedAt: timestamp('gate_pass_issued_at', { withTimezone: true }),
+    gatePassIssuedByUserId: uuid('gate_pass_issued_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('ipd_discharge_clearances_tenant_adm_idx').on(t.hospitalId, t.admissionId),
+  ],
+);
+
+export type IpdDischargeClearanceRow = typeof ipdDischargeClearances.$inferSelect;
+export type NewIpdDischargeClearance = typeof ipdDischargeClearances.$inferInsert;
+
 /**
  * Universal global medicine catalogue. Not tenant-scoped; available across all hospitals.
  */
