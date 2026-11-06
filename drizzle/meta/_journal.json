@@ -400,6 +400,41 @@
       "when": 1792250000000,
       "tag": "0071_blackout_periods",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1792300000000,
+      "tag": "0072_ipd_discharge_clearances",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1792350000000,
+      "tag": "0073_take_home_rx_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1792400000000,
+      "tag": "0074_rx_groups",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1792450000000,
+      "tag": "0075_patient_merge_alerts",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1792500000000,
+      "tag": "0076_pharmacy_pos",
+      "breakpoints": true
     }
   ]
 }

@@ -197,6 +197,7 @@ export const planTiers = pgTable('plan_tiers', {
   hasAdvancedReports: boolean('has_advanced_reports').notNull().default(true),
   hasDataExport: boolean('has_data_export').notNull().default(true),
   hasAuditLog: boolean('has_audit_log').notNull().default(true),
+  hasInhousePharmacy: boolean('has_inhouse_pharmacy').notNull().default(false),
   supportTier: text('support_tier').notNull().default('email'),
   sortOrder: smallint('sort_order').notNull().default(0),
   active: boolean('active').notNull().default(true),
@@ -225,6 +226,7 @@ export const hospitals = pgTable('hospitals', {
   /** Text letterhead on printed IPD sheets (0041); the address is the branch's. */
   registrationNo: text('registration_no'),
   letterheadPhones: text('letterhead_phones'),
+  hasInhousePharmacy: boolean('has_inhouse_pharmacy').notNull().default(false),
   active: boolean('active').notNull().default(true),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
@@ -661,6 +663,8 @@ export const personMerges = pgTable('person_merges', {
   undoneByUserId: uuid('undone_by_user_id').references(() => users.id, { onDelete: 'set null' }),
 });
 
+
+
 export const personIdentityCorrections = pgTable('person_identity_corrections', {
   id: id(),
   personId: uuid('person_id').notNull().references(() => persons.id),
@@ -756,6 +760,36 @@ export const patientMerges = pgTable('patient_merges', {
   undoneAt: timestamp('undone_at', { withTimezone: true }),
   undoneByUserId: uuid('undone_by_user_id').references(() => users.id, { onDelete: 'set null' }),
 });
+
+/**
+ * Administrative audit alerts for critical patient merges executed by staff.
+ */
+export const patientMergeAlerts = pgTable(
+  'patient_merge_alerts',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id').notNull().references(() => hospitals.id, { onDelete: 'cascade' }),
+    alertType: text('alert_type').notNull().default('critical_patient_merge'),
+    actorUserId: uuid('actor_user_id').references(() => users.id, { onDelete: 'set null' }),
+    actorRole: text('actor_role').notNull(),
+    fromPatientId: uuid('from_patient_id').notNull().references(() => patients.id, { onDelete: 'cascade' }),
+    toPatientId: uuid('to_patient_id').notNull().references(() => patients.id, { onDelete: 'cascade' }),
+    fromUhid: text('from_uhid'),
+    toUhid: text('to_uhid'),
+    fromPatientName: text('from_patient_name').notNull(),
+    toPatientName: text('to_patient_name').notNull(),
+    criticalReasons: jsonb('critical_reasons').$type<string[]>().notNull().default(sql`'[]'`),
+    justification: text('justification').notNull(),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    reviewedByUserId: uuid('reviewed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('patient_merge_alerts_tenant_key').on(t.hospitalId, t.id),
+    index('patient_merge_alerts_hospital_created_idx').on(t.hospitalId, t.createdAt),
+    index('patient_merge_alerts_hospital_reviewed_idx').on(t.hospitalId, t.reviewedAt),
+  ],
+);
 
 /** Former QIDs of a patient row, left behind by person merges (0039). Read-only to the app. */
 export const patientQidAliases = pgTable(
@@ -1827,6 +1861,7 @@ export const prescriptions = pgTable(
       .references(() => doctors.id),
     prescriberName: text('prescriber_name').notNull(),
     status: prescriptionStatus('status').notNull().default('final'),
+    fulfillmentStatus: text('fulfillment_status').notNull().default('unfulfilled'),
     advice: text('advice'),
     followUpOn: date('follow_up_on'),
     supersedesPrescriptionId: uuid('supersedes_prescription_id'),
@@ -1879,6 +1914,65 @@ export const prescriptionItems = pgTable(
     }),
     index('prescription_items_prescription_idx').on(t.prescriptionId, t.sortOrder),
     index('prescription_items_medicine_idx').on(t.medicineId),
+  ],
+);
+
+/**
+ * Pre-bundled clinical medication regimens ("Rx-Groups") for fast sub-30s prescribing.
+ * If doctorId is null, the bundle is hospital-wide (institutional protocol).
+ * If doctorId is set, it is personal to that practitioner.
+ */
+export const rxGroups = pgTable(
+  'rx_groups',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').references(() => branches.id, { onDelete: 'cascade' }),
+    doctorId: uuid('doctor_id').references(() => doctors.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description'),
+    category: text('category').notNull().default('general'),
+    defaultDiagnosis: text('default_diagnosis'),
+    defaultAdvice: text('default_advice'),
+    defaultFollowUpDays: integer('default_follow_up_days'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    active: boolean('active').notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('rx_groups_tenant_key').on(t.hospitalId, t.id),
+    index('rx_groups_doctor_idx').on(t.hospitalId, t.doctorId),
+    index('rx_groups_category_idx').on(t.hospitalId, t.category),
+  ],
+);
+
+export const rxGroupItems = pgTable(
+  'rx_group_items',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    rxGroupId: uuid('rx_group_id')
+      .notNull()
+      .references(() => rxGroups.id, { onDelete: 'cascade' }),
+    medicineId: uuid('medicine_id')
+      .notNull()
+      .references(() => medicines.id, { onDelete: 'cascade' }),
+    medicineName: text('medicine_name').notNull(),
+    dose: text('dose').notNull(),
+    frequency: text('frequency').notNull(),
+    durationDays: integer('duration_days'),
+    instructions: text('instructions'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('rx_group_items_tenant_key').on(t.hospitalId, t.id),
+    index('rx_group_items_group_idx').on(t.hospitalId, t.rxGroupId, t.sortOrder),
   ],
 );
 
@@ -4916,3 +5010,117 @@ export const webhookEventDedup = pgTable(
   ],
 );
 
+
+export const pharmacySales = pgTable(
+  'pharmacy_sales',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    saleNo: text('sale_no').notNull(),
+    saleType: text('sale_type').notNull(),
+    prescriptionId: uuid('prescription_id').references(() => prescriptions.id, { onDelete: 'set null' }),
+    patientId: uuid('patient_id').references(() => patients.id, { onDelete: 'set null' }),
+    customerName: text('customer_name').notNull(),
+    customerPhone: text('customer_phone'),
+    doctorName: text('doctor_name'),
+    paymentMode: text('payment_mode').notNull(),
+    subtotalPaise: integer('subtotal_paise').notNull(),
+    cgstPaise: integer('cgst_paise').notNull().default(0),
+    sgstPaise: integer('sgst_paise').notNull().default(0),
+    discountPaise: integer('discount_paise').notNull().default(0),
+    totalPaise: integer('total_paise').notNull(),
+    status: text('status').notNull().default('completed'),
+    dispensedByUserId: uuid('dispensed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    dispensedAt: timestamp('dispensed_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('pharmacy_sales_tenant_sale_no_idx').on(t.hospitalId, t.saleNo),
+    index('pharmacy_sales_hospital_created_idx').on(t.hospitalId, t.createdAt),
+    index('pharmacy_sales_prescription_idx').on(t.hospitalId, t.prescriptionId),
+  ],
+);
+
+export const pharmacySaleItems = pgTable(
+  'pharmacy_sale_items',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    saleId: uuid('sale_id')
+      .notNull()
+      .references(() => pharmacySales.id, { onDelete: 'cascade' }),
+    medicineId: uuid('medicine_id')
+      .notNull()
+      .references(() => medicines.id),
+    batchId: uuid('batch_id')
+      .notNull()
+      .references(() => stockBatches.id),
+    batchNo: text('batch_no').notNull(),
+    expiryDate: date('expiry_date').notNull(),
+    hsnCode: text('hsn_code'),
+    quantity: integer('quantity').notNull(),
+    unitPricePaise: integer('unit_price_paise').notNull(),
+    mrpPaise: integer('mrp_paise').notNull(),
+    discountPercent: smallint('discount_percent').notNull().default(0),
+    gstRate: smallint('gst_rate').notNull().default(12),
+    taxableAmountPaise: integer('taxable_amount_paise').notNull(),
+    cgstAmountPaise: integer('cgst_amount_paise').notNull().default(0),
+    sgstAmountPaise: integer('sgst_amount_paise').notNull().default(0),
+    totalAmountPaise: integer('total_amount_paise').notNull(),
+  },
+  (t) => [
+    index('pharmacy_sale_items_sale_idx').on(t.saleId),
+    index('pharmacy_sale_items_hospital_medicine_idx').on(t.hospitalId, t.medicineId),
+  ],
+);
+
+export const pharmacyReturns = pgTable(
+  'pharmacy_returns',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    returnNo: text('return_no').notNull(),
+    saleId: uuid('sale_id')
+      .notNull()
+      .references(() => pharmacySales.id, { onDelete: 'cascade' }),
+    reason: text('reason').notNull(),
+    refundMode: text('refund_mode').notNull(),
+    refundAmountPaise: integer('refund_amount_paise').notNull(),
+    returnedByUserId: uuid('returned_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    returnedAt: timestamp('returned_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('pharmacy_returns_tenant_return_no_idx').on(t.hospitalId, t.returnNo),
+    index('pharmacy_returns_sale_idx').on(t.saleId),
+  ],
+);
+
+export const pharmacyReturnItems = pgTable(
+  'pharmacy_return_items',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    returnId: uuid('return_id')
+      .notNull()
+      .references(() => pharmacyReturns.id, { onDelete: 'cascade' }),
+    saleItemId: uuid('sale_item_id')
+      .notNull()
+      .references(() => pharmacySaleItems.id, { onDelete: 'cascade' }),
+    batchId: uuid('batch_id')
+      .notNull()
+      .references(() => stockBatches.id),
+    quantityReturned: integer('quantity_returned').notNull(),
+    refundAmountPaise: integer('refund_amount_paise').notNull(),
+  },
+  (t) => [
+    index('pharmacy_return_items_return_idx').on(t.returnId),
+  ],
+);
