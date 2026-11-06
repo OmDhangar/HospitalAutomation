@@ -36,6 +36,7 @@ const UNRESTRICTED: Entitlements = {
   hasAdvancedReports: true,
   hasDataExport: true,
   hasAuditLog: true,
+  hasInhousePharmacy: true,
   supportTier: 'email',
 };
 

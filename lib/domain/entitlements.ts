@@ -19,7 +19,8 @@ export type FeatureKind =
   | 'owner_report'
   | 'advanced_reports'
   | 'data_export'
-  | 'audit_log';
+  | 'audit_log'
+  | 'inhouse_pharmacy';
 
 /**
  * The shape both `plan_tiers` and `subscriptions` satisfy.
@@ -37,6 +38,7 @@ export type Entitlements = {
   hasAdvancedReports: boolean;
   hasDataExport: boolean;
   hasAuditLog: boolean;
+  hasInhousePharmacy?: boolean;
   supportTier: string;
 };
 
@@ -64,6 +66,8 @@ export function hasFeature(entitlements: Entitlements, feature: FeatureKind): bo
       return entitlements.hasDataExport;
     case 'audit_log':
       return entitlements.hasAuditLog;
+    case 'inhouse_pharmacy':
+      return entitlements.hasInhousePharmacy ?? false;
   }
 }
 
