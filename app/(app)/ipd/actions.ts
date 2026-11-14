@@ -78,6 +78,11 @@ import {
   reconcileHomeMedication,
 } from '@/lib/services/ipd-discharge-summary';
 import { markBedCleaned } from '@/lib/services/ipd-census';
+import {
+  approveDraftMedicationOrder,
+  approveAllDraftOrders,
+  rejectDraftOrder,
+} from '@/lib/services/ipd-admission-continuity';
 import { getModuleStatesForRequest } from '@/lib/auth/modules';
 import { moduleAllows } from '@/lib/modules/registry';
 import { cancelOrdersForCareEntries, createIpdTestOrders } from '@/lib/services/test-orders';
@@ -116,6 +121,7 @@ function readExtras(form: FormData, canCollect: boolean): AdmissionExtras | { er
     payerName: text(form, 'payerName'),
     policyNumber: text(form, 'policyNumber'),
     preauthRupees: text(form, 'preauthRupees'),
+    ratePlanId: text(form, 'ratePlanId'),
   });
   if (!payer.ok) return { error: payer.error };
   const deposit = canCollect ? parseDepositRupees(text(form, 'depositRupees')) : { ok: true as const, value: null };
@@ -1342,7 +1348,87 @@ export async function issueDischargeGatePassAction(args: {
 
 
 
+/**
+ * OPD-to-IPD Clinical Continuity Server Actions
+ */
+export async function approveDraftMedicationOrderAction(args: {
+  admissionId: string;
+  orderId: string;
+  doctorId?: string;
+  allergyOverrideReason?: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const session = await authorize('ipd.prescribe');
+    const docId = await resolveDoctorId(session.hospitalId, session.userId, args.admissionId, args.doctorId);
 
+    await approveDraftMedicationOrder({
+      hospitalId: session.hospitalId,
+      admissionId: args.admissionId,
+      orderId: args.orderId,
+      doctorId: docId,
+      actorUserId: session.userId,
+      allergyOverrideReason: args.allergyOverrideReason,
+    });
 
+    revalidatePath(`/ipd/patients/${args.admissionId}/orders`);
+    revalidatePath(`/ipd/patients/${args.admissionId}/summary`);
+    revalidatePath(`/ipd/patients/${args.admissionId}/emar`);
+    revalidatePath(`/ipd/patients/${args.admissionId}`);
+    revalidatePath(`/ipd/admissions/${args.admissionId}`);
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to approve draft medication order' };
+  }
+}
 
+export async function approveAllDraftMedicationOrdersAction(args: {
+  admissionId: string;
+  doctorId?: string;
+  allergyOverrideReason?: string;
+}): Promise<{ ok: boolean; approvedCount?: number; errors?: string[]; error?: string }> {
+  try {
+    const session = await authorize('ipd.prescribe');
+    const docId = await resolveDoctorId(session.hospitalId, session.userId, args.admissionId, args.doctorId);
 
+    const res = await approveAllDraftOrders({
+      hospitalId: session.hospitalId,
+      admissionId: args.admissionId,
+      doctorId: docId,
+      actorUserId: session.userId,
+      allergyOverrideReason: args.allergyOverrideReason,
+    });
+
+    revalidatePath(`/ipd/patients/${args.admissionId}/orders`);
+    revalidatePath(`/ipd/patients/${args.admissionId}/summary`);
+    revalidatePath(`/ipd/patients/${args.admissionId}/emar`);
+    revalidatePath(`/ipd/patients/${args.admissionId}`);
+    revalidatePath(`/ipd/admissions/${args.admissionId}`);
+    return { ok: true, approvedCount: res.approvedCount, errors: res.errors };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to approve draft medication orders' };
+  }
+}
+
+export async function rejectDraftMedicationOrderAction(args: {
+  admissionId: string;
+  orderId: string;
+  reason: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const session = await authorize('ipd.prescribe');
+    await rejectDraftOrder({
+      hospitalId: session.hospitalId,
+      admissionId: args.admissionId,
+      orderId: args.orderId,
+      reason: args.reason,
+      actorUserId: session.userId,
+    });
+
+    revalidatePath(`/ipd/patients/${args.admissionId}/orders`);
+    revalidatePath(`/ipd/patients/${args.admissionId}/summary`);
+    revalidatePath(`/ipd/patients/${args.admissionId}`);
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to reject draft medication order' };
+  }
+}

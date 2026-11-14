@@ -206,6 +206,9 @@ const PERMISSIONS = {
   /** Correct a person's platform identity data (name, gender, birth year). */
   'patients.correct_identity': ['owner'],
   /** Merge duplicate patient records of this hospital, and undo a merge. */
+  /** Hospital duplicate record merge (desk & MRD). */
+  'patients.merge_records': ['owner', 'receptionist'],
+  /** Merge duplicate patient records of this hospital, and undo a merge. */
   'patients.merge': ['owner'],
 
   /** Claims & TPA Desk (0066) */
@@ -213,6 +216,9 @@ const PERMISSIONS = {
   'claims.edit': ['owner', 'receptionist'],
   'claims.packet': ['owner', 'receptionist', 'doctor'],
   'claims.admin': ['owner'],
+  /** Multi-tier tariff rate plans & item tariffs (0077) */
+  'tariffs.manage': ['owner'],
+  'tariffs.view': ['owner', 'receptionist', 'doctor', 'nurse'],
 } as const satisfies Record<string, readonly StaffRole[]>;
 
 export type Permission = keyof typeof PERMISSIONS;

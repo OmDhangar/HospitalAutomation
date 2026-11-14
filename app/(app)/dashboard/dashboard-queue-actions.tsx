@@ -36,6 +36,9 @@ import {
   togglePauseDynamic,
 } from './actions';
 import type { QueueRow } from '@/lib/services/queue';
+import { PatientDuplicateShelf } from '@/components/queue/patient-duplicate-shelf';
+import { findPatientDuplicatesDynamic } from './patient-identity-actions';
+import type { PatientDuplicateMatch } from '@/lib/services/patient-merge';
 
 export function DoctorTabs({
   doctors,
@@ -143,6 +146,62 @@ export function AddWalkInForm({
   const [paid, setPaid] = useState(false);
   const [whatsappOptIn, setWhatsappOptIn] = useState(true);
   const [isEmergency, setIsEmergency] = useState(false);
+  const [duplicateMatches, setDuplicateMatches] = useState<PatientDuplicateMatch[]>([]);
+  const [isSearchingDuplicates, setIsSearchingDuplicates] = useState(false);
+  const [selectedExistingPatientId, setSelectedExistingPatientId] = useState<string | null>(null);
+  const [forceNewPatient, setForceNewPatient] = useState(false);
+
+  React.useEffect(() => {
+    const digits = phone.trim();
+    const trimmedName = name.trim();
+    if (digits.length < 5 && trimmedName.length < 3) {
+      setDuplicateMatches([]);
+      return;
+    }
+    if (selectedExistingPatientId) {
+      return;
+    }
+    let isMounted = true;
+    const timer = setTimeout(async () => {
+      setIsSearchingDuplicates(true);
+      const parsedAge = age.trim() ? parseInt(age.trim(), 10) : null;
+      const res = await findPatientDuplicatesDynamic({
+        phone: digits.length >= 10 ? digits : undefined,
+        name: trimmedName.length >= 3 ? trimmedName : undefined,
+        age: parsedAge,
+      });
+      if (isMounted) {
+        if (res.ok) {
+          setDuplicateMatches(res.matches);
+        }
+        setIsSearchingDuplicates(false);
+      }
+    }, 300);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [phone, name, age, selectedExistingPatientId]);
+
+  const handleSelectExistingPatient = (patient: PatientDuplicateMatch['patient']) => {
+    setName(patient.name);
+    if (patient.age) setAge(String(patient.age));
+    if (patient.address) setAddress(patient.address);
+    setSelectedExistingPatientId(patient.id);
+    setDuplicateMatches([]);
+    toast.info(
+      'Existing Patient Selected',
+      `${patient.name} (${patient.mrn || 'UHID'}) linked. Visit will be recorded on their existing file.`,
+    );
+  };
+
+  const handleForceNewPatient = () => {
+    setForceNewPatient(true);
+    setSelectedExistingPatientId(null);
+    setDuplicateMatches([]);
+    toast.info('New Record Confirmed', 'Proceeding with new patient profile.');
+  };
   const [isPending, startTransition] = useTransition();
   // Set when the server says the quota is full, as well as from the page.
   const [full, setFull] = useState(quotaReached);
@@ -160,6 +219,9 @@ export function AddWalkInForm({
     setPaid(false);
     setExtra(false);
     setIsEmergency(false);
+    setSelectedExistingPatientId(null);
+    setForceNewPatient(false);
+    setDuplicateMatches([]);
     setOpdClosedAt(null);
     // Ready for the next person in line without reaching for the mouse.
     nameRef.current?.focus();
@@ -218,6 +280,8 @@ export function AddWalkInForm({
         paid: canCollect && feeKnown && paid,
         extraToken: offerExtra && extra,
         isEmergency,
+        existingPatientId: selectedExistingPatientId || undefined,
+        forceNew: forceNewPatient,
       });
 
       if (res.ok) {
@@ -288,6 +352,13 @@ export function AddWalkInForm({
           autoComplete="off"
         />
       </Field>
+
+      <PatientDuplicateShelf
+        matches={duplicateMatches}
+        isLoading={isSearchingDuplicates}
+        onSelectPatient={handleSelectExistingPatient}
+        onForceNew={handleForceNewPatient}
+      />
 
       <Field label="Address" hint="Optional. Helps reach family in an emergency.">
         <Input

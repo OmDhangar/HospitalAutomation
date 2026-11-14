@@ -7,9 +7,18 @@ import { SEED_PLAN_TIERS } from '@/lib/domain/pricing';
 import { getCurrentSubscription, listActiveTiers } from '@/lib/services/subscriptions';
 
 export const metadata: Metadata = {
-  title: 'Pricing & Plans · QuriioHQ',
+  title: 'Transparent Pricing & Plans · Hospital Software India',
   description:
-    'Transparent, capacity-based pricing for clinics and hospitals. Every plan includes the full product: WhatsApp booking, live queue tracker, TV display, and reception caller.',
+    'Transparent, capacity-based pricing for Indian clinics and hospitals from ₹1,999/mo. Includes WhatsApp booking, live queue tracker, TV display board, and reception caller.',
+  alternates: {
+    canonical: '/pricing',
+  },
+  openGraph: {
+    title: 'Transparent Pricing & Plans · QuriioHQ Hospital Software',
+    description:
+      'Capacity-based pricing starting at ₹1,999/month for clinics and hospitals. Full product included: WhatsApp booking, live queue tracker, and reception calling.',
+    url: 'https://hospital-automation-sepia.vercel.app/pricing',
+  },
 };
 
 export default async function PricingPage() {

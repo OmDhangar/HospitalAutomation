@@ -1,0 +1,3 @@
+ALTER TABLE ipd_take_home_prescriptions
+  ADD COLUMN IF NOT EXISTS admission_id UUID REFERENCES admissions(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();

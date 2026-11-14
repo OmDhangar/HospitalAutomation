@@ -3,6 +3,7 @@ import { requireSession } from '@/lib/auth/session';
 import { can, homePathFor } from '@/lib/domain/permissions';
 import { getAdmissionSummary } from '@/lib/services/ipd-census';
 import { listActiveOrders } from '@/lib/services/ipd-medication-orders';
+import { listDraftOrders } from '@/lib/services/ipd-admission-continuity';
 import { MinimalOrdersTab } from '@/components/ipd/orders/minimal-orders-tab';
 import { stopMedicationOrderAction } from '@/app/(app)/ipd/actions';
 import type { StopReason } from '@/constants/clinical';
@@ -19,9 +20,10 @@ export default async function OrdersPage({ params }: { params: Promise<any> }) {
     redirect(homePathFor(session.role));
   }
 
-  const [admission, orders] = await Promise.all([
+  const [admission, orders, draftOrders] = await Promise.all([
     getAdmissionSummary(session.hospitalId, id),
     listActiveOrders({ hospitalId: session.hospitalId, admissionId: id }),
+    listDraftOrders({ hospitalId: session.hospitalId, admissionId: id }),
   ]);
 
   if (!admission) notFound();
@@ -54,6 +56,7 @@ export default async function OrdersPage({ params }: { params: Promise<any> }) {
       <MinimalOrdersTab
         admissionId={id}
         orders={formattedOrders}
+        draftOrders={draftOrders}
         patientName={admission.patientName}
         uhid={admission.mrn ?? '—'}
         bedLabel={admission.bed?.label ?? undefined}

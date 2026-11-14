@@ -88,3 +88,37 @@ export function generateQid(payload: () => string = randomPayload): string {
     if (symbols.length === 8 && !hasZeroZBlindSpot(symbols)) return formatQid(symbols);
   }
 }
+
+/* ------------------------------------------------------------------ UHID */
+
+const UHID_RE = /^([A-Z0-9]{2,10})-(\d{4})-(\d{5,8})$/;
+
+/**
+ * Standard hospital UHID: <HOSPITAL_PREFIX>-<YYYY>-<SEQUENCE>, e.g. QR-2026-00042.
+ */
+export function formatUhid(prefix: string, year: number, seq: number): string {
+  const p = (prefix || 'HOSP').trim().toUpperCase().replace(/[^A-Z0-9]/g, '') || 'HOSP';
+  const y = String(year);
+  const s = String(seq).padStart(5, '0');
+  return `${p}-${y}-${s}`;
+}
+
+/**
+ * Validates canonical hospital UHID strings: 2-10 char prefix, 4-digit year, 5-8 digit sequence.
+ */
+export function isValidUhid(uhid: string): boolean {
+  return UHID_RE.test(uhid.trim());
+}
+
+/**
+ * Parses canonical hospital UHID string into its constituent parts.
+ */
+export function parseUhid(uhid: string): { prefix: string; year: number; seq: number } | null {
+  const match = uhid.trim().match(UHID_RE);
+  if (!match) return null;
+  return {
+    prefix: match[1],
+    year: parseInt(match[2], 10),
+    seq: parseInt(match[3], 10),
+  };
+}

@@ -95,3 +95,189 @@ export function scoreMatch(typed: MatchCandidate, existing: MatchCandidate): Mat
   }
   return 'none';
 }
+
+/* ------------------------------------------------------------------ phonetics & multi-factor */
+
+/**
+ * Phonetic transliteration key for Indian names. Normalizes widespread English spelling variations:
+ * - Vowels: ee -> i, oo -> u, ou/au/ow -> o, ai/ay -> e, aa -> a, e -> i
+ * - Consonants: w -> v, ph -> f, sh/sch -> s, ch -> c, ksh/x -> x, dh -> d, th -> t, bh -> b, gh -> g, kh -> k
+ * - Deduplicates consecutive identical letters
+ * - Strips trailing 'a' on tokens of length > 4 (e.g. Ramesha -> Ramesh, Suresha -> Suresh)
+ */
+export function phoneticKey(name: string): string {
+  const base = nameKey(name);
+  if (!base) return '';
+
+  return base
+    .split(' ')
+    .filter(Boolean)
+    .map((rawToken) => {
+      let t = rawToken.toLowerCase();
+
+      // Transliteration normalizations
+      t = t.replace(/ee/g, 'i')
+           .replace(/oo/g, 'u')
+           .replace(/ou|au|ow/g, 'o')
+           .replace(/ai|ay/g, 'e')
+           .replace(/aa/g, 'a')
+           .replace(/ph/g, 'f')
+           .replace(/sh|sch/g, 's')
+           .replace(/ch/g, 'c')
+           .replace(/ksh/g, 'x')
+           .replace(/dh/g, 'd')
+           .replace(/th/g, 't')
+           .replace(/bh/g, 'b')
+           .replace(/gh/g, 'g')
+           .replace(/kh/g, 'k')
+           .replace(/w/g, 'v')
+           .replace(/e/g, 'i');
+
+      // Deduplicate consecutive identical characters (e.g. tt -> t, ll -> l, kk -> k)
+      t = t.replace(/(.)\1+/g, '$1');
+
+      // Strip trailing 'a' on tokens longer than 4 characters (Suresha -> Suresh, Ramesha -> Ramesh)
+      if (t.length > 4 && t.endsWith('a')) {
+        t = t.slice(0, -1);
+      }
+
+      return t;
+    })
+    .join(' ');
+}
+
+/**
+ * Damerau-Levenshtein edit distance: insertions, deletions, substitutions, and adjacent transpositions.
+ */
+export function editDistance(a: string, b: string): number {
+  const al = a.length;
+  const bl = b.length;
+  if (al === 0) return bl;
+  if (bl === 0) return al;
+
+  const d: number[][] = Array.from({ length: al + 1 }, () => Array(bl + 1).fill(0));
+
+  for (let i = 0; i <= al; i++) d[i][0] = i;
+  for (let j = 0; j <= bl; j++) d[0][j] = j;
+
+  for (let i = 1; i <= al; i++) {
+    for (let j = 1; j <= bl; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(
+        d[i - 1][j] + 1, // deletion
+        d[i][j - 1] + 1, // insertion
+        d[i - 1][j - 1] + cost, // substitution
+      );
+
+      // Transposition
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + cost);
+      }
+    }
+  }
+
+  return d[al][bl];
+}
+
+export type MatchTier = 'exact' | 'high' | 'medium' | 'weak' | 'none';
+
+export type MultiFactorMatchResult = {
+  tier: MatchTier;
+  score: number;
+  reasons: string[];
+  isFamilyPhone: boolean;
+  isProbableDuplicate: boolean;
+};
+
+/**
+ * High-confidence multi-factor patient duplicate matching.
+ */
+export function scorePatientMatch(typed: MatchCandidate, existing: MatchCandidate): MultiFactorMatchResult {
+  const samePhone = typed.phoneE164 != null && typed.phoneE164 === existing.phoneE164;
+  const exactName = typed.nameKey !== '' && typed.nameKey === existing.nameKey;
+  const pTyped = phoneticKey(typed.nameKey);
+  const pExist = phoneticKey(existing.nameKey);
+  const samePhonetic = pTyped !== '' && pTyped === pExist;
+  const dist = editDistance(typed.nameKey, existing.nameKey);
+  const fuzzyName = samePhonetic || (dist <= 2 && typed.nameKey.length >= 5 && existing.nameKey.length >= 5);
+
+  const years =
+    typed.birthYear != null && existing.birthYear != null
+      ? Math.abs(typed.birthYear - existing.birthYear)
+      : null;
+  const sameGender = Boolean(typed.gender && existing.gender && typed.gender === existing.gender);
+
+  // Exact Match: Same Phone & Exact NameKey
+  if (samePhone && exactName) {
+    return {
+      tier: 'exact',
+      score: 100,
+      reasons: ['same_phone_exact_name'],
+      isFamilyPhone: false,
+      isProbableDuplicate: true,
+    };
+  }
+
+  // High Match: Same Phone & Phonetic/Fuzzy Name (Typo or spelling variant)
+  if (samePhone && fuzzyName) {
+    return {
+      tier: 'high',
+      score: 90,
+      reasons: ['same_phone_phonetic_name'],
+      isFamilyPhone: false,
+      isProbableDuplicate: true,
+    };
+  }
+
+  // High Match: Exact Name & Demographics Match (No Phone or Matching Phone)
+  if (exactName && ((years != null && years <= 1) || (years == null && sameGender) || typed.phoneE164 == null)) {
+    return {
+      tier: 'high',
+      score: 85,
+      reasons: ['exact_name_matching_demographics'],
+      isFamilyPhone: false,
+      isProbableDuplicate: true,
+    };
+  }
+
+  // Medium Match: Same Phone, but distinctly different name (Shared Family Mobile)
+  if (samePhone && !exactName && !fuzzyName) {
+    return {
+      tier: 'medium',
+      score: 70,
+      reasons: ['family_phone_distinct_name'],
+      isFamilyPhone: true,
+      isProbableDuplicate: false,
+    };
+  }
+
+  // Medium Match: Phonetic Name match with matching demographics across different phones
+  if (fuzzyName && (sameGender || (years != null && years <= 2))) {
+    return {
+      tier: 'medium',
+      score: 60,
+      reasons: ['phonetic_name_matching_demographics'],
+      isFamilyPhone: false,
+      isProbableDuplicate: false,
+    };
+  }
+
+  // Weak Match: Exact Name but conflicting gender or large birth year gap
+  if (exactName) {
+    return {
+      tier: 'weak',
+      score: 30,
+      reasons: ['name_match_divergent_demographics'],
+      isFamilyPhone: false,
+      isProbableDuplicate: false,
+    };
+  }
+
+  return {
+    tier: 'none',
+    score: 0,
+    reasons: [],
+    isFamilyPhone: false,
+    isProbableDuplicate: false,
+  };
+}

@@ -147,18 +147,32 @@ Every technical defect, workflow gap, and required capability identified during 
 ---
 
 ### Item P2.2: Multi-Tier Tariff Rate Plans (Cash vs. TPA Insurance vs. Corporate)
+- **Status:** **COMPLETED** (Report: [`docs/modules/06-multi-tier-tariffs/COMPLETION_REPORT.md`](file:///d:/Projects/HospitalAutomation/docs/modules/06-multi-tier-tariffs/COMPLETION_REPORT.md))
 - **Priority:** **P1 (High Commercial Value)**
-- **Problem:** Single flat price per charge item prevents hospitals with insurance or corporate tie-ups from adopting Qurio.
-- **Proposed Solution:** Support configurable `rate_plans` (e.g., "Cash Default", "Star Health TPA", "CGHS Government"). Charge items support tier-specific rates or percentage modifiers applied dynamically based on the patient's assigned payer profile.
-- **Affected Files:**
-  - `lib/services/ipd-config.ts`
-  - `lib/services/ipd-billing.ts`
-  - `lib/domain/payer.ts`
-  - `lib/db/schema.ts` (`rate_plans`, `charge_item_tariffs`)
-- **Dependencies:** Reverse-engineer tariff engines from Practo Insta via MCP tool.
-- **Acceptance Criteria:**
-  - Patient's rate plan automatically applies negotiated tariff rates to billing lines.
-  - Historical bills remain immutable if rate plans change in the future.
+- **Capabilities Delivered:**
+  - Configurable `rate_plans` and granular `charge_item_tariffs` with tenant isolation RLS (`0077_multi_tier_rate_plans.sql`).
+  - Pure calculation domain `lib/domain/tariff.ts` implementing deterministic priority resolution (Item Override -> Rate Plan Modifier -> Base Catalog Price).
+  - Bed-days room charges and bedside nursing care entries automatically resolve effective tariff prices.
+  - Inpatient medicines bypass tariff plans and charge standard medicine selling prices.
+  - Strict historical bill immutability: billed items snapshot unit prices at insertion time.
+  - Interactive Cockpit UI at `/settings/tariffs` with inline rupee editing for tariff matrices and plan configuration.
+  - IPD admission integration with `ratePlanId` support on `encounter_payers`.
+- **Delivered Files:**
+  - `drizzle/0077_multi_tier_rate_plans.sql` (migration)
+  - `lib/db/schema.ts` (`ratePlans`, `chargeItemTariffs`, `encounterPayers.ratePlanId`)
+  - `lib/domain/tariff.ts` & `lib/domain/__tests__/tariff.test.ts`
+  - `lib/domain/payer.ts` & `lib/domain/__tests__/payer.test.ts`
+  - `lib/domain/permissions.ts` (`tariffs.manage`, `tariffs.view`)
+  - `lib/services/tariffs.ts` & `lib/services/__tests__/tariffs.test.ts`
+  - `lib/services/bed-days.ts` (integrated with tariff price resolution)
+  - `lib/services/ipd-billing.ts` (integrated with tariff price resolution)
+  - `lib/services/__tests__/ipd-billing-tariffs.test.ts`
+  - `app/(app)/settings/tariffs/actions.ts`
+  - `app/(app)/settings/tariffs/page.tsx`
+  - `docs/modules/06-multi-tier-tariffs/COMPLETION_REPORT.md`
+- **Reverse Engineering Evidence:**
+  - Practo Insta / Industry Tariff Engine: `ev_ea615599a33f5bbb9e528e6a937a9a67595774d494c5209d465dc24760ee7819`
+- **Verification:** 100% pass across all 84 test files and 998 tests; 0 migration lint errors.
 
 ---
 

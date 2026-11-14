@@ -17,6 +17,7 @@ export interface PharmacyClearanceCardProps {
   takeHomeCounseled?: boolean;
   medRecCompleted?: boolean;
   onOpenDrawer: () => void;
+  onOpenMedRec?: () => void;
 }
 
 export function PharmacyClearanceCard({
@@ -30,6 +31,7 @@ export function PharmacyClearanceCard({
   takeHomeCounseled = false,
   medRecCompleted = false,
   onOpenDrawer,
+  onOpenMedRec,
 }: PharmacyClearanceCardProps) {
   const creditAmountRupees = (pharmacyCreditAmountPaise / 100).toFixed(2);
 
@@ -119,12 +121,22 @@ export function PharmacyClearanceCard({
           <span>{isCleared ? 'View Return Slip & Counseling' : 'Log / View Return Slip'}</span>
         </button>
 
-        <Link
-          href={`/ipd/admissions/${admissionId}/medicines`}
-          className="text-2xs font-semibold text-primary hover:underline"
-        >
-          MedRec File →
-        </Link>
+        {onOpenMedRec ? (
+          <button
+            type="button"
+            onClick={onOpenMedRec}
+            className="text-2xs font-semibold text-primary hover:underline cursor-pointer"
+          >
+            Review MedRec &amp; Prescriptions →
+          </button>
+        ) : (
+          <Link
+            href={`/ipd/patients/${admissionId}/orders`}
+            className="text-2xs font-semibold text-primary hover:underline"
+          >
+            Review MedRec &amp; Prescriptions →
+          </Link>
+        )}
       </div>
     </div>
   );

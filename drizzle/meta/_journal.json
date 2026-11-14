@@ -435,6 +435,13 @@
       "when": 1792500000000,
       "tag": "0076_pharmacy_pos",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1792550000000,
+      "tag": "0077_multi_tier_rate_plans",
+      "breakpoints": true
     }
   ]
 }

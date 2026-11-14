@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { Suspense } from 'react';
@@ -14,6 +15,13 @@ import { switchUserAction } from '../ward-device/actions';
 import { signOutAction } from './dashboard/actions';
 import { GlobalSurveillanceBanner } from '@/components/ipd/global-surveillance-banner';
 import { PlanStatusBanner } from '@/components/plan-status-banner';
+
+export const metadata: Metadata = {
+  robots: {
+    index: false,
+    follow: false,
+  },
+};
 
 /**
  * The header reads the session cookie to display user info and role-based

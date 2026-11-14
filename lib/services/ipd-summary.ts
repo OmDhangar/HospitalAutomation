@@ -1,8 +1,9 @@
-import { desc, eq, and, gte } from 'drizzle-orm';
+import { desc, eq, and, gte, sql } from 'drizzle-orm';
 import { withTenant, type Tx } from '@/lib/db';
 import {
   vitalsReadings,
   intakeOutput,
+  ipdMedicationOrders,
 } from '@/lib/db/schema';
 import { getAdmissionSummary, type AdmissionSummary } from '@/lib/services/ipd-census';
 import { getBedsideEmar, type BedsideEmarView } from '@/lib/services/ipd-emar';
@@ -47,8 +48,8 @@ export async function getDoctorSummaryCockpitData(args: {
     getBedsideEmar({ hospitalId, admissionId }),
   ]);
 
-  // Fetch vitals and intake/output via withTenant
-  const { recentVitals, fluidItems } = await withTenant(
+  // Fetch vitals, intake/output, and draft orders count via withTenant
+  const { recentVitals, fluidItems, draftOrdersCount } = await withTenant(
     hospitalId,
     async (tx: Tx) => {
       const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -76,7 +77,20 @@ export async function getDoctorSummaryCockpitData(args: {
           ),
         );
 
-      return { recentVitals: vitals, fluidItems: fluids };
+      const [draftCountRes] = await tx
+        .select({ count: sql<number>`count(*)` })
+        .from(ipdMedicationOrders)
+        .where(
+          and(
+            eq(ipdMedicationOrders.hospitalId, hospitalId),
+            eq(ipdMedicationOrders.admissionId, admissionId),
+            eq(ipdMedicationOrders.status, 'draft'),
+          ),
+        );
+
+      const draftCount = Number(draftCountRes?.count ?? 0);
+
+      return { recentVitals: vitals, fluidItems: fluids, draftOrdersCount: draftCount };
     },
     { clinical: true },
   );
@@ -196,6 +210,16 @@ export async function getDoctorSummaryCockpitData(args: {
 
   // 4. Clinical attention alerts
   const attentionItems: DoctorSummaryCockpitData['attentionItems'] = [];
+
+  if (draftOrdersCount > 0) {
+    attentionItems.push({
+      key: 'draft_orders',
+      label: `${draftOrdersCount} Draft OPD order(s) awaiting doctor sign-off`,
+      tone: 'warning',
+      actionText: 'Review Orders →',
+      actionHref: `/ipd/patients/${admissionId}/orders`,
+    });
+  }
 
   if (emarData.overdue.length > 0) {
     attentionItems.push({

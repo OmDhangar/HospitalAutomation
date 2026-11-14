@@ -1,10 +1,17 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Card, CardHeader } from '@/components/ui';
 import { isLocale, type Locale } from '@/lib/i18n/patient';
 import { getDoctorBookingDetails, resolveDoctorHospital } from '@/lib/services/web-booking';
 import { BookSlotForm } from './book-form';
 
-export const metadata = { title: 'Book Doctor Appointment Slot' };
+export const metadata: Metadata = {
+  title: 'Book Doctor Appointment Slot',
+  robots: {
+    index: false,
+    follow: false,
+  },
+};
 export const dynamic = 'force-dynamic';
 
 export default async function BookSlotPage({

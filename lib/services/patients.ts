@@ -96,17 +96,21 @@ export async function patientGroupIds(tx: Tx, patientId: string): Promise<string
 export async function nextMrnInTx(tx: Tx, hospitalId: string): Promise<string> {
   const [row] = await tx.execute<{ mrn: string }>(sql`
     with h as (
-      select mrn_prefix, mrn_start from hospitals where id = ${hospitalId}::uuid
+      select mrn_prefix, mrn_start, timezone,
+             upper(regexp_replace(coalesce(nullif(trim(mrn_prefix), ''), 'QR'), '[^A-Za-z0-9]', '', 'g')) as clean_prefix,
+             to_char(now() at time zone coalesce(timezone, 'Asia/Kolkata'), 'YYYY') as cur_year
+        from hospitals where id = ${hospitalId}::uuid
     ),
     s as (
       insert into document_sequences (hospital_id, kind, fiscal_year, last_number)
-      select ${hospitalId}::uuid, 'mrn', '-', h.mrn_start from h
+      select ${hospitalId}::uuid, 'mrn', h.cur_year, h.mrn_start from h
       on conflict (hospital_id, kind, fiscal_year) do update
         set last_number = greatest(document_sequences.last_number + 1, excluded.last_number),
             updated_at = now()
       returning last_number
     )
-    select coalesce(h.mrn_prefix, '') || s.last_number::text as mrn from s, h
+    select h.clean_prefix || '-' || h.cur_year || '-' || lpad(s.last_number::text, 5, '0') as mrn
+      from s, h
   `);
   if (!row) throw new PatientIdentityError('Hospital not found');
   return row.mrn;

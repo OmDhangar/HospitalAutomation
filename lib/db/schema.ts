@@ -2067,6 +2067,61 @@ export const chargeItems = pgTable(
   ],
 );
 
+/** Multi-tier tariff schedules per payer / corporate / TPA (0077). */
+export const ratePlans = pgTable(
+  'rate_plans',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    code: text('code').notNull(),
+    payerKind: payerKind('payer_kind').notNull().default('self'),
+    payerName: text('payer_name'),
+    modifierBp: integer('modifier_bp').notNull().default(0),
+    isDefault: boolean('is_default').notNull().default(false),
+    active: boolean('active').notNull().default(true),
+    createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    ...voidColumns(),
+  },
+  (t) => [
+    uniqueIndex('rate_plans_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('rate_plans_code_idx').on(t.hospitalId, sql`lower(${t.code})`).where(sql`voided_at is null`),
+    uniqueIndex('rate_plans_default_idx').on(t.hospitalId).where(sql`is_default is true and voided_at is null`),
+  ],
+);
+
+/** Specific charge item price overrides under a rate plan (0077). */
+export const chargeItemTariffs = pgTable(
+  'charge_item_tariffs',
+  {
+    id: id(),
+    hospitalId: uuid('hospital_id')
+      .notNull()
+      .references(() => hospitals.id, { onDelete: 'cascade' }),
+    ratePlanId: uuid('rate_plan_id')
+      .notNull()
+      .references(() => ratePlans.id, { onDelete: 'cascade' }),
+    chargeItemId: uuid('charge_item_id')
+      .notNull()
+      .references(() => chargeItems.id, { onDelete: 'cascade' }),
+    tariffPricePaise: integer('tariff_price_paise').notNull(),
+    createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    ...voidColumns(),
+  },
+  (t) => [
+    uniqueIndex('charge_item_tariffs_tenant_key').on(t.hospitalId, t.id),
+    uniqueIndex('charge_item_tariffs_unique_idx')
+      .on(t.hospitalId, t.ratePlanId, t.chargeItemId)
+      .where(sql`voided_at is null`),
+  ],
+);
+
 export const wards = pgTable(
   'wards',
   {
@@ -2340,6 +2395,7 @@ export const encounterPayers = pgTable(
     policyNumber: text('policy_number'),
     preauthAmountPaise: integer('preauth_amount_paise'),
     approvedAmountPaise: integer('approved_amount_paise'),
+    ratePlanId: uuid('rate_plan_id').references(() => ratePlans.id, { onDelete: 'set null' }),
     createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     createdAt: createdAt(),
     ...voidColumns(),

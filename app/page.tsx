@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Button, Card } from '@/components/ui';
 import { AuthButton } from '@/components/marketing/auth-button';
@@ -13,11 +14,19 @@ import {
   MockWhatsAppMenus,
 } from '@/components/marketing/mockups';
 
-
-export const metadata = {
-  title: 'QuriioHQ — OPD Queue Management for Hospitals & Clinics',
+export const metadata: Metadata = {
+  title: 'Hospital Queue Management System & OPD Automation India',
   description:
-    'Turn crowded hospital corridors into an orderly digital queue. WhatsApp booking, live queue links, and one-click reception calling.',
+    'Turn crowded hospital corridors into an orderly digital queue. WhatsApp booking, live queue links, waiting room TV displays, and one-click reception calling for Indian clinics and hospitals.',
+  alternates: {
+    canonical: '/',
+  },
+  openGraph: {
+    title: 'QuriioHQ — Hospital Queue Management System & OPD Automation India',
+    description:
+      'Turn crowded hospital corridors into an orderly digital queue. WhatsApp booking, live queue links, waiting room TV displays, and one-click reception calling for Indian clinics and hospitals.',
+    url: 'https://hospital-automation-sepia.vercel.app',
+  },
 };
 
 export default function HomePage() {

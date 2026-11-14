@@ -10,6 +10,10 @@ import {
 } from '@/lib/db/schema';
 import { calculateBillItem } from '@/lib/domain/patient-billing';
 import { getOrCreateDraftBillInTx } from '@/lib/services/patient-billing';
+import {
+  findEffectiveRatePlanForAdmissionInTx,
+  resolveChargeItemPriceForStayInTx,
+} from '@/lib/services/tariffs';
 
 /**
  * Turns bedside entries into bill lines (IPD plan §T1.7, reversing D20).
@@ -82,6 +86,25 @@ export async function postCareEntryLineInTx(
   const item = await catalogueItemFor(tx, args.entry);
   if (!item || item.sellingPricePaise === null) return false;
 
+  let unitPricePaise = item.sellingPricePaise;
+  if (item.chargeItemId) {
+    const [admission] = await tx
+      .select({ id: admissions.id })
+      .from(admissions)
+      .where(and(eq(admissions.encounterId, args.entry.encounterId), eq(admissions.hospitalId, args.entry.hospitalId)));
+    if (admission?.id) {
+      const plan = await findEffectiveRatePlanForAdmissionInTx(tx, args.entry.hospitalId, admission.id);
+      const tariffPrice = await resolveChargeItemPriceForStayInTx(tx, {
+        hospitalId: args.entry.hospitalId,
+        chargeItemId: item.chargeItemId,
+        ratePlanId: plan?.id,
+      });
+      if (tariffPrice !== null) {
+        unitPricePaise = tariffPrice;
+      }
+    }
+  }
+
   const [encounter] = await tx
     .select()
     .from(encounters)
@@ -91,7 +114,7 @@ export async function postCareEntryLineInTx(
   const bill = await getOrCreateDraftBillInTx(tx, { encounter, actorUserId: args.actorUserId });
   const amounts = calculateBillItem({
     quantity: args.entry.quantity,
-    unitPricePaise: item.sellingPricePaise,
+    unitPricePaise,
     taxRateBp: item.taxRateBp,
   });
 
@@ -106,8 +129,8 @@ export async function postCareEntryLineInTx(
       careEntryId: args.entry.id,
       description: args.entry.description,
       quantity: args.entry.quantity,
-      configuredUnitPricePaise: item.sellingPricePaise,
-      unitPricePaise: item.sellingPricePaise,
+      configuredUnitPricePaise: unitPricePaise,
+      unitPricePaise,
       taxRateBp: item.taxRateBp,
       ...amounts,
       createdByUserId: args.actorUserId,
