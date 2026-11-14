@@ -28,6 +28,7 @@ export type PayerInput = {
   payerName: string | null;
   policyNumber: string | null;
   preauthAmountPaise: number | null;
+  ratePlanId?: string | null;
 };
 
 const tidy = (value: string | null | undefined): string | null => {
@@ -41,11 +42,13 @@ export function parsePayerInput(raw: {
   payerName?: string | null;
   policyNumber?: string | null;
   preauthRupees?: string | null;
+  ratePlanId?: string | null;
 }): ParseResult<PayerInput> {
   const kind = (raw.kind ?? 'self').trim() || 'self';
   if (!isPayerKind(kind)) return { ok: false, error: 'Choose who is paying' };
+  const ratePlanId = tidy(raw.ratePlanId);
   if (kind === 'self') {
-    return { ok: true, value: { kind, payerName: null, policyNumber: null, preauthAmountPaise: null } };
+    return { ok: true, value: { kind, payerName: null, policyNumber: null, preauthAmountPaise: null, ratePlanId } };
   }
 
   const payerName = tidy(raw.payerName);
@@ -60,7 +63,7 @@ export function parsePayerInput(raw: {
     preauthAmountPaise = parseRupeesToPaise(preauth);
     if (preauthAmountPaise === null) return { ok: false, error: 'Enter the pre-auth amount in rupees' };
   }
-  return { ok: true, value: { kind, payerName, policyNumber, preauthAmountPaise } };
+  return { ok: true, value: { kind, payerName, policyNumber, preauthAmountPaise, ratePlanId } };
 }
 
 /** A deposit as typed: blank means none; otherwise a positive rupee amount. */

@@ -102,6 +102,8 @@ export async function addWalkInDynamic(args: {
   extraToken?: boolean;
   /** Admitted through emergency. Top queue priority and red alert display. */
   isEmergency?: boolean;
+  existingPatientId?: string;
+  forceNew?: boolean;
 }): Promise<{
   ok: boolean;
   tokenNumber?: number;
@@ -145,7 +147,14 @@ export async function addWalkInDynamic(args: {
       return { ok: false, error: 'Only the owner can issue an extra token' };
     }
 
+    const patientInput = args.existingPatientId
+      ? ({ kind: 'existing' as const, patientId: args.existingPatientId })
+      : args.forceNew
+        ? ({ kind: 'details' as const, details: { phoneE164, name, age: args.age, address }, forceNew: true })
+        : undefined;
+
     const appt = await createWalkIn({
+      patientInput,
       hospitalId: session.hospitalId,
       branchId: args.branchId,
       doctorId: args.doctorId,

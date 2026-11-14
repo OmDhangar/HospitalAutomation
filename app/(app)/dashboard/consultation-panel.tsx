@@ -7,9 +7,14 @@ import {
   repeatLastPrescriptionDynamic,
   saveConsultationDraftDynamic,
   saveConsultationDynamic,
+  listRxGroupsDynamic,
+  saveAsRxGroupDynamic,
 } from './consultation-actions';
 import { useRegisterConsultationGate } from '@/components/clinical/consultation-gate';
 import { MedicinePicker } from '@/components/clinical/medicine-picker';
+import { RxGroupsShelf } from '@/components/clinical/rx-groups-shelf';
+import { SaveRxGroupModal } from '@/components/clinical/save-rx-group-modal';
+import type { RxGroupView, CreateRxGroupItemInput } from '@/lib/services/rx-groups';
 import { useToast } from '@/components/toast';
 import { Button, Card, CardHeader, Input, cn } from '@/components/ui';
 import {
@@ -92,6 +97,9 @@ export function ConsultationPanel({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [isSaving, startSaving] = useTransition();
   const [isFetching, startFetching] = useTransition();
+  const [rxGroups, setRxGroups] = useState<RxGroupView[]>([]);
+  const [isRxGroupsLoading, setIsRxGroupsLoading] = useState(false);
+  const [isSaveGroupModalOpen, setIsSaveGroupModalOpen] = useState(false);
 
   // Refs hold what callbacks need to see immediately, without waiting for a
   // re-render: the latest text, the draft version, and whether anything has
@@ -125,6 +133,22 @@ export function ConsultationPanel({
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  useEffect(() => {
+    let isMounted = true;
+    async function fetchRxGroups() {
+      setIsRxGroupsLoading(true);
+      const res = await listRxGroupsDynamic();
+      if (isMounted && res.ok) {
+        setRxGroups(res.groups);
+      }
+      if (isMounted) setIsRxGroupsLoading(false);
+    }
+    void fetchRxGroups();
+    return () => {
+      isMounted = false;
+    };
   }, [load]);
 
   /** One code path for every edit, so the ref and the autosave never miss one. */
@@ -269,6 +293,79 @@ export function ConsultationPanel({
     });
   };
 
+  const handleApplyRxGroup = useCallback(
+    (group: RxGroupView) => {
+      update((prev) => {
+        const existingMedIds = new Set(prev.items.map((i) => i.medicineId));
+        const newLines: DraftLine[] = [];
+
+        for (const item of group.items) {
+          if (!existingMedIds.has(item.medicineId)) {
+            newLines.push({
+              medicineId: item.medicineId,
+              medicineLabel: item.medicineName,
+              dose: item.dose,
+              frequency: item.frequency,
+              durationDays: item.durationDays,
+              instructions: item.instructions || '',
+            });
+            existingMedIds.add(item.medicineId);
+          }
+        }
+
+        if (newLines.length === 0) {
+          toast.info('Already added', 'All medications in this bundle are already on this prescription.');
+          return prev;
+        }
+
+        const patch: Partial<ConsultationDraft> = {
+          items: [...prev.items, ...newLines],
+        };
+
+        if (!prev.diagnosis.trim() && group.defaultDiagnosis) {
+          patch.diagnosis = group.defaultDiagnosis;
+        }
+
+        if (!prev.advice.trim() && group.defaultAdvice) {
+          patch.advice = group.defaultAdvice;
+        }
+
+        if (!prev.followUpOn && group.defaultFollowUpDays) {
+          patch.followUpOn = dateFromToday(group.defaultFollowUpDays);
+        }
+
+        toast.success(
+          `Applied ${group.name}`,
+          `Added ${newLines.length} medication${newLines.length === 1 ? '' : 's'}. Review and adjust as needed.`,
+        );
+
+        return {
+          ...prev,
+          ...patch,
+        };
+      });
+    },
+    [toast, update],
+  );
+
+  const handleSaveAsRxGroup = async (data: {
+    name: string;
+    description?: string;
+    category?: string;
+    defaultDiagnosis?: string;
+    defaultAdvice?: string;
+    defaultFollowUpDays?: number;
+    items: CreateRxGroupItemInput[];
+    isPersonal: boolean;
+  }) => {
+    const res = await saveAsRxGroupDynamic(data);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    setRxGroups((prev) => [res.group, ...prev]);
+    toast.success('Rx-Group saved', `"${data.name}" added to your templates!`);
+  };
+
   const toggleHistory = () => {
     const opening = !historyOpen;
     setHistoryOpen(opening);
@@ -314,10 +411,11 @@ export function ConsultationPanel({
     .join(' · ');
 
   return (
-    <Card>
-      <CardHeader
-        title="Consultation"
-        hint={patientLine}
+    <>
+      <Card>
+        <CardHeader
+          title="Consultation"
+          hint={patientLine}
         action={
           <div className="flex items-center gap-3">
             <SaveIndicator state={saveState} onReload={() => void load()} />
@@ -418,6 +516,14 @@ export function ConsultationPanel({
                 ))}
               </ol>
             ) : null}
+
+            <RxGroupsShelf
+              groups={rxGroups}
+              isLoading={isRxGroupsLoading}
+              onApplyGroup={handleApplyRxGroup}
+              canSaveCurrentAsGroup={form.items.length > 0}
+              onOpenSaveModal={() => setIsSaveGroupModalOpen(true)}
+            />
 
             <MedicinePicker
               canQuickAdd
@@ -551,6 +657,15 @@ export function ConsultationPanel({
         </div>
       )}
     </Card>
+    <SaveRxGroupModal
+      isOpen={isSaveGroupModalOpen}
+      onClose={() => setIsSaveGroupModalOpen(false)}
+      items={form.items}
+      currentDiagnosis={form.diagnosis}
+      currentAdvice={form.advice}
+      onSave={handleSaveAsRxGroup}
+    />
+    </>
   );
 }
 

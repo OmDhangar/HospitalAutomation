@@ -290,12 +290,12 @@ async function seedKavitaIpd() {
     values
       (${hospital.id}, ${admission.id}, ${encounter.id}, ${kavita.id}, 'allergies_documented',
        ${JSON.stringify([
-         {
-           substance: 'Penicillin / Amoxicillin',
-           reaction: 'Severe Urticaria, Facial Angioedema & Bronchospasm',
-           severity: 'severe',
-         },
-       ])}::jsonb,
+    {
+      substance: 'Penicillin / Amoxicillin',
+      reaction: 'Severe Urticaria, Facial Angioedema & Bronchospasm',
+      severity: 'severe',
+    },
+  ])}::jsonb,
        true, ${attendingDoctor.user_id ?? ownerUser.id}, ${admissionTime})
   `;
 

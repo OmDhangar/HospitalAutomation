@@ -7,7 +7,10 @@ import { isLocale, LOCALE_NAMES, LOCALES, t, type Locale } from '@/lib/i18n/pati
 import { getPublicQueueView } from '@/lib/services/queue';
 import { cancelAppointment, resumeAppointment } from './actions';
 
-export const metadata = { title: 'Your queue' };
+export const metadata = {
+  title: 'Your queue · QuriioHQ',
+  robots: { index: false, follow: false },
+};
 export const dynamic = 'force-dynamic';
 
 export default async function PatientQueuePage({

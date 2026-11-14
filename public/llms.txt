@@ -1,0 +1,31 @@
+# QuriioHQ
+
+> QuriioHQ is an OPD queue management system and hospital automation SaaS platform for Indian clinics and hospitals.
+
+## Summary
+QuriioHQ helps hospitals and clinics digitize patient flow, eliminate crowded corridors, and coordinate outpatient and inpatient care. The platform is designed specifically for Indian healthcare infrastructure with native support for Marathi, Hindi, and English.
+
+## Key Capabilities
+- **OPD Queue Management**: Issues digital tokens, calculates live waiting times, and sends real-time status links to patient smartphones.
+- **WhatsApp-First Integration**: Patients can book appointment slots, receive confirmations, and get automated notifications ("2 patients ahead") directly via official WhatsApp Business API without downloading an app.
+- **Waiting-Room TV Display**: Live display board (`/display/[branchId]`) for waiting area TVs showing called and upcoming tokens without broadcasting patient names or sensitive clinical data.
+- **Reception Desk Calling**: Single-click "Call Next" interface and 5-second walk-in patient registration.
+- **Doctor Consultation Cockpit**: Mobile-friendly queue status, consultation timing, prescriptions, and daily performance metrics.
+- **IPD (Inpatient Department) Management**: Bed & ward management, ward tablet bedside mode (`/ward-device`), nurse TPR recording, eMAR, discharge summaries, and IPD billing.
+- **Multi-lingual Indic Architecture**: First-class Devanagari typography and Indic numeral support for Marathi, Hindi, and English.
+- **Privacy-by-Design**: Strictly excludes clinical diagnoses and medical history from public queue trackers; multi-tenant database isolation.
+
+## Pricing (INR)
+- **Solo**: ₹1,999/month (25 patients/day, 900 included appointments, 1 doctor, 1 branch)
+- **Clinic**: ₹3,499/month (60 patients/day, 2,100 included appointments, 3 doctors, 1 branch, TV display)
+- **Practice**: ₹4,999/month (100 patients/day, 3,500 included appointments, 6 doctors, owner reports)
+- **Hospital**: ₹6,999/month (150 patients/day, 5,300 included appointments, 12 doctors, 3 branches, audit logs)
+- **Large OPD**: ₹8,999/month (200 patients/day, 7,000 included appointments, 20 doctors, 5 branches)
+- **Multi-branch**: ₹12,999/month (300 patients/day, 10,500 included appointments, unlimited doctors/branches)
+
+## Key URLs
+- Homepage: https://hospital-automation-sepia.vercel.app/
+- Pricing: https://hospital-automation-sepia.vercel.app/pricing
+- Privacy Policy: https://hospital-automation-sepia.vercel.app/privacy
+- Contact / Demo: omdhangar24@gmail.com
+

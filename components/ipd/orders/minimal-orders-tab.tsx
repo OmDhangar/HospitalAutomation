@@ -7,7 +7,13 @@ import { StopReasons, type StopReason } from '@/constants/clinical';
 import { CreateTreatmentPlanModal } from '@/components/ipd/prescriptions/create-treatment-plan-modal';
 import { PlusIcon } from '@/components/icons';
 
-import { cosignVerbalOrderAction, rejectVerbalOrderAction } from '@/app/(app)/ipd/actions';
+import {
+  cosignVerbalOrderAction,
+  rejectVerbalOrderAction,
+  approveDraftMedicationOrderAction,
+  approveAllDraftMedicationOrdersAction,
+  rejectDraftMedicationOrderAction,
+} from '@/app/(app)/ipd/actions';
 import { AlertTriangleIcon, CheckIcon, XIcon, ClockIcon } from '@/components/icons';
 
 export interface PendingVerbalOrderItem {
@@ -19,6 +25,25 @@ export interface PendingVerbalOrderItem {
   verbalDoctorName?: string | null;
   verbalClinicalRationale?: string | null;
   createdAt: string | Date;
+}
+
+export interface DraftMedicationOrderItem {
+  id: string;
+  orderChainId?: string;
+  medicineId?: string;
+  medicineName: string;
+  strength?: string | null;
+  doseAmount: string;
+  doseUnit: string;
+  route: string;
+  frequencyCode: string;
+  scheduleTimes?: string[];
+  scheduleType?: string;
+  isPrn?: boolean;
+  specialInstructions?: string | null;
+  origin?: string;
+  status: string;
+  createdAt?: string | Date;
 }
 
 export interface MedicationOrderViewItem {
@@ -39,6 +64,7 @@ export interface MinimalOrdersTabProps {
   admissionId: string;
   orders: MedicationOrderViewItem[];
   pendingVerbalOrders?: PendingVerbalOrderItem[];
+  draftOrders?: DraftMedicationOrderItem[];
   patientName?: string;
   uhid?: string;
   bedLabel?: string;
@@ -53,6 +79,7 @@ export function MinimalOrdersTab({
   admissionId,
   orders = [],
   pendingVerbalOrders = [],
+  draftOrders = [],
   patientName = 'Patient',
   uhid = 'UHID',
   bedLabel,
@@ -77,6 +104,121 @@ export function MinimalOrdersTab({
   const [verbalActionNotes, setVerbalActionNotes] = useState('');
   const [verbalActionError, setVerbalActionError] = useState<string | null>(null);
   const [verbalSuccessMsg, setVerbalSuccessMsg] = useState<string | null>(null);
+
+  // Draft orders review state
+  const [isDraftSubmitting, setIsDraftSubmitting] = useState(false);
+  const [draftFeedback, setDraftFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [activeRejectDraft, setActiveRejectDraft] = useState<DraftMedicationOrderItem | null>(null);
+  const [rejectDraftReason, setRejectDraftReason] = useState('');
+  const [activeAllergyDraft, setActiveAllergyDraft] = useState<{
+    order: DraftMedicationOrderItem;
+    conflictError: string;
+    overrideReason: string;
+  } | null>(null);
+
+  const handleApproveDraft = async (order: DraftMedicationOrderItem, overrideReason?: string) => {
+    try {
+      setIsDraftSubmitting(true);
+      setDraftFeedback(null);
+      const res = await approveDraftMedicationOrderAction({
+        admissionId,
+        orderId: order.id,
+        allergyOverrideReason: overrideReason,
+      });
+
+      if (!res.ok) {
+        if (res.error && (res.error.toLowerCase().includes('allergy') || res.error.toLowerCase().includes('conflict'))) {
+          setActiveAllergyDraft({
+            order,
+            conflictError: res.error,
+            overrideReason: '',
+          });
+        } else {
+          setDraftFeedback({ type: 'error', message: res.error || 'Failed to approve draft order' });
+        }
+        return;
+      }
+
+      setDraftFeedback({
+        type: 'success',
+        message: `Medication "${order.medicineName}" approved and activated on bedside eMAR.`,
+      });
+      setActiveAllergyDraft(null);
+      setTimeout(() => setDraftFeedback(null), 5000);
+    } catch (err: any) {
+      setDraftFeedback({ type: 'error', message: err?.message || 'Approval action failed' });
+    } finally {
+      setIsDraftSubmitting(false);
+    }
+  };
+
+  const handleApproveAllDrafts = async (overrideReason?: string) => {
+    try {
+      setIsDraftSubmitting(true);
+      setDraftFeedback(null);
+      const res = await approveAllDraftMedicationOrdersAction({
+        admissionId,
+        allergyOverrideReason: overrideReason,
+      });
+
+      if (!res.ok) {
+        setDraftFeedback({ type: 'error', message: res.error || 'Failed to approve draft orders' });
+        return;
+      }
+
+      if (res.errors && res.errors.length > 0) {
+        setDraftFeedback({
+          type: 'error',
+          message: `Approved ${res.approvedCount} order(s). Some orders required attention: ${res.errors.join('; ')}`,
+        });
+      } else {
+        setDraftFeedback({
+          type: 'success',
+          message: `All ${res.approvedCount} draft order(s) successfully approved and activated on bedside eMAR.`,
+        });
+      }
+      setTimeout(() => setDraftFeedback(null), 6000);
+    } catch (err: any) {
+      setDraftFeedback({ type: 'error', message: err?.message || 'Bulk approval failed' });
+    } finally {
+      setIsDraftSubmitting(false);
+    }
+  };
+
+  const handleConfirmRejectDraft = async () => {
+    if (!activeRejectDraft) return;
+    const trimmed = rejectDraftReason.trim();
+    if (trimmed.length < 3) {
+      setDraftFeedback({ type: 'error', message: 'Rejection reason must be at least 3 characters.' });
+      return;
+    }
+
+    try {
+      setIsDraftSubmitting(true);
+      const res = await rejectDraftMedicationOrderAction({
+        admissionId,
+        orderId: activeRejectDraft.id,
+        reason: trimmed,
+      });
+
+      if (!res.ok) {
+        setDraftFeedback({ type: 'error', message: res.error || 'Failed to reject draft order' });
+        return;
+      }
+
+      setDraftFeedback({
+        type: 'success',
+        message: `Draft order for "${activeRejectDraft.medicineName}" was rejected and removed.`,
+      });
+      setActiveRejectDraft(null);
+      setRejectDraftReason('');
+      setTimeout(() => setDraftFeedback(null), 4000);
+    } catch (err: any) {
+      setDraftFeedback({ type: 'error', message: err?.message || 'Rejection failed' });
+    } finally {
+      setIsDraftSubmitting(false);
+    }
+  };
 
   const handleConfirmStop = async () => {
     if (!selectedOrderToStop) return;
@@ -122,6 +264,131 @@ export function MinimalOrdersTab({
       {verbalSuccessMsg && (
         <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-md">
           {verbalSuccessMsg}
+        </div>
+      )}
+
+      {draftFeedback && (
+        <div
+          className={`p-3 rounded-md text-xs font-medium border ${
+            draftFeedback.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-rose-50 border-rose-200 text-rose-800'
+          }`}
+        >
+          {draftFeedback.message}
+        </div>
+      )}
+
+      {/* Pending OPD Draft Orders Review Banner */}
+      {draftOrders.length > 0 && (
+        <div className="rounded-xl border-2 border-amber-400 bg-amber-50/70 p-4 space-y-3.5 shadow-2xs">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-start gap-2.5">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white text-xs font-bold mt-0.5">
+                !
+              </span>
+              <div>
+                <h3 className="text-sm font-bold text-amber-950 flex items-center gap-2">
+                  <span>{`Pending Admission Orders from OPD (${draftOrders.length})`}</span>
+                  <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-amber-200 text-amber-900">
+                    Awaiting Doctor Sign-off
+                  </span>
+                </h3>
+                <p className="text-xs text-amber-800 mt-0.5">
+                  Ported from outpatient doctor consultation during admission. Active inpatient treatment requires doctor confirmation.
+                </p>
+              </div>
+            </div>
+            {canPrescribe && (
+              <button
+                type="button"
+                disabled={isDraftSubmitting}
+                onClick={() => handleApproveAllDrafts()}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 shadow-2xs transition-colors shrink-0 disabled:opacity-50"
+              >
+                <CheckIcon className="size-3.5" />
+                <span>Approve All Valid Orders</span>
+              </button>
+            )}
+          </div>
+
+          <div className="divide-y divide-amber-200/80 rounded-lg border border-amber-200 bg-surface overflow-hidden text-xs">
+            {draftOrders.map((draft) => (
+              <div
+                key={draft.id}
+                className="p-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 hover:bg-amber-50/30 transition-colors"
+              >
+                <div className="space-y-1">
+                  <div className="font-bold text-ink-950 text-sm flex items-center gap-2">
+                    <span>{draft.medicineName}</span>
+                    {draft.strength && <span className="text-xs font-normal text-ink-500">({draft.strength})</span>}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-ink-700">
+                    <span className="font-semibold text-ink-900 bg-ink-100 px-1.5 py-0.5 rounded">
+                      {draft.doseAmount} {draft.doseUnit}
+                    </span>
+                    <span>·</span>
+                    <span className="uppercase text-ink-600">{draft.route}</span>
+                    <span>·</span>
+                    <span className="font-medium text-ink-800">
+                      {draft.isPrn
+                        ? 'PRN (SOS)'
+                        : `${draft.frequencyCode}${
+                            draft.scheduleTimes && draft.scheduleTimes.length > 0
+                              ? ` (${draft.scheduleTimes.join(', ')})`
+                              : ''
+                          }`}
+                    </span>
+                  </div>
+                  {draft.specialInstructions && (
+                    <div className="text-[11px] text-ink-500 italic mt-0.5">
+                      “{draft.specialInstructions}”
+                    </div>
+                  )}
+                </div>
+
+                {canPrescribe && (
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      disabled={isDraftSubmitting}
+                      onClick={() => handleApproveDraft(draft)}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded-md bg-emerald-600 text-white hover:bg-emerald-700 min-h-8 disabled:opacity-50"
+                    >
+                      <CheckIcon className="size-3.5" />
+                      <span>Approve</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isDraftSubmitting}
+                      onClick={() => {
+                        if (onModifyOrder) {
+                          onModifyOrder(draft.id);
+                        } else {
+                          setIsPrescribeModalOpen(true);
+                        }
+                      }}
+                      className="px-2.5 py-1.5 text-xs font-semibold rounded-md border border-ink-200 text-ink-700 hover:bg-ink-50 min-h-8"
+                    >
+                      Modify
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isDraftSubmitting}
+                      onClick={() => {
+                        setActiveRejectDraft(draft);
+                        setRejectDraftReason('');
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold rounded-md border border-rose-300 text-rose-700 hover:bg-rose-50 min-h-8 disabled:opacity-50"
+                    >
+                      <XIcon className="size-3.5" />
+                      <span>Reject</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -485,6 +752,129 @@ export function MinimalOrdersTab({
                     ? 'Confirming telephonic authorization given to on-duty nurse...'
                     : 'State why verbal order was rejected...'
                 }
+                rows={3}
+                className="w-full text-xs p-2 rounded border border-ink-200 bg-surface text-ink-900 focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+            </div>
+          </div>
+        </Drawer>
+      )}
+
+      {/* Draft Order Rejection Drawer */}
+      {activeRejectDraft && (
+        <Drawer
+          isOpen={true}
+          onClose={() => setActiveRejectDraft(null)}
+          title="Reject Draft OPD Order"
+          patient={{
+            name: patientName,
+            uhid,
+            bedLabel,
+          }}
+          size="sm"
+          footer={
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveRejectDraft(null)}
+                className="px-3 py-1.5 text-xs font-semibold rounded border border-ink-200 text-ink-700 hover:bg-ink-50 min-h-[44px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDraftSubmitting}
+                onClick={handleConfirmRejectDraft}
+                className="px-4 py-1.5 text-xs font-semibold rounded text-white bg-rose-600 hover:bg-rose-700 min-h-[44px]"
+              >
+                {isDraftSubmitting ? 'Rejecting...' : 'Confirm Rejection'}
+              </button>
+            </div>
+          }
+        >
+          <div className="space-y-4">
+            <div className="rounded bg-ink-50 p-3 text-xs space-y-1">
+              <div className="font-bold text-ink-900 text-sm">
+                {activeRejectDraft.medicineName}
+              </div>
+              <div className="text-ink-600">
+                Dose: <strong>{activeRejectDraft.doseAmount} {activeRejectDraft.doseUnit}</strong> ({activeRejectDraft.route}) · {activeRejectDraft.frequencyCode}
+              </div>
+              <div className="text-ink-500">
+                Origin: Outpatient Prescription
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-ink-800 mb-1">
+                Clinical Reason for Rejection (Required - min 3 chars)
+              </label>
+              <textarea
+                value={rejectDraftReason}
+                onChange={(e) => setRejectDraftReason(e.target.value)}
+                placeholder="e.g. Switched to IV formulation, duplicate therapy, discontinued clinically..."
+                rows={3}
+                className="w-full text-xs p-2 rounded border border-ink-200 bg-surface text-ink-900 focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+            </div>
+          </div>
+        </Drawer>
+      )}
+
+      {/* Allergy Conflict Override Drawer */}
+      {activeAllergyDraft && (
+        <Drawer
+          isOpen={true}
+          onClose={() => setActiveAllergyDraft(null)}
+          title="Allergy Warning & Clinical Override"
+          patient={{
+            name: patientName,
+            uhid,
+            bedLabel,
+          }}
+          size="sm"
+          footer={
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveAllergyDraft(null)}
+                className="px-3 py-1.5 text-xs font-semibold rounded border border-ink-200 text-ink-700 hover:bg-ink-50 min-h-[44px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDraftSubmitting || activeAllergyDraft.overrideReason.trim().length < 5}
+                onClick={() => handleApproveDraft(activeAllergyDraft.order, activeAllergyDraft.overrideReason)}
+                className="px-4 py-1.5 text-xs font-semibold rounded text-white bg-amber-600 hover:bg-amber-700 min-h-[44px] disabled:opacity-50"
+              >
+                {isDraftSubmitting ? 'Overriding...' : 'Approve with Override'}
+              </button>
+            </div>
+          }
+        >
+          <div className="space-y-4">
+            <div className="rounded bg-rose-50 border border-rose-200 p-3 text-xs space-y-1 text-rose-900">
+              <div className="font-bold flex items-center gap-1.5">
+                <AlertTriangleIcon className="size-4 text-rose-600" />
+                <span>Documented Allergy Conflict</span>
+              </div>
+              <div>{activeAllergyDraft.conflictError}</div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-ink-800 mb-1">
+                Clinical Override Reason (Required - min 5 chars)
+              </label>
+              <textarea
+                value={activeAllergyDraft.overrideReason}
+                onChange={(e) =>
+                  setActiveAllergyDraft({
+                    ...activeAllergyDraft,
+                    overrideReason: e.target.value,
+                  })
+                }
+                placeholder="Document clinical rationale for overriding documented allergy..."
                 rows={3}
                 className="w-full text-xs p-2 rounded border border-ink-200 bg-surface text-ink-900 focus:outline-none focus:ring-2 focus:ring-primary"
               />

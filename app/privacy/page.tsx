@@ -2,9 +2,18 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 
 export const metadata: Metadata = {
-  title: 'Privacy Policy · QuriioHQ',
+  title: 'Privacy Policy · QuriioHQ Healthcare Platform',
   description:
-    'Learn how QuriioHQ handles patient and clinic data for WhatsApp appointment booking and live OPD queue management.',
+    'Learn how QuriioHQ handles patient and clinic data with privacy-by-design standards, zero clinical data collection for queue links, and DPDP-compliant security.',
+  alternates: {
+    canonical: '/privacy',
+  },
+  openGraph: {
+    title: 'Privacy Policy · QuriioHQ Healthcare Platform',
+    description:
+      'Learn how QuriioHQ handles patient and clinic data with privacy-by-design standards, zero clinical data collection for queue links, and DPDP-compliant security.',
+    url: 'https://hospital-automation-sepia.vercel.app/privacy',
+  },
 };
 
 export default function PrivacyPolicyPage() {

@@ -32,6 +32,7 @@ import { assignIpdNumberInTx } from '@/lib/services/ipd-number';
 import { createClinicalAlertInTx } from '@/lib/services/clinical-alerts';
 import { recordConsentInTx } from '@/lib/services/consents';
 import { nextDocumentNumberInTx } from '@/lib/services/document-numbers';
+import { portOpdPrescriptionsToIpdDraftsInTx } from '@/lib/services/ipd-admission-continuity';
 
 /**
  * Admissions: Shift to IPD, the admission sheet, transfers, cancellation and
@@ -178,6 +179,15 @@ export async function shiftToIpd(args: ShiftToIpdArgs): Promise<ShiftResult> {
         .where(eq(appointments.id, args.appointmentId));
 
       if (inserted.length > 0) {
+        await portOpdPrescriptionsToIpdDraftsInTx(tx, {
+          hospitalId: encounter.hospitalId,
+          admissionId: live.id,
+          encounterId: encounter.id,
+          patientId: encounter.patientId,
+          doctorId: encounter.attendingDoctorId,
+          actorUserId: args.actorUserId,
+        });
+
         await audit(tx, { hospitalId: encounter.hospitalId, id: live.id }, args.actorUserId, 'ipd.shifted', {
           encounterId: encounter.id,
           appointmentId: args.appointmentId,

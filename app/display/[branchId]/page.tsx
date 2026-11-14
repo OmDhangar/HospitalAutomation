@@ -9,7 +9,10 @@ import { listBranches } from '@/lib/services/auth';
 import { getBranchSnapshots } from '@/lib/services/queue';
 import { DisplayAudioNotifier } from './display-audio';
 
-export const metadata = { title: 'Waiting Room Display · Live OPD' };
+export const metadata = {
+  title: 'Waiting Room Display · Live OPD',
+  robots: { index: false, follow: false },
+};
 export const dynamic = 'force-dynamic';
 
 /**

@@ -42,7 +42,8 @@ export async function setPayerInTx(
     current.payerName === args.payer.payerName &&
     current.policyNumber === args.payer.policyNumber &&
     current.preauthAmountPaise === args.payer.preauthAmountPaise &&
-    current.approvedAmountPaise === approved
+    current.approvedAmountPaise === approved &&
+    current.ratePlanId === (args.payer.ratePlanId ?? null)
   ) {
     return current;
   }
@@ -64,6 +65,7 @@ export async function setPayerInTx(
       policyNumber: args.payer.policyNumber,
       preauthAmountPaise: args.payer.preauthAmountPaise,
       approvedAmountPaise: args.payer.kind === 'self' ? null : approved,
+      ratePlanId: args.payer.ratePlanId ?? null,
       createdByUserId: args.actorUserId,
     })
     .returning();

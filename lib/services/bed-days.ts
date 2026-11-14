@@ -15,6 +15,10 @@ import {
 import { chargeableBedDays } from '@/lib/domain/bed-days';
 import { calculateBillItem } from '@/lib/domain/patient-billing';
 import { getOrCreateDraftBillInTx } from '@/lib/services/patient-billing';
+import {
+  findEffectiveRatePlanForAdmissionInTx,
+  resolveChargeItemPriceForStayInTx,
+} from '@/lib/services/tariffs';
 
 /**
  * Room charges, one line per bed-day (IPD plan §T1.10, decision D-BD).
@@ -95,15 +99,27 @@ export async function postBedDaysForAdmissionInTx(
   if (missing.length === 0) return 0;
 
   const [encounter] = await tx.select().from(encounters).where(eq(encounters.id, admission.encounterId));
+  if (!encounter) return 0;
   const bySpell = new Map(spells.map((spell) => [spell.assignmentId, spell]));
+  const effectivePlan = await findEffectiveRatePlanForAdmissionInTx(tx, encounter.hospitalId, args.admissionId);
   let added = 0;
   let bill: Awaited<ReturnType<typeof getOrCreateDraftBillInTx>> | null = null;
 
   for (const day of missing) {
     const spell = bySpell.get(day.assignmentId)!;
-    if (!spell.chargeItemId || spell.pricePaise === null) continue;
+    if (!spell.chargeItemId) continue;
+
+    const unitPricePaise =
+      (await resolveChargeItemPriceForStayInTx(tx, {
+        hospitalId: encounter.hospitalId,
+        chargeItemId: spell.chargeItemId,
+        ratePlanId: effectivePlan?.id,
+      })) ?? spell.pricePaise;
+
+    if (unitPricePaise === null) continue;
+
     bill ??= await getOrCreateDraftBillInTx(tx, { encounter, actorUserId: args.actorUserId ?? null });
-    const amounts = calculateBillItem({ quantity: 1, unitPricePaise: spell.pricePaise, taxRateBp: spell.taxRateBp ?? 0 });
+    const amounts = calculateBillItem({ quantity: 1, unitPricePaise, taxRateBp: spell.taxRateBp ?? 0 });
     const inserted = await tx
       .insert(billItems)
       .values({
@@ -115,8 +131,8 @@ export async function postBedDaysForAdmissionInTx(
         serviceDate: day.serviceDate,
         description: `${spell.chargeName} · ${spell.wardName}, bed ${spell.bedLabel} · ${formatDay(day.serviceDate)}`.slice(0, 200),
         quantity: 1,
-        configuredUnitPricePaise: spell.pricePaise,
-        unitPricePaise: spell.pricePaise,
+        configuredUnitPricePaise: unitPricePaise,
+        unitPricePaise,
         taxRateBp: spell.taxRateBp ?? 0,
         ...amounts,
         createdByUserId: args.actorUserId ?? null,

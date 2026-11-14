@@ -5,19 +5,23 @@ describe('parsePayerInput', () => {
   it('defaults to self and ignores the other fields for self', () => {
     expect(parsePayerInput({})).toEqual({
       ok: true,
-      value: { kind: 'self', payerName: null, policyNumber: null, preauthAmountPaise: null },
+      value: { kind: 'self', payerName: null, policyNumber: null, preauthAmountPaise: null, ratePlanId: null },
     });
     expect(parsePayerInput({ kind: 'self', payerName: 'Star Health' })).toMatchObject({
       ok: true,
       value: { payerName: null },
     });
+    expect(parsePayerInput({ kind: 'self', ratePlanId: 'plan-123' })).toEqual({
+      ok: true,
+      value: { kind: 'self', payerName: null, policyNumber: null, preauthAmountPaise: null, ratePlanId: 'plan-123' },
+    });
   });
 
   it('needs a name for an insurer, TPA or company', () => {
     expect(parsePayerInput({ kind: 'insurer' }).ok).toBe(false);
-    expect(parsePayerInput({ kind: 'insurer', payerName: '  Star   Health ', preauthRupees: '25,000' })).toEqual({
+    expect(parsePayerInput({ kind: 'insurer', payerName: '  Star   Health ', preauthRupees: '25,000', ratePlanId: 'plan-tpa' })).toEqual({
       ok: true,
-      value: { kind: 'insurer', payerName: 'Star Health', policyNumber: null, preauthAmountPaise: 2_500_000 },
+      value: { kind: 'insurer', payerName: 'Star Health', policyNumber: null, preauthAmountPaise: 2_500_000, ratePlanId: 'plan-tpa' },
     });
   });
 

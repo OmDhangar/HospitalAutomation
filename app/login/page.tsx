@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { Alert, Button, Field, Input } from '@/components/ui';
@@ -9,7 +10,13 @@ import { login, logout, resolveSession } from '@/lib/services/auth';
 
 const WINDOW_MS = 15 * 60 * 1000;
 
-export const metadata = { title: 'Sign in · QuriioHQ' };
+export const metadata: Metadata = {
+  title: 'Sign in · QuriioHQ',
+  robots: {
+    index: false,
+    follow: false,
+  },
+};
 
 async function signIn(formData: FormData) {
   'use server';

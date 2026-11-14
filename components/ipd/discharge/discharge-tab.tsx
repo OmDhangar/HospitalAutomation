@@ -337,6 +337,7 @@ export function DischargeTab({
           takeHomeCounseled={clearance.takeHomeCounseled}
           medRecCompleted={medRecCompleted}
           onOpenDrawer={() => setIsPharmacyDrawerOpen(true)}
+          onOpenMedRec={() => setIsSummaryDrawerOpen(true)}
         />
 
         {/* Step 3: Nursing & Bedside Handover */}
